@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Tabs without keyboard operation</title></head>
+<body>
+<h1>Lesson topics</h1>
+<div role="tablist" aria-label="Lesson topics">
+  <button id="tab-one" role="tab" aria-selected="true" aria-controls="panel-one" tabindex="0">Overview</button>
+  <button id="tab-two" role="tab" aria-selected="false" aria-controls="panel-two" tabindex="-1">Practice</button>
+</div>
+<section id="panel-one" role="tabpanel" aria-labelledby="tab-one">Overview content.</section>
+<section id="panel-two" role="tabpanel" aria-labelledby="tab-two" hidden>Practice content.</section>
+</body>
+</html>

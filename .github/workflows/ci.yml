@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Smoke-test both CLI tiers
+        shell: bash
+        run: |
+          mkdir -p /tmp/prax-audit-smoke/defect /tmp/prax-audit-smoke/clean
+          cp bench/wcag/focus-indicator-removed/defect.html /tmp/prax-audit-smoke/defect/
+          cp bench/wcag/focus-indicator-removed/clean.html /tmp/prax-audit-smoke/clean/
+          set +e
+          node src/cli.ts check /tmp/prax-audit-smoke/defect --min-confidence medium >/tmp/prax-audit-defect.txt
+          defect_code=$?
+          set -e
+          test "$defect_code" -eq 1
+          node src/cli.ts check /tmp/prax-audit-smoke/clean --min-confidence medium >/tmp/prax-audit-clean.txt
+          node src/cli.ts prepare-tier-b bench/tier-b/tabs >/tmp/prax-audit-tier-b.md

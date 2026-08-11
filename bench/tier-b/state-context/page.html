@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" data-theme="lesson-light">
+<head><meta charset="utf-8"><title>Candidate state and context</title></head>
+<body>
+<main>
+  <h1>Lesson controls</h1>
+  <h3><button id="section" aria-expanded="false" aria-controls="panel">Section details</button></h3>
+  <div id="panel" hidden>Details.</div>
+  <button id="guide" aria-pressed="false">Reading guide</button>
+  <div id="status" aria-live="polite"></div>
+</main>
+<script>
+  const section = document.getElementById("section");
+  const panel = document.getElementById("panel");
+  section.addEventListener("click", () => {
+    const expanded = section.getAttribute("aria-expanded") !== "true";
+    section.setAttribute("aria-expanded", String(expanded));
+    panel.hidden = !expanded;
+  });
+
+  const guide = document.getElementById("guide");
+  const status = document.getElementById("status");
+  guide.addEventListener("click", () => {
+    const enabled = guide.getAttribute("aria-pressed") !== "true";
+    guide.setAttribute("aria-pressed", String(enabled));
+    status.textContent = `Reading guide ${enabled ? "enabled" : "disabled"}`;
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Keyboard-operable tabs</title></head>
+<body>
+<h1>Lesson topics</h1>
+<div role="tablist" aria-label="Lesson topics">
+  <button id="tab-one" role="tab" aria-selected="true" aria-controls="panel-one" tabindex="0">Overview</button>
+  <button id="tab-two" role="tab" aria-selected="false" aria-controls="panel-two" tabindex="-1">Practice</button>
+</div>
+<section id="panel-one" role="tabpanel" aria-labelledby="tab-one">Overview content.</section>
+<section id="panel-two" role="tabpanel" aria-labelledby="tab-two" hidden>Practice content.</section>
+<script>
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  function select(tab) {
+    for (const item of tabs) {
+      const selected = item === tab;
+      item.setAttribute("aria-selected", String(selected));
+      item.tabIndex = selected ? 0 : -1;
+      document.getElementById(item.getAttribute("aria-controls")).hidden = !selected;
+    }
+    tab.focus();
+  }
+  document.querySelector('[role="tablist"]').addEventListener("keydown", (event) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    const current = tabs.indexOf(document.activeElement);
+    select(tabs[(current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length]);
+  });
+</script>
+</body>
+</html>

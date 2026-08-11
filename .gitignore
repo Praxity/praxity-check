@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.test-env.json
+test-results/
+playwright-report/
+
+# local fixtures and scratch probes
+*.local.json
+probe.ts

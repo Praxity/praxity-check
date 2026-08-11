@@ -1,0 +1,29 @@
+{
+	"name": "prax-audit",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Accessibility checker for learning packages",
+	"bin": {
+		"prax-audit": "src/cli.ts"
+	},
+	"scripts": {
+		"check": "node src/cli.ts",
+		"typecheck": "tsc --noEmit",
+		"test": "node --test test/*.test.ts"
+	},
+	"engines": {
+		"node": ">=22.18"
+	},
+	"packageManager": "pnpm@11.5.3",
+	"dependencies": {
+		"@axe-core/playwright": "^4.12.1",
+		"playwright": "^1.62.1",
+		"yauzl": "^3.4.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.19.1",
+		"@types/yauzl": "^2.10.3",
+		"typescript": "^5.9.3"
+	}
+}
