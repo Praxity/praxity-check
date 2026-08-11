@@ -1,0 +1,48 @@
+{
+  "pairing": "VoiceOver + Safari",
+  "method": "VoiceOver AXTTS speech starts observed during one guarded action",
+  "runs": [
+    {
+      "control": "single",
+      "run": 1,
+      "pageGuard": "Live region capture control web content",
+      "result": "single result 1786454792263",
+      "speechStartsMs": [4012]
+    },
+    {
+      "control": "duplicate",
+      "run": 1,
+      "pageGuard": "Live region capture control web content",
+      "result": "duplicate result 1786454808495",
+      "speechStartsMs": [3992, 6349]
+    },
+    {
+      "control": "single",
+      "run": 2,
+      "pageGuard": "Live region capture control web content",
+      "result": "single result 1786454822034",
+      "speechStartsMs": [3991]
+    },
+    {
+      "control": "duplicate",
+      "run": 2,
+      "pageGuard": "Live region capture control web content",
+      "result": "duplicate result 1786454835350",
+      "speechStartsMs": [3980, 6348]
+    },
+    {
+      "control": "single",
+      "run": 3,
+      "pageGuard": "Live region capture control web content",
+      "result": "single result 1786454848888",
+      "speechStartsMs": [3994]
+    },
+    {
+      "control": "duplicate",
+      "run": 3,
+      "pageGuard": "Live region capture control web content",
+      "result": "duplicate result 1786454862162",
+      "speechStartsMs": [3995, 6363]
+    }
+  ]
+}

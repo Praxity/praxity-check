@@ -31,9 +31,10 @@ State the evidence methods on every item: `rendered`, `interaction`,
   they look likely. Do not recommend fixing an untraced part of a component flow.
 - Use `screen-reader` only for a named action whose unresolved question is the
   resulting speech. Name and version the tested pairing, such as VoiceOver +
-  Safari/WebKit or NVDA + Chromium. Do not infer duplicate speech merely because
-  two announcement channels exist, and do not apply a generic adjacent-equality
-  heuristic.
+  Safari or NVDA + Chromium. A duplicate-speech claim requires the exact target
+  phrase, a bounded speech-start trace, and a clean comparison that announces
+  the phrase once. Do not infer duplication merely because two announcement
+  channels exist or because the last-phrase value repeats.
 - Contextual authoring questions are Tier C, not Tier B. A screen reader cannot
   decide whether an authored heading level or activity premise is appropriate.
 

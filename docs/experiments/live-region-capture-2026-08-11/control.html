@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Live region capture control</title>
+  </head>
+  <body>
+    <main>
+      <h1>Search lessons</h1>
+      <button id="search" autofocus>Run search</button>
+      <p id="result"></p>
+      <p id="second-result"></p>
+    </main>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const mode = params.get("mode") || "status";
+      const result = document.getElementById("result");
+      const secondResult = document.getElementById("second-result");
+      const role = mode === "single" || mode === "duplicate" ? "status" : mode;
+      if (role !== "plain") result.setAttribute("role", role);
+      if (mode === "duplicate") secondResult.setAttribute("role", "status");
+
+      function announceResult() {
+        const message = `${mode} result ${Date.now()}`;
+        setTimeout(() => {
+          result.textContent = message;
+          if (mode !== "duplicate") document.title = message;
+        }, 250);
+        if (mode === "duplicate") {
+          setTimeout(() => {
+            secondResult.textContent = message;
+            document.title = message;
+          }, 1250);
+        }
+      }
+
+      document.getElementById("search").addEventListener("click", announceResult);
+      const autoDelay = Number(params.get("auto"));
+      if (autoDelay > 0) setTimeout(announceResult, autoDelay);
+    </script>
+  </body>
+</html>

@@ -72,6 +72,17 @@ The file contains course text and HTML. Nothing leaves your computer until you
 choose to send it to an LLM reviewer. See [`docs/using-it.md`](docs/using-it.md) for
 the review command, the 37 checks, and guidance on useful evidence.
 
+## Experimental screen-reader checks
+
+A tested VoiceOver + Safari workflow can capture the speech produced by one
+named action. With a clean comparison, it can also distinguish one announcement
+from the same phrase announced twice. It runs locally without recording or
+transcribing audio.
+
+This is still a guided experiment rather than a CLI command. See the
+[`screen-reader instructions`](docs/using-it.md#screen-reader-evidence) and
+[`test results`](docs/experiments/live-region-capture-2026-08-11/README.md).
+
 ## What it works with
 
 Praxity Audit currently checks local folders and zip files that render as
@@ -81,9 +92,10 @@ separately. If a course needs files from the internet, add `--allow-network`.
 
 ## Roadmap
 
-The next experiment is a simpler guided workflow for keyboard and screen-reader
-testing, so developers can include those checks without assembling the process
-themselves.
+The next experiment will turn the tested screen-reader method into a simpler
+guided workflow and apply it to real course interactions. The goal is to make
+keyboard and screen-reader checks practical without asking developers to
+assemble the process themselves.
 
 ## Licence
 

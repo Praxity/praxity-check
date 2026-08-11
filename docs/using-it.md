@@ -105,11 +105,23 @@ the package or a minified bundle.
 could not prepare any. It never exits `1`: evidence is not a finding and cannot
 gate CI.
 
-For screen-reader questions, run one exact Guidepup interaction and name and
-version the tested pairing, such as VoiceOver + Safari/WebKit or NVDA +
-Chromium. Do not infer duplicate speech merely because both a semantic
-relationship and a live region exist. A generic duplicate detector is not
-reliable.
+## Screen-reader evidence
+
+Use screen-reader evidence for one named action whose open question is what was
+announced. Record the exact pairing and versions, such as VoiceOver + Safari or
+NVDA + Chromium.
+
+The tested VoiceOver + Safari workflow reads VoiceOver's last phrase directly.
+For suspected duplicate speech, it also counts local speech starts during the
+action and compares them with a clean version that announces the phrase once.
+The control produced one speech start for every clean run and two for every
+duplicate run across three pairs. It records no audio and uses no transcription.
+
+Keep the clean comparison. A speech start does not contain the phrase itself and
+can come from unrelated VoiceOver output, so an unbounded count or the presence
+of two possible announcement channels is not enough. See the
+[`live-region experiment`](experiments/live-region-capture-2026-08-11/README.md)
+for the method, controls, and recorded results.
 
 Heading-level appropriateness and similar authored-content questions remain
 Tier C. A screen reader can repeat the level but cannot determine author intent.
