@@ -56,10 +56,11 @@ but source alone does not prove runtime behaviour.
 
 ## Tier B: recognised-pattern interaction review
 
-Tier B remains a separate, human-approved review. Luna-Max is the current
-reviewer, not the definition of the tier. The experimental packet command uses
-the same local, network-blocked browser boundary as Tier A and writes bounded
-rendered DOM, accessibility snapshots, and generic before/action/after traces:
+Tier B remains a separate, human-approved LLM review. Luna at maximum reasoning
+effort was used during testing, but the model is not part of the tier's
+definition. The experimental packet command uses the same local,
+network-blocked browser boundary as Tier A and writes bounded rendered DOM,
+accessibility snapshots, and generic before/action/after traces:
 
 ```bash
 node /absolute/path/to/praxity-audit/src/cli.ts prepare-tier-b ./dist > tier-b-evidence.md
@@ -71,8 +72,9 @@ generic actions; the packet names missing components, unsafe or unknown
 triggers, and other unexercised rules. Review the Markdown before sending it
 anywhere because it contains course text and markup.
 
-Append the packet to the prompt and run Luna-Max read-only from the Audit repo,
-not from the target. The reviewer needs the evidence, not source access:
+Append the packet to the prompt and run the LLM reviewer read-only from the
+Audit repo, not from the target. The reviewer needs the evidence, not source
+access. This example uses Luna at maximum reasoning effort:
 
 ```bash
 {

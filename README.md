@@ -8,11 +8,11 @@ before they reach learners.
 Some accessibility problems only appear once a course is running. Focus can
 disappear, menus can trap keyboard users, colours can fail when someone hovers,
 and page updates can go unannounced. Checking the finished export helps you find
-problems in the experience learners will actually use.
+problems in what learners will actually use.
 
-Run Praxity Audit while developing a course and again before release,
-especially after exporting from an authoring tool. It points to the affected
-page and control so you can fix problems while the work is still fresh. Use it
+Run Praxity Audit when evaluating eLearning authoring tools or during iterative
+development of an online course. It locates and details accessibility gaps in
+your HTML so you can review them and decide what to fix. Ideally, use it
 alongside keyboard and screen-reader testing for a fuller review.
 
 ## What it is
@@ -36,8 +36,9 @@ a problem.
 Tier A runs repeatable browser checks. The `--min-confidence` option controls
 which findings make the command exit with an error.
 
-Tier B prepares a local evidence file for a separate Luna-Max review. You
-choose whether to send it and which results to accept.
+Tier B prepares a local evidence file for a separate LLM review. Luna at maximum
+reasoning effort was used during testing. You choose whether to send the file
+and which results to accept.
 
 ## Quick start
 
@@ -68,7 +69,7 @@ node src/cli.ts prepare-tier-b /absolute/path/to/site/dist > tier-b-evidence.md
 ```
 
 The file contains course text and HTML. Nothing leaves your computer until you
-choose to send it to Luna-Max. See [`docs/using-it.md`](docs/using-it.md) for
+choose to send it to an LLM reviewer. See [`docs/using-it.md`](docs/using-it.md) for
 the review command, the 37 checks, and guidance on useful evidence.
 
 ## What it works with
@@ -78,13 +79,21 @@ static HTML in Chromium. It works best with exports that can run without an LMS
 or sign-in. Test LMS-only behaviour, signed-in pages, and screen-reader output
 separately. If a course needs files from the internet, add `--allow-network`.
 
+## Roadmap
+
+The next experiment is a simpler guided workflow for keyboard and screen-reader
+testing, so developers can include those checks without assembling the process
+themselves.
+
 ## Licence
 
 Praxity Audit is community source. Personal, educational, nonprofit,
-governmental, and internal organizational use is free. This includes using it
-to check paid work while you develop it. Free public forks and services must
-credit Praxity Audit and publish their Audit source and changes. Paid audit
-services, hosting, repackaging, and white-labelling require separate permission.
+governmental, and internal organizational use is permitted. This includes using
+it internally to check paid work. Qualifying free public forks and services must
+display the required credit, publish their Audit source and changes under the
+same terms, and preserve attribution in reports. Paid access or reports,
+substantially Audit-powered paid services, paid hosting, repackaging, and
+white-labelling require separate written permission.
 
 See [`LICENSE`](LICENSE) for the terms and [`LICENSING.md`](LICENSING.md) for
 plain-language examples.
