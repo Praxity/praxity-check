@@ -111,6 +111,34 @@ Use screen-reader evidence for one named action whose open question is what was
 announced. Record the exact pairing and versions, such as VoiceOver + Safari or
 NVDA + Chromium.
 
+On macOS, run the experimental VoiceOver + Safari command only when the computer
+is free for it to take over:
+
+```bash
+node /absolute/path/to/praxity-audit/src/cli.ts screen-reader ./dist \
+  --page lesson.html \
+  --control "Show definition" \
+  --expected "Definition" \
+  --take-screen-control \
+  --allow-network > screen-reader-evidence.md
+```
+
+The command turns on VoiceOver, opens its own Safari window, moves focus while
+it looks for the named control, and presses Space. It closes that window,
+stops the VoiceOver session it started, and returns to the previously active
+app. It refuses to run if VoiceOver is already on. `check` and `prepare-tier-b`
+never start VoiceOver.
+
+Real Safari cannot use the network block applied to the Chromium checks, so the
+command also requires `--allow-network`. Review the package first: scripts in
+the page may make their usual internet requests. The page itself must still be
+an HTML file inside the audited folder or zip.
+
+Guidepup requires one-time macOS permissions before it can control VoiceOver.
+Follow its [manual VoiceOver setup](https://www.guidepup.dev/docs/guides/manual-voiceover-setup).
+The command produces evidence, not a finding, and never changes a Tier A exit
+code.
+
 The tested VoiceOver + Safari workflow reads VoiceOver's last phrase directly.
 For suspected duplicate speech, it also counts local speech starts during the
 action and compares them with a clean version that announces the phrase once.
@@ -123,8 +151,9 @@ of two possible announcement channels is not enough. See the
 [`live-region experiment`](experiments/live-region-capture-2026-08-11/README.md)
 for the method, controls, and recorded results.
 
-Heading-level appropriateness and similar authored-content questions remain
-Tier C. A screen reader can repeat the level but cannot determine author intent.
+Run the same command against a clean version that announces the expected phrase
+once. Compare the two Markdown files. More speech-event clusters in the
+suspected version are a signal for review, not proof by themselves.
 
 ## As an agent hook
 

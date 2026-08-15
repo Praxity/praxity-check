@@ -68,7 +68,11 @@ const MOUSE_ONLY_BROKEN = `<!doctype html><html lang="en"><head><title>Mouse onl
 
 const MOUSE_ONLY_CLEAN = `<!doctype html><html lang="en"><head><title>Keyboard control</title></head><body>
 <h1>Keyboard control</h1><button id="keyboard-control">Open lesson</button>
-<script>document.getElementById("keyboard-control").addEventListener("click", () => document.title = "opened");</script>
+<figure><div role="img" aria-label="Bar chart"><div id="chart"><canvas></canvas></div></div><table><tr><th>Category</th><th>Value</th></tr><tr><td>A</td><td>1</td></tr></table></figure>
+<script>
+document.getElementById("keyboard-control").addEventListener("click", () => document.title = "opened");
+document.getElementById("chart").addEventListener("click", () => {});
+</script>
 </body></html>`;
 
 const SHORTCUT_BROKEN = `<!doctype html><html lang="en"><head><title>Shortcut</title></head><body><h1>Shortcut</h1>
@@ -522,7 +526,7 @@ describe("tier A checks fire on known defects", () => {
 		assert.deepEqual(cleanResult.notes, [], "control-free frame and shadow subtrees made a clean result partial");
 	});
 
-	test("mouseOnlyControls finds a click-only div but not a native button", async () => {
+	test("mouseOnlyControls finds a click-only div but not a native button or static chart", async () => {
 		const broken = await open("mouse-broken.html");
 		const brokenResult = await mouseOnlyControls(broken, "mouse-broken.html");
 		await broken.close();
@@ -531,7 +535,7 @@ describe("tier A checks fire on known defects", () => {
 		const clean = await open("mouse-clean.html");
 		const cleanResult = await mouseOnlyControls(clean, "mouse-clean.html");
 		await clean.close();
-		assert.equal(cleanResult.findings.length, 0, "native button was reported as mouse-only");
+		assert.equal(cleanResult.findings.length, 0, "native button or static chart was reported as mouse-only");
 	});
 
 	test("characterKeyShortcuts finds a bare document key but not Ctrl+key", async () => {

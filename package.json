@@ -18,6 +18,7 @@
 	"packageManager": "pnpm@11.5.3",
 	"dependencies": {
 		"@axe-core/playwright": "^4.12.1",
+		"@guidepup/guidepup": "0.24.1",
 		"playwright": "^1.62.1",
 		"yauzl": "^3.4.0"
 	},

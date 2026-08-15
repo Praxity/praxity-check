@@ -33,6 +33,7 @@ Dependencies are installed by the package manager and retain their own terms:
 
 - `@axe-core/playwright` and `axe-core` 4.12.1 — Mozilla Public License 2.0;
   maintained by Deque Systems. `axe-core` also ships its own third-party notice.
+- Guidepup 0.24.1 — MIT; Copyright (c) 2023 Craig Morten.
 - Playwright 1.62.1 — Apache License 2.0; Microsoft Corporation.
 - `yauzl` 3.4.0 — MIT; Copyright (c) 2014 Josh Wolfe.
 

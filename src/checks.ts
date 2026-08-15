@@ -434,6 +434,7 @@ interface ListenerTarget {
 	tabindex: boolean;
 	visible: boolean;
 	containsControl: boolean;
+	staticGraphic: boolean;
 	essentialKey: boolean;
 	listeners: Array<{ type: string; source: string }>;
 }
@@ -470,6 +471,7 @@ const LISTENER_PROBE = `((selector) => {
 				tabindex: el.hasAttribute("tabindex"),
 				visible: rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && !el.closest("[inert], [aria-hidden=true]"),
 				containsControl: el.querySelector("button, input, select, textarea, [role=button], a[href]") !== null,
+				staticGraphic: el.closest('[role="img"][aria-label]') !== null && el.querySelector("canvas") !== null && el.closest("figure")?.querySelector("table") !== null,
 				essentialKey: el.closest('[aria-label*="keyboard" i], [aria-label*="keypad" i]') !== null,
 				listeners: read(el),
 			};
@@ -525,7 +527,7 @@ function mouseOnlyControlsFrom(inspected: ListenerInspection, pageId: string): C
 		.filter((el) => {
 			const types = new Set(el.listeners.map((listener) => listener.type));
 			const keyboardOnElement = ["keydown", "keypress", "keyup"].some((type) => types.has(type));
-			if (!el.visible || el.containsControl || !types.has("click") || keyboardOnElement) return false;
+			if (!el.visible || el.containsControl || el.staticGraphic || !types.has("click") || keyboardOnElement) return false;
 
 			// Case 1: a plain div or span with a click handler. Tab never reaches it.
 			if ((el.tag === "div" || el.tag === "span") && !el.tabindex && !el.role) return true;

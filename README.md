@@ -74,14 +74,19 @@ the review command, the 37 checks, and guidance on useful evidence.
 
 ## Experimental screen-reader checks
 
-A tested VoiceOver + Safari workflow can capture the speech produced by one
-named action. With a clean comparison, it can also distinguish one announcement
-from the same phrase announced twice. It runs locally without recording or
-transcribing audio.
+A macOS-only command can capture what VoiceOver says after one named action in
+Safari. With a clean comparison, the evidence can also help identify the same
+phrase being announced twice. It runs locally without recording or transcribing
+audio.
 
-This is still a guided experiment rather than a CLI command. See the
-[`screen-reader instructions`](docs/using-it.md#screen-reader-evidence) and
-[`test results`](docs/experiments/live-region-capture-2026-08-11/README.md).
+This command turns on VoiceOver, opens Safari, moves focus, speaks, and sends
+keyboard input. It can interrupt anything else you are doing on the Mac.
+Ordinary `check` and `prepare-tier-b` runs never do this. The command refuses to
+start unless you add `--take-screen-control`, and it refuses to take over a
+VoiceOver session that is already running.
+
+See the [`screen-reader instructions`](docs/using-it.md#screen-reader-evidence)
+and [`test results`](docs/experiments/live-region-capture-2026-08-11/README.md).
 
 ## What it works with
 
@@ -92,10 +97,10 @@ separately. If a course needs files from the internet, add `--allow-network`.
 
 ## Roadmap
 
-The next experiment will turn the tested screen-reader method into a simpler
-guided workflow and apply it to real course interactions. The goal is to make
-keyboard and screen-reader checks practical without asking developers to
-assemble the process themselves.
+The next experiment will build a short, guided course walk from this one-action
+check: skip-link entry, page order, hidden or unreachable content, and gated or
+branching activities. It will remain opt-in because it takes over VoiceOver and
+keyboard focus while it runs.
 
 ## Licence
 

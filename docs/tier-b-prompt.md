@@ -32,10 +32,10 @@ State the evidence methods on every item: `rendered`, `interaction`,
 - Use `screen-reader` only for a named action whose unresolved question is the
   resulting speech. Name and version the tested pairing, such as VoiceOver +
   Safari or NVDA + Chromium. A duplicate-speech claim requires the exact target
-  phrase, a bounded speech-start trace, and a clean comparison that announces
+  phrase, a bounded speech-event trace, and a clean comparison that announces
   the phrase once. Do not infer duplication merely because two announcement
   channels exist or because the last-phrase value repeats.
-- Contextual authoring questions are Tier C, not Tier B. A screen reader cannot
+- Contextual authoring questions are outside this review. A screen reader cannot
   decide whether an authored heading level or activity premise is appropriate.
 
 Exercise and inspect the 37 already-triaged recognised-pattern rules:
@@ -62,7 +62,7 @@ Exercise and inspect the 37 already-triaged recognised-pattern rules:
 - Live regions and loading (4): pre-existing region, hidden state, duplicate
   channels, and observable completion.
 - Interaction flows (4): drag alternative, hover/focus content, route focus,
-  and deletion focus. Lesson-navigation placement is contextual Tier C advice.
+  and deletion focus. Lesson-navigation placement is outside this review.
 
 Recognise the component before applying its recipe. Do not invent actions that
 are absent from the packet. Do not turn contextual preferences into WCAG

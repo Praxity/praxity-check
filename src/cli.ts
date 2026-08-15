@@ -26,6 +26,7 @@ import {
 import { discover } from "./discover.ts";
 import { openInput, type Input } from "./input.ts";
 import { countAtOrAbove, createReport, humanSummary, type BlockedRequest, type Confidence, type PageAudit } from "./report.ts";
+import { resolveScreenReaderPage, runScreenReader } from "./screen-reader.ts";
 import { isAuditServerUrl, serve, type StaticServer } from "./serve.ts";
 import { prepareTierB } from "./tier-b.ts";
 
@@ -35,14 +36,20 @@ const PAGE_AUDIT_TIMEOUT_MS = 60_000;
 const USAGE = `Usage:
   prax-audit check <folder|zip> [options]
   prax-audit prepare-tier-b <folder|zip> [--allow-network]
+  prax-audit screen-reader <folder|zip> --page <html> --control <name> --expected <phrase> --take-screen-control --allow-network
 
 Options:
   --json <file>                         Write the complete JSON report
   --allow-network                       Allow the audited package to use the network
   --min-confidence high|medium|low      Reporting and exit threshold (default: high)
+  --page <html>                         Page for the screen-reader action
+  --control <name>                      VoiceOver control name to find and activate
+  --expected <phrase>                   Phrase expected after activation
+  --take-screen-control                 Allow VoiceOver, Safari, focus, and keyboard control
   -h, --help                            Show this help
 
-prepare-tier-b writes local Markdown evidence to stdout; redirect it to a file.`;
+prepare-tier-b and screen-reader write Markdown evidence to stdout.
+screen-reader is macOS-only, disruptive, and never runs as part of check or prepare-tier-b.`;
 
 interface CommonOptions {
 	target: string;
@@ -59,27 +66,52 @@ interface TierBOptions extends CommonOptions {
 	command: "prepare-tier-b";
 }
 
-type Options = CheckOptions | TierBOptions;
+interface ScreenReaderOptions extends CommonOptions {
+	command: "screen-reader";
+	page?: string;
+	control?: string;
+	expected?: string;
+	takeScreenControl: boolean;
+}
+
+type Options = CheckOptions | TierBOptions | ScreenReaderOptions;
 
 function parseArgs(args: string[]): Options {
 	const command = args[0];
-	if ((command !== "check" && command !== "prepare-tier-b") || !args[1]) {
+	if ((command !== "check" && command !== "prepare-tier-b" && command !== "screen-reader") || !args[1]) {
 		throw new Error(USAGE);
 	}
 
 	const common = { target: resolve(args[1]), allowNetwork: false };
 	const options: Options = command === "check"
 		? { command, ...common, minConfidence: "high" }
-		: { command, ...common };
+		: command === "screen-reader"
+			? { command, ...common, takeScreenControl: false }
+			: { command, ...common };
 	for (let i = 2; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--allow-network") options.allowNetwork = true;
+		else if (options.command === "screen-reader" && arg === "--take-screen-control") options.takeScreenControl = true;
+		else if (options.command === "screen-reader" && arg === "--page" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.page = args[++i];
+		else if (options.command === "screen-reader" && arg === "--control" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.control = args[++i];
+		else if (options.command === "screen-reader" && arg === "--expected" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.expected = args[++i];
 		else if (options.command === "check" && arg === "--min-confidence" && /^(high|medium|low)$/.test(args[i + 1] ?? "")) {
 			options.minConfidence = args[++i] as Confidence;
 		}
 		else if (options.command === "check" && arg === "--json" && args[i + 1] && !args[i + 1]?.startsWith("--")) {
 			options.json = resolve(args[++i] as string);
 		} else throw new Error(`unknown or incomplete option: ${arg}`);
+	}
+	if (options.command === "screen-reader") {
+		if (!options.takeScreenControl) {
+			throw new Error("screen-reader launches VoiceOver, opens Safari, moves focus, and sends keyboard input. Rerun with --take-screen-control only when interruption is safe.");
+		}
+		if (!options.allowNetwork) {
+			throw new Error("screen-reader uses real Safari, which cannot use Audit's Playwright network blocker. Review the package and rerun with --allow-network to accept its network activity.");
+		}
+		if (!options.page || !options.control || !options.expected) {
+			throw new Error("screen-reader requires --page, --control, and --expected");
+		}
 	}
 	return options;
 }
@@ -204,10 +236,22 @@ async function main(args: string[]): Promise<number> {
 	let browser: Browser | undefined;
 	try {
 		const options = parseArgs(args);
+		if (options.command === "screen-reader") {
+			console.error("prax-audit: starting an acknowledged disruptive session; VoiceOver and Safari will take keyboard and screen focus");
+		}
 		input = await openInput(options.target);
 		server = await serve(input.root);
 		const auditOrigin = server.origin;
 		const discovery = await discover(input.root, auditOrigin);
+		if (options.command === "screen-reader") {
+			const page = resolveScreenReaderPage(discovery.pages, auditOrigin, options.page as string);
+			console.log(await runScreenReader({
+				page,
+				control: options.control as string,
+				expected: options.expected as string,
+			}));
+			return 0;
+		}
 		// Auditing author intent requires a browser that does not silently suppress
 		// autoplay before the 1.4.2 probe can observe it.
 		browser = await chromium.launch({
