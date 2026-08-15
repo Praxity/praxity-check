@@ -326,6 +326,7 @@ export async function runScreenReader(options: ScreenReaderRunOptions): Promise<
 			PROJECT_URL,
 			"",
 			"> Evidence only. Review it before treating it as an accessibility finding.",
+			"> This file may contain course text and VoiceOver speech. Review it before sharing.",
 			"",
 			`- Page: \`${options.page.file}\``,
 			`- Requested control: ${JSON.stringify(options.control)}`,

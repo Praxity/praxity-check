@@ -24,3 +24,14 @@ test("screen-reader requires explicit permission before taking screen control", 
 		},
 	);
 });
+
+test("screen-reader warns about the existing Safari profile and network", async () => {
+	await assert.rejects(
+		exec(process.execPath, [CLI.pathname, "screen-reader", ".", "--take-screen-control"]),
+		(error: unknown) => {
+			assert.ok(error && typeof error === "object" && "stderr" in error);
+			assert.match(String(error.stderr), /existing Safari profile and network connection/);
+			return true;
+		},
+	);
+});

@@ -5,24 +5,27 @@ before they reach learners.
 
 ## Why use it
 
-Some accessibility problems only appear once a course is running. Focus can
-disappear, menus can trap keyboard users, colours can fail when someone hovers,
-and page updates can go unannounced. Checking the finished export helps you find
-problems in what learners will actually use.
+eLearning exports from authoring tools and interactive websites created with
+generative AI can contain accessibility barriers. Focus can disappear, menus
+can trap keyboard users, colour contrast can fail when someone hovers over an
+interactive element, and page updates can go unannounced. Checking your HTML
+exports helps you find issues early, before they create barriers for learners.
 
 Run Praxity Audit when evaluating eLearning authoring tools or during iterative
-development of an online course. It locates and details accessibility gaps in
-your HTML so you can review them and decide what to fix. On macOS, it can also
-use VoiceOver to test one named interaction and capture what was announced.
+development of an online course. It locates and describes likely accessibility
+issues in your HTML so you can review them and decide what to fix. On macOS, it
+can also use VoiceOver to test specific interactions one at a time and capture
+what was announced.
 
 ## What it is
 
 Praxity Audit is a local command-line tool. Give it a folder or zip file and it
 checks every HTML page inside.
 
-Status: pre-release alpha. The automated checks are ready to try. Interaction
-review and VoiceOver evidence are experimental. When evidence needs human
-judgement, the report asks for review instead of calling it a problem.
+Status: alpha. The automated checks are ready to use. Interaction
+review and VoiceOver evidence are experimental. In testing, a capable LLM
+successfully triaged the review candidates and flagged those that needed human
+review.
 
 ## Automated checks
 
@@ -38,8 +41,12 @@ the confidence level you choose. It runs:
 - long automatic motion and audio autoplay; and
 - narrow checks for image alternatives and ambiguous link names.
 
-The pages run locally and their internet requests are blocked by default. The
-terminal summary is brief; an optional JSON report contains every finding,
+The pages run locally. During `check` and `prepare-review`, ordinary web requests
+outside the local audit server, including WebSocket connections, are blocked by
+default. Only audit packages you trust; Praxity Audit is not designed to contain
+deliberately malicious HTML.
+
+The terminal summary is brief; an optional JSON report contains every finding,
 question for review, and coverage note. The `--min-confidence` option controls
 which findings are shown and which make the command exit with an error.
 
@@ -57,6 +64,9 @@ node src/cli.ts check /absolute/path/to/site/dist --min-confidence medium
 
 The target may be a folder or zip. Add `--json report.json` to save the full
 results. Run `node src/cli.ts --help` to see every option.
+
+Reports and evidence files can contain course content, local paths, requested
+URLs, and VoiceOver speech. Review them before sharing.
 
 The command exits with `0` when it finds no problems at the selected confidence
 level, `1` when it finds problems, and `2` when the audit cannot run. Questions
@@ -78,10 +88,10 @@ node src/cli.ts prepare-review /absolute/path/to/site/dist > review-evidence.md
 ```
 
 The file contains course text and HTML. Nothing leaves your computer until you
-choose to send it to a reviewer. Testing used Luna at maximum reasoning effort.
-You decide which conclusions to accept. See
-[`docs/using-it.md`](docs/using-it.md) for the review command and evidence
-guidance.
+choose to send it to a reviewer. Luna at maximum reasoning effort was used
+during testing. The model does not define the method, and you decide which
+conclusions to accept. See [`docs/using-it.md`](docs/using-it.md) for the review
+command and evidence guidance.
 
 ## VoiceOver evidence
 
@@ -94,7 +104,8 @@ This command turns on VoiceOver, opens Safari, moves focus, speaks, and sends
 keyboard input. It can interrupt anything else you are doing on the Mac.
 Ordinary `check` and `prepare-review` runs never do this. The command refuses to
 start unless you add `--take-screen-control`, and it refuses to take over a
-VoiceOver session that is already running.
+VoiceOver session that is already running. VoiceOver testing uses your existing
+Safari profile and network connection. Run it only on exports you trust.
 
 See the [`VoiceOver instructions`](docs/using-it.md#voiceover-evidence)
 and [`test results`](docs/experiments/live-region-capture-2026-08-11/README.md).
