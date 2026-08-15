@@ -19,6 +19,11 @@ node /absolute/path/to/praxity-audit/src/cli.ts check ./dist --min-confidence me
 Add `--json report.json` for the complete result set. Run with `--help` for all
 options.
 
+During `check` and `prepare-review`, ordinary web requests outside the local
+audit server, including WebSocket connections, are blocked by default. Only
+audit packages you trust; Praxity Audit is not designed to contain deliberately
+malicious HTML.
+
 ## Confidence threshold
 
 `--min-confidence high|medium|low` (default `high`) controls both what the
@@ -55,9 +60,9 @@ does not prove runtime behaviour.
 
 Interaction review remains a separate, human-approved LLM review. Luna at
 maximum reasoning effort was used during testing, but the model does not define
-the method. The experimental packet command uses the same local,
-network-blocked browser boundary as the automated checks and writes bounded
-rendered DOM, accessibility snapshots, and generic before/action/after traces:
+the method. The experimental packet command uses the same local browser boundary
+as the automated checks and writes bounded rendered DOM, accessibility
+snapshots, and generic before/action/after traces:
 
 ```bash
 node /absolute/path/to/praxity-audit/src/cli.ts prepare-review ./dist > review-evidence.md
@@ -129,8 +134,9 @@ never start VoiceOver.
 
 Real Safari cannot use the network block applied to the Chromium checks, so the
 command also requires `--allow-network`. Review the package first: scripts in
-the page may make their usual internet requests. The page itself must still be
-an HTML file inside the audited folder or zip.
+the page may make their usual internet requests. It uses your existing Safari
+profile and network connection, so run it only on exports you trust. The page
+itself must still be an HTML file inside the audited folder or zip.
 
 Guidepup requires one-time macOS permissions before it can control VoiceOver.
 Follow its [manual VoiceOver setup](https://www.guidepup.dev/docs/guides/manual-voiceover-setup).
@@ -192,6 +198,9 @@ evidence.
 
 The human summary is budgeted; **the JSON is complete**. If the summary says
 findings were withheld, they are all in the `--json` file.
+
+Reports and evidence files can contain course content, local paths, requested
+URLs, and VoiceOver speech. Review them before sharing.
 
 Unresolved automatic evidence appears separately in `needsReview`. These items
 retain their selector and reason but are not violations and never affect the

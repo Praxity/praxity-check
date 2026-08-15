@@ -2,6 +2,9 @@
 
 Issues, reproducible examples, and feedback are welcome.
 
+Report suspected security problems privately as described in
+[`SECURITY.md`](SECURITY.md), not in a public issue.
+
 Praxity Audit is not accepting external code or documentation contributions
 during the public alpha. Please do not submit pull requests: contributor terms
 that preserve contributor credit while allowing commercial relicensing are not

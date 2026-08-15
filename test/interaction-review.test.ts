@@ -17,6 +17,7 @@ test("interaction-review evidence preserves behaviour differences in identical t
 		const packet = await prepareInteractionReview(context, pages, [], "tabs");
 
 		assert.match(packet.markdown, /Components prepared for review: 3/);
+		assert.match(packet.markdown, /Sending this file to an LLM or another service shares the included course content/);
 		const clean = packet.markdown.split("First location: `clean.html`")[1]?.split("#### Candidate")[0] ?? "";
 		const defect = packet.markdown.split("First location: `defect.html`")[1]?.split("### Dialogs")[0] ?? "";
 		const manual = packet.markdown.split("First location: `manual-clean.html`")[1]?.split("### Dialogs")[0] ?? "";
