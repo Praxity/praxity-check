@@ -5,16 +5,16 @@ import { chromium } from "playwright";
 
 import { discover } from "../src/discover.ts";
 import { serve } from "../src/serve.ts";
-import { prepareTierB } from "../src/tier-b.ts";
+import { prepareInteractionReview } from "../src/interaction-review.ts";
 
-test("Tier B packet preserves behaviour differences in identical tab markup", async () => {
-	const root = fileURLToPath(new URL("../bench/tier-b/tabs", import.meta.url));
+test("interaction-review evidence preserves behaviour differences in identical tab markup", async () => {
+	const root = fileURLToPath(new URL("../bench/interaction-review/tabs", import.meta.url));
 	const server = await serve(root);
 	const browser = await chromium.launch();
 	try {
 		const context = await browser.newContext({ serviceWorkers: "block" });
 		const pages = (await discover(root, server.origin)).pages;
-		const packet = await prepareTierB(context, pages, [], "tabs");
+		const packet = await prepareInteractionReview(context, pages, [], "tabs");
 
 		assert.match(packet.markdown, /Components prepared for review: 3/);
 		const clean = packet.markdown.split("First location: `clean.html`")[1]?.split("#### Candidate")[0] ?? "";
@@ -25,10 +25,10 @@ test("Tier B packet preserves behaviour differences in identical tab markup", as
 		assert.match(manual, /Action: `ArrowRight`[\s\S]*?"tabindex":"-1","aria-selected":"false"/);
 		assert.match(manual, /Action: `Enter`[\s\S]*?"tabindex":"0","aria-selected":"true"/);
 
-		const choicesRoot = fileURLToPath(new URL("../bench/tier-b/choices", import.meta.url));
+		const choicesRoot = fileURLToPath(new URL("../bench/interaction-review/choices", import.meta.url));
 		const choicesServer = await serve(choicesRoot);
 		try {
-			const choices = await prepareTierB(
+			const choices = await prepareInteractionReview(
 				await browser.newContext({ serviceWorkers: "block" }),
 				(await discover(choicesRoot, choicesServer.origin)).pages,
 				[],
@@ -40,7 +40,7 @@ test("Tier B packet preserves behaviour differences in identical tab markup", as
 				await choicesServer.close();
 			}
 
-			const stateRoot = fileURLToPath(new URL("../bench/tier-b/state-context", import.meta.url));
+			const stateRoot = fileURLToPath(new URL("../bench/interaction-review/state-context", import.meta.url));
 			const stateServer = await serve(stateRoot);
 			const stateContext = await browser.newContext({
 				serviceWorkers: "block",
@@ -48,7 +48,7 @@ test("Tier B packet preserves behaviour differences in identical tab markup", as
 				colorScheme: "light",
 			});
 			try {
-				const state = await prepareTierB(
+				const state = await prepareInteractionReview(
 					stateContext,
 					(await discover(stateRoot, stateServer.origin)).pages,
 					[],

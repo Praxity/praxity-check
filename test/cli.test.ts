@@ -9,7 +9,7 @@ const CLI = new URL("../src/cli.ts", import.meta.url);
 test("--help prints usage and exits successfully", async () => {
 	const { stdout, stderr } = await exec(process.execPath, [CLI.pathname, "--help"]);
 	assert.match(stdout, /^Usage:\n  prax-audit check <folder\|zip>/);
-	assert.match(stdout, /prax-audit prepare-tier-b <folder\|zip>/);
+	assert.match(stdout, /prax-audit prepare-review <folder\|zip>/);
 	assert.match(stdout, /prax-audit screen-reader <folder\|zip>/);
 	assert.equal(stderr, "");
 });

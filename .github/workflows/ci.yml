@@ -18,7 +18,7 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm typecheck
       - run: pnpm test
-      - name: Smoke-test both CLI tiers
+      - name: Smoke-test automated checks and interaction review
         shell: bash
         run: |
           mkdir -p /tmp/prax-audit-smoke/defect /tmp/prax-audit-smoke/clean
@@ -30,4 +30,4 @@ jobs:
           set -e
           test "$defect_code" -eq 1
           node src/cli.ts check /tmp/prax-audit-smoke/clean --min-confidence medium >/tmp/prax-audit-clean.txt
-          node src/cli.ts prepare-tier-b bench/tier-b/tabs >/tmp/prax-audit-tier-b.md
+          node src/cli.ts prepare-review bench/interaction-review/tabs >/tmp/prax-audit-review.md

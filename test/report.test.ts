@@ -21,7 +21,6 @@ test("needs-review evidence never becomes a finding or a withheld finding", () =
 		evidence: "2.57:1",
 		fix: "Increase contrast.",
 		lens: "a11y",
-		tier: "A",
 		confidence: "medium",
 		basis: "WCAG 1.4.3 Contrast (Minimum) (AA)",
 		rule: "state-text-contrast",
@@ -32,7 +31,6 @@ test("needs-review evidence never becomes a finding or a withheld finding", () =
 		selector: "h2",
 		evidence: "background overlap",
 		lens: "a11y",
-		tier: "A",
 		basis: "WCAG 1.4.3 (AA)",
 		rule: "axe:color-contrast",
 	};

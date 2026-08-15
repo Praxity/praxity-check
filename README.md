@@ -1,6 +1,6 @@
 # Praxity Audit
 
-Find accessibility problems in eLearning exports and interactive websites
+Find accessibility issues in eLearning exports and interactive websites
 before they reach learners.
 
 ## Why use it
@@ -12,33 +12,36 @@ problems in what learners will actually use.
 
 Run Praxity Audit when evaluating eLearning authoring tools or during iterative
 development of an online course. It locates and details accessibility gaps in
-your HTML so you can review them and decide what to fix. Ideally, use it
-alongside keyboard and screen-reader testing for a fuller review.
+your HTML so you can review them and decide what to fix. On macOS, it can also
+use VoiceOver to test one named interaction and capture what was announced.
 
 ## What it is
 
 Praxity Audit is a local command-line tool. Give it a folder or zip file and it
 checks every HTML page inside.
 
-Status: pre-release alpha. Tier A is ready to try. Tier B is experimental. When
-a check needs human judgement, the report asks for review instead of calling it
-a problem.
+Status: pre-release alpha. The automated checks are ready to try. Interaction
+review and VoiceOver evidence are experimental. When evidence needs human
+judgement, the report asks for review instead of calling it a problem.
 
-## What it checks
+## Automated checks
 
-- scans every HTML page in a folder or zip;
-- runs axe-core and browser checks for keyboard use, focus, colour contrast,
-  small-screen layout, text spacing, motion, and audio that starts automatically;
-- runs pages locally and blocks their internet requests by default;
-- gives you a short terminal summary and a detailed JSON report; and
-- prepares optional evidence for reviewing common interactive controls.
+The `check` command scans every HTML page and can produce findings or stop CI at
+the confidence level you choose. It runs:
 
-Tier A runs repeatable browser checks. The `--min-confidence` option controls
-which findings make the command exit with an error.
+- axe-core's browser checks;
+- keyboard traps, focus order, mouse-only controls, character shortcuts, and
+  pointer-down activation;
+- focus visibility, focus obscuring, and keyboard-operable scroll regions;
+- text, control, graphical, hover, and focus-state contrast;
+- 320-pixel reflow and text-spacing clipping;
+- long automatic motion and audio autoplay; and
+- narrow checks for image alternatives and ambiguous link names.
 
-Tier B prepares a local evidence file for a separate LLM review. Luna at maximum
-reasoning effort was used during testing. You choose whether to send the file
-and which results to accept.
+The pages run locally and their internet requests are blocked by default. The
+terminal summary is brief; an optional JSON report contains every finding,
+question for review, and coverage note. The `--min-confidence` option controls
+which findings are shown and which make the command exit with an error.
 
 ## Quick start
 
@@ -60,19 +63,27 @@ level, `1` when it finds problems, and `2` when the audit cannot run. Questions
 that need human judgement appear under `needsReview` in the JSON report. They
 do not change the exit code.
 
-## Tier B review
+## Interaction review
 
-Prepare a local evidence file:
+The experimental `prepare-review` command examines recognised interactive
+components. It records relevant HTML and accessibility context, performs safe
+before/action/after interactions, and prepares evidence for 37 questions about
+tabs, dialogs, accordions, forms, choice controls, carousels, live regions, and
+focus-changing flows.
+
+Prepare the evidence:
 
 ```bash
-node src/cli.ts prepare-tier-b /absolute/path/to/site/dist > tier-b-evidence.md
+node src/cli.ts prepare-review /absolute/path/to/site/dist > review-evidence.md
 ```
 
 The file contains course text and HTML. Nothing leaves your computer until you
-choose to send it to an LLM reviewer. See [`docs/using-it.md`](docs/using-it.md) for
-the review command, the 37 checks, and guidance on useful evidence.
+choose to send it to a reviewer. Testing used Luna at maximum reasoning effort.
+You decide which conclusions to accept. See
+[`docs/using-it.md`](docs/using-it.md) for the review command and evidence
+guidance.
 
-## Experimental screen-reader checks
+## VoiceOver evidence
 
 A macOS-only command can capture what VoiceOver says after one named action in
 Safari. With a clean comparison, the evidence can also help identify the same
@@ -81,26 +92,18 @@ audio.
 
 This command turns on VoiceOver, opens Safari, moves focus, speaks, and sends
 keyboard input. It can interrupt anything else you are doing on the Mac.
-Ordinary `check` and `prepare-tier-b` runs never do this. The command refuses to
+Ordinary `check` and `prepare-review` runs never do this. The command refuses to
 start unless you add `--take-screen-control`, and it refuses to take over a
 VoiceOver session that is already running.
 
-See the [`screen-reader instructions`](docs/using-it.md#screen-reader-evidence)
+See the [`VoiceOver instructions`](docs/using-it.md#voiceover-evidence)
 and [`test results`](docs/experiments/live-region-capture-2026-08-11/README.md).
 
 ## What it works with
 
 Praxity Audit currently checks local folders and zip files that render as
 static HTML in Chromium. It works best with exports that can run without an LMS
-or sign-in. Test LMS-only behaviour, signed-in pages, and screen-reader output
-separately. If a course needs files from the internet, add `--allow-network`.
-
-## Roadmap
-
-The next experiment will build a short, guided course walk from this one-action
-check: skip-link entry, page order, hidden or unreachable content, and gated or
-branching activities. It will remain opt-in because it takes over VoiceOver and
-keyboard focus while it runs.
+or sign-in. If a course needs files from the internet, add `--allow-network`.
 
 ## Licence
 

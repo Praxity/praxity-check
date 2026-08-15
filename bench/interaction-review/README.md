@@ -1,8 +1,8 @@
-# Tier B controls
+# Interaction-review controls
 
 The tab files use the same recognised component markup with three behaviours:
 missing arrow operation, automatic activation, and W3C-style manual activation.
-A useful Tier B packet must expose those differences in before/action/after
+A useful review packet must expose those differences in before/action/after
 traces without declaring any result a finding itself.
 
 The native-select control verifies that the packet labels native popup and

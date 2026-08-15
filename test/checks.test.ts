@@ -278,7 +278,7 @@ function toneWav(): Buffer {
 	return wav;
 }
 
-describe("tier A checks fire on known defects", () => {
+describe("automated checks fire on known defects", () => {
 	let root: string;
 	let server: StaticServer;
 	let browser: Browser;

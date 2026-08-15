@@ -61,6 +61,6 @@ not impersonate or imply endorsement by the official project.
 
 Praxity Audit does not claim ownership of the sites, courses, or other content
 you audit. Reports from Praxity Audit, public forks, and free public services
-retain the Praxity Audit attribution. Tier A runs locally; the experimental
-Tier B workflow sends only the evidence packet you choose to a separately
-invoked model reviewer.
+retain the Praxity Audit attribution. Automated checks run locally; the
+experimental interaction review sends only the evidence packet you choose to a
+separately invoked model reviewer.

@@ -10,7 +10,6 @@ export interface Finding {
 	evidence: string;
 	fix: string;
 	lens: "a11y";
-	tier: "A";
 	confidence: "high" | "medium" | "low";
 	basis: string;
 	/** Stable id, for deduplicating one defect that appears on many pages. */
@@ -24,7 +23,6 @@ export interface ReviewItem {
 	selector?: string;
 	evidence: string;
 	lens: "a11y";
-	tier: "A";
 	basis: string;
 	rule: string;
 }
@@ -301,7 +299,7 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 	const results = await new AxeBuilder({ page })
 		.options({
 			rules: {
-				// Both ship disabled by default and both are in tier A's remit.
+				// Both ship disabled by default and both belong in the automated checks.
 				"target-size": { enabled: true },
 				"heading-order": { enabled: true },
 			},
@@ -351,7 +349,7 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 	const needsReview: ReviewItem[] = [];
 	const map = (rules: typeof results.violations, confidence?: "high") => {
 		for (const rule of rules) {
-			// Tier A is normative automatic failures (spec §5). axe also ships
+			// Automated findings are normative failures (spec §5). axe also ships
 			// best-practice advice -- `region`, `landmark-one-main` and friends --
 			// which is useful but is not a WCAG failure. Reporting it at high
 			// confidence produced 84 high-confidence findings against the W3C's own
@@ -377,7 +375,6 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 						selector: selectorByTarget.get(target),
 						evidence,
 						lens: "a11y",
-						tier: "A",
 						basis: basisFor(rule.tags),
 						rule: `axe:${rule.id}`,
 					});
@@ -390,7 +387,6 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 					evidence,
 					fix: rule.helpUrl,
 					lens: "a11y",
-					tier: "A",
 					confidence: normative ? confidence : "low",
 					basis: basisFor(rule.tags),
 					rule: `axe:${rule.id}`,
@@ -549,7 +545,6 @@ function mouseOnlyControlsFrom(inspected: ListenerInspection, pageId: string): C
 				: "visible div/span has a direct click listener, but no native semantics, role, tabindex, or keyboard listener"}`,
 			fix: "Use a button or link. If that is impossible, add the correct role, keyboard focus, and Enter/Space handling.",
 			lens: "a11y",
-			tier: "A",
 			confidence: "medium",
 			basis: "WCAG 2.1.1 Keyboard (A)",
 			rule: "mouse-only-control",
@@ -589,7 +584,6 @@ function characterKeyShortcutsFrom(inspected: ListenerInspection, pageId: string
 			evidence: `${listener.type} listener on document/window compares event.key with ${JSON.stringify(key)} without a modifier or focus guard`,
 			fix: "Let users turn the shortcut off or remap it to include Ctrl/Alt, or make it active only while its component has focus.",
 			lens: "a11y",
-			tier: "A",
 			confidence: "medium",
 			basis: "WCAG 2.1.4 Character Key Shortcuts (A)",
 			rule: "character-key-shortcut",
@@ -643,7 +637,6 @@ function pointerCancellationFrom(inspected: ListenerInspection, pageId: string):
 				evidence: `${el.label ? `accessible name ${JSON.stringify(el.label)}; ` : ""}${down} directly invokes an activation API; no ${releases.join(" or ")} handler or visible Undo mechanism was found`,
 				fix: "Complete activation on click or the corresponding up event, and allow moving off the target to cancel.",
 				lens: "a11y",
-				tier: "A",
 				confidence: "medium",
 				basis: "WCAG 2.5.2 Pointer Cancellation (A)",
 				rule: "pointer-down-activation",
@@ -750,7 +743,6 @@ export async function pauseStopHide(page: Page, pageId: string): Promise<CheckRe
 				? "Provide a keyboard-operable pause, stop, or hide control, or let the user control the update frequency."
 				: "Provide a keyboard-operable pause, stop, or hide control, or stop the motion within five seconds.",
 			lens: "a11y",
-			tier: "A",
 			confidence: "medium",
 			basis: "WCAG 2.2.2 Pause, Stop, Hide (A)",
 			rule: "pause-stop-hide",
@@ -834,7 +826,7 @@ export async function audioAutoplay(page: Page, pageId: string): Promise<CheckRe
 			selector: audio.selector || undefined,
 			evidence: `autoplay=${audio.autoplay}, paused=${audio.paused}, muted=${audio.muted}, volume=${audio.volume}, duration=${Number.isFinite(audio.duration) ? `${audio.duration.toFixed(2)}s` : "unknown"}, currentTime ${audio.currentTime.toFixed(2)}s→${final?.currentTime.toFixed(2) ?? "unknown"}s after 3.1s; no native or named external sound control`,
 			fix: "Do not autoplay the audio, stop it within three seconds, or provide a keyboard-operable pause/stop or independent volume control.",
-			lens: "a11y", tier: "A", confidence: "high",
+			lens: "a11y", confidence: "high",
 			basis: "WCAG 1.4.2 Audio Control (A)",
 			rule: "audio-autoplay",
 		});
@@ -909,7 +901,6 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 				evidence: `${at.label ? `accessible name ${JSON.stringify(at.label)}; ` : ""}Tab pressed 3 times, focus never left element ${at.id}`,
 				fix: "Let Tab leave the component, and close it on Escape.",
 				lens: "a11y",
-				tier: "A",
 				confidence: "high",
 				basis: "WCAG 2.1.2 No Keyboard Trap (A)",
 				rule: "keyboard-trap",
@@ -950,7 +941,6 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 			evidence: `${total} focusable elements in the DOM, 0 reached by Tab`,
 			fix: "Check for a container intercepting keydown, or content removed from the tab order.",
 			lens: "a11y",
-			tier: "A",
 			confidence: "high",
 			basis: "WCAG 2.1.1 Keyboard (A)",
 			rule: "keyboard-unreachable",
@@ -1049,7 +1039,7 @@ export async function keyboardScrollableRegions(page: Page, pageId: string): Pro
 			selector: candidate.selector || undefined,
 			evidence: `${candidate.dimensions}; focus target: ${JSON.stringify(setup.focusTarget)}; ${keys.join(" then ")} left scroll at ${after.left},${after.top}`,
 			fix: "Put the region in the tab order (usually tabindex=\"0\") and preserve native arrow/Page Down scrolling.",
-			lens: "a11y", tier: "A", confidence: "medium",
+			lens: "a11y", confidence: "medium",
 			basis: "WCAG 2.1.1 Keyboard (A)",
 			rule: "scroll-region-keyboard",
 		});
@@ -1204,7 +1194,6 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 			evidence: `no computed style change on focus for "${result.label}" (element, ancestors, and pseudo-elements)`,
 			fix: "Give it a visible focus indicator; never remove the browser default without replacing it.",
 			lens: "a11y",
-			tier: "A",
 			confidence: "medium",
 			basis: "WCAG 2.4.7 Focus Visible (AA)",
 			rule: "focus-visible",
@@ -1375,7 +1364,6 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 						selector: selector || undefined,
 						evidence: `${state}; image, gradient, or opacity-backed colour compositing requires review`,
 						lens: "a11y",
-						tier: "A",
 						basis: "WCAG 1.4.3 / 1.4.11 (AA)",
 						rule: "state-contrast-compositing",
 					});
@@ -1391,7 +1379,7 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 				selector: after.selector || undefined,
 				evidence: `${state}; ${after.text.foreground} on ${after.text.background}; ${after.text.ratio.toFixed(2)}:1 (required: ${after.text.threshold}:1; default: ${before.text.ratio.toFixed(2)}:1)`,
 				fix: `Keep the ${state} text and background colors at or above ${after.text.threshold}:1 contrast.`,
-				lens: "a11y", tier: "A", confidence: "medium",
+				lens: "a11y", confidence: "medium",
 				basis: "WCAG 1.4.3 Contrast (Minimum) (AA)",
 				rule: "state-text-contrast",
 			});
@@ -1414,7 +1402,7 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 					? `${state}; strongest changed cue is ${changed.name} at ${changed.ratio.toFixed(2)}:1 (required: 3:1)`
 					: `${state}; authored paint changed but no contrasting boundary, outline, background edge, or shadow was measurable`,
 				fix: `Give the ${state} state a boundary, outline, background edge, or shadow with at least 3:1 contrast against adjacent colors.`,
-				lens: "a11y", tier: "A", confidence: "medium",
+				lens: "a11y", confidence: "medium",
 				basis: "WCAG 1.4.11 Non-text Contrast (AA)",
 				rule: "state-non-text-contrast",
 			});
@@ -1620,7 +1608,6 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 				? "Increase the contrast of the control's border, background edge, outline, or shadow against adjacent colors."
 				: "Increase the contrast of each shape needed to understand the graphic, or provide the same information in text.",
 			lens: "a11y",
-			tier: "A",
 			confidence: "medium",
 			basis: "WCAG 1.4.11 Non-text Contrast (AA)",
 			rule: issue.kind === "component" ? "non-text-contrast-component" : "non-text-contrast-graphic",
@@ -1633,7 +1620,6 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 			selector: item.selector || undefined,
 			evidence: item.reason,
 			lens: "a11y" as const,
-			tier: "A" as const,
 			basis: "WCAG 1.4.11 Non-text Contrast (AA)",
 			rule: "non-text-contrast-compositing",
 		})),
@@ -1705,7 +1691,6 @@ export async function focusNotObscured(page: Page, pageId: string): Promise<Chec
 			evidence: `${item.label ? `accessible name ${JSON.stringify(item.label)}; ` : ""}focused rectangle ${item.rect} is fully covered by ${item.cover}`,
 			fix: "Add scroll padding or move/dismiss the fixed or sticky content so part of the focused control remains visible.",
 			lens: "a11y",
-			tier: "A",
 			confidence: "medium",
 			basis: "WCAG 2.4.11 Focus Not Obscured (Minimum) (AA)",
 			rule: "focus-not-obscured",
@@ -1759,7 +1744,6 @@ export async function reflow(page: Page, pageId: string): Promise<CheckResult> {
 			evidence: `right edge at ${o.right}px in a 320px viewport`,
 			fix: "Let the container wrap or shrink; avoid fixed widths above 320px.",
 			lens: "a11y",
-			tier: "A",
 			// Exempt content may legitimately overflow, so only non-exempt text and
 			// controls are a conclusive failure.
 			confidence: o.exempt || !o.text ? "medium" : "high",
@@ -1881,7 +1865,6 @@ export async function textSpacing(page: Page, pageId: string): Promise<CheckResu
 				? "Let the text wrap or the container widen instead of clipping its width."
 				: "Let the container grow with its content instead of fixing its height.",
 			lens: "a11y",
-			tier: "A",
 			confidence: c.clamped ? "medium" : "high",
 			basis: "WCAG 1.4.12 Text Spacing (AA)",
 			rule: "text-spacing-clip",
@@ -1896,7 +1879,7 @@ export async function textSpacing(page: Page, pageId: string): Promise<CheckResu
  * non-empty string of either kind passes it.
  *
  * Deliberately excludes vague-but-real alt ("image", "photo"). Judging whether
- * alt text is *meaningful* is class J in the pre-registration and outside tier A;
+ * alt text is *meaningful* is class J in the pre-registration and outside this check;
  * adding it here after the fact would be scoring my own homework.
  */
 const TEMPLATE = /\{\{.*\}\}|\$\{.*\}|<%.*%>|\{[a-z_][a-z0-9_]*\}/i;
@@ -1932,7 +1915,6 @@ export async function altTextQuality(page: Page, pageId: string): Promise<CheckR
 				? "Fill in the variable, or supply alt text at authoring time."
 				: "Describe what the image conveys, or use alt=\"\" if it is decorative.",
 			lens: "a11y",
-			tier: "A",
 			confidence: "high",
 			basis: "WCAG 1.1.1 Non-text Content (A)",
 			rule: template ? "alt-template-variable" : "alt-filename",
@@ -1999,7 +1981,6 @@ export async function linkTextQuality(page: Page, pageId: string): Promise<Check
 				evidence: `accessible name is exactly "${link.name}" and destination is ${JSON.stringify(link.href)}; surrounding text was not assessed`,
 				fix: "Make the link text name its destination, or add an aria-label that does.",
 				lens: "a11y",
-				tier: "A",
 				// 2.4.4 (A) allows the *programmatically determined context* -- the
 				// enclosing sentence -- to supply the purpose, and "To book a tour,
 				// click here" does exactly that. Two independent adjudicators called
@@ -2025,7 +2006,6 @@ export async function linkTextQuality(page: Page, pageId: string): Promise<Check
 			evidence: `accessible name ${JSON.stringify(name)}, ${group.targets.size} distinct destinations: ${[...group.targets].map((target) => JSON.stringify(target)).join(", ")}`,
 			fix: "Give each link text that distinguishes its destination, or add distinguishing aria-labels.",
 			lens: "a11y",
-			tier: "A",
 			// This one does fail 2.4.4: identical names on one page cannot be told
 			// apart from a link list, and context cannot disambiguate two links that
 			// read the same.

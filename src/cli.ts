@@ -28,14 +28,14 @@ import { openInput, type Input } from "./input.ts";
 import { countAtOrAbove, createReport, humanSummary, type BlockedRequest, type Confidence, type PageAudit } from "./report.ts";
 import { resolveScreenReaderPage, runScreenReader } from "./screen-reader.ts";
 import { isAuditServerUrl, serve, type StaticServer } from "./serve.ts";
-import { prepareTierB } from "./tier-b.ts";
+import { prepareInteractionReview } from "./interaction-review.ts";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const ACTION_TIMEOUT_MS = 10_000;
 const PAGE_AUDIT_TIMEOUT_MS = 60_000;
 const USAGE = `Usage:
   prax-audit check <folder|zip> [options]
-  prax-audit prepare-tier-b <folder|zip> [--allow-network]
+  prax-audit prepare-review <folder|zip> [--allow-network]
   prax-audit screen-reader <folder|zip> --page <html> --control <name> --expected <phrase> --take-screen-control --allow-network
 
 Options:
@@ -48,8 +48,8 @@ Options:
   --take-screen-control                 Allow VoiceOver, Safari, focus, and keyboard control
   -h, --help                            Show this help
 
-prepare-tier-b and screen-reader write Markdown evidence to stdout.
-screen-reader is macOS-only, disruptive, and never runs as part of check or prepare-tier-b.`;
+prepare-review and screen-reader write Markdown evidence to stdout.
+screen-reader is macOS-only, disruptive, and never runs as part of check or prepare-review.`;
 
 interface CommonOptions {
 	target: string;
@@ -62,8 +62,8 @@ interface CheckOptions extends CommonOptions {
 	minConfidence: Confidence;
 }
 
-interface TierBOptions extends CommonOptions {
-	command: "prepare-tier-b";
+interface ReviewOptions extends CommonOptions {
+	command: "prepare-review";
 }
 
 interface ScreenReaderOptions extends CommonOptions {
@@ -74,11 +74,11 @@ interface ScreenReaderOptions extends CommonOptions {
 	takeScreenControl: boolean;
 }
 
-type Options = CheckOptions | TierBOptions | ScreenReaderOptions;
+type Options = CheckOptions | ReviewOptions | ScreenReaderOptions;
 
 function parseArgs(args: string[]): Options {
 	const command = args[0];
-	if ((command !== "check" && command !== "prepare-tier-b" && command !== "screen-reader") || !args[1]) {
+	if ((command !== "check" && command !== "prepare-review" && command !== "screen-reader") || !args[1]) {
 		throw new Error(USAGE);
 	}
 
@@ -292,8 +292,8 @@ async function main(args: string[]): Promise<number> {
 				await socket.close({ code: 1008, reason: "outbound network blocked by prax-audit" });
 			});
 		}
-		if (options.command === "prepare-tier-b") {
-			const packet = await prepareTierB(context, discovery.pages, blockedRequests, basename(options.target));
+		if (options.command === "prepare-review") {
+			const packet = await prepareInteractionReview(context, discovery.pages, blockedRequests, basename(options.target));
 			console.log(packet.markdown);
 			return packet.auditedPages > 0 ? 0 : 2;
 		}

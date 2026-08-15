@@ -39,38 +39,35 @@ control.
 Exit codes: `0` nothing at or above the threshold, `1` findings present, `2`
 could not run.
 
-## Tiers and evidence methods
+## Audit workflows and evidence
 
-Tiers classify the conclusion:
+Automated checks produce repeatable findings and may stop CI at the confidence
+level you select. Interaction review examines recognised components through
+prepared before/action/after evidence; its conclusions require human approval
+and never stop CI.
 
-| Tier | Question | Use |
-|---|---|---|
-| A | Is there a deterministic failure without guessing component or author intent? | Local CLI; may gate by confidence |
-| B | Does a recognised component behave correctly through a named interaction? | Independent review; human-approved |
-| C | Is the content, structure or UX appropriate in context? | Advisory evidence only |
+The evidence may be `rendered`, `interaction`, `screen-reader`, or `source`.
+Browser tracing is not automatically a review item because the automated checks
+also interact with pages. Source can explain a reproduced bug, but source alone
+does not prove runtime behaviour.
 
-Record how the evidence was obtained separately: `rendered`, `interaction`,
-`screen-reader`, or `source`. Browser tracing is not automatically Tier B —
-Tier A already uses browser interactions. Source can explain a reproduced bug,
-but source alone does not prove runtime behaviour.
+## Interaction review
 
-## Tier B: recognised-pattern interaction review
-
-Tier B remains a separate, human-approved LLM review. Luna at maximum reasoning
-effort was used during testing, but the model is not part of the tier's
-definition. The experimental packet command uses the same local,
-network-blocked browser boundary as Tier A and writes bounded rendered DOM,
-accessibility snapshots, and generic before/action/after traces:
+Interaction review remains a separate, human-approved LLM review. Luna at
+maximum reasoning effort was used during testing, but the model does not define
+the method. The experimental packet command uses the same local,
+network-blocked browser boundary as the automated checks and writes bounded
+rendered DOM, accessibility snapshots, and generic before/action/after traces:
 
 ```bash
-node /absolute/path/to/praxity-audit/src/cli.ts prepare-tier-b ./dist > tier-b-evidence.md
+node /absolute/path/to/praxity-audit/src/cli.ts prepare-review ./dist > review-evidence.md
 ```
 
-The command does not run Tier A, invoke a model, upload anything, or decide that
-a trace is a defect. It records only recognised candidates and reversible
-generic actions; the packet names missing components, unsafe or unknown
-triggers, and other unexercised rules. Review the Markdown before sending it
-anywhere because it contains course text and markup.
+The command does not run the automated checks, invoke a model, upload anything,
+or decide that a trace is a defect. It records only recognised candidates and
+reversible generic actions; the packet names missing components, unsafe or
+unknown triggers, and other unexercised rules. Review the Markdown before
+sending it anywhere because it contains course text and markup.
 
 Append the packet to the prompt and run the LLM reviewer read-only from the
 Audit repo, not from the target. The reviewer needs the evidence, not source
@@ -78,13 +75,13 @@ access. This example uses Luna at maximum reasoning effort:
 
 ```bash
 {
-  cat /absolute/path/to/praxity-audit/docs/tier-b-prompt.md
+  cat /absolute/path/to/praxity-audit/docs/review-prompt.md
   printf '\n\n# Prepared evidence packet\n'
-  cat /absolute/path/to/tier-b-evidence.md
+  cat /absolute/path/to/review-evidence.md
 } | codex -a never exec --ephemeral \
   -C /absolute/path/to/praxity-audit -s read-only \
   -m gpt-5.6-luna -c 'model_reasoning_effort="max"' \
-  -o /absolute/path/to/tier-b.md -
+  -o /absolute/path/to/review.md -
 ```
 
 This uses the official
@@ -92,20 +89,21 @@ This uses the official
 non-interactive command. `--ephemeral` avoids saving a local Codex session
 rollout; it does not prevent the chosen model service from receiving the packet.
 
-Run Tier A separately. Do not give its report to Tier B; merge and deduplicate
-the results only after both runs complete. If no browser or prepared trace was
-available, runtime claims remain suspected even when markup looks suspicious.
+Run the automated checks separately. Do not give their report to the interaction
+reviewer; merge and deduplicate the results only after both runs complete. If no
+browser or prepared trace was available, runtime claims remain suspected even
+when markup looks suspicious.
 
 After approving a finding, trace its cause separately in the developer project
 using the packet's page, selector, IDs, classes, and text. That follow-up may
-inspect the smallest relevant source slice; the Tier B reviewer may not search
-the package or a minified bundle.
+inspect the smallest relevant source slice; the reviewer may not search the
+package or a minified bundle.
 
-`prepare-tier-b` exits `0` when it prepared at least one page and `2` when it
+`prepare-review` exits `0` when it prepared at least one page and `2` when it
 could not prepare any. It never exits `1`: evidence is not a finding and cannot
 gate CI.
 
-## Screen-reader evidence
+## VoiceOver evidence
 
 Use screen-reader evidence for one named action whose open question is what was
 announced. Record the exact pairing and versions, such as VoiceOver + Safari or
@@ -126,7 +124,7 @@ node /absolute/path/to/praxity-audit/src/cli.ts screen-reader ./dist \
 The command turns on VoiceOver, opens its own Safari window, moves focus while
 it looks for the named control, and presses Space. It closes that window,
 stops the VoiceOver session it started, and returns to the previously active
-app. It refuses to run if VoiceOver is already on. `check` and `prepare-tier-b`
+app. It refuses to run if VoiceOver is already on. `check` and `prepare-review`
 never start VoiceOver.
 
 Real Safari cannot use the network block applied to the Chromium checks, so the
@@ -136,8 +134,8 @@ an HTML file inside the audited folder or zip.
 
 Guidepup requires one-time macOS permissions before it can control VoiceOver.
 Follow its [manual VoiceOver setup](https://www.guidepup.dev/docs/guides/manual-voiceover-setup).
-The command produces evidence, not a finding, and never changes a Tier A exit
-code.
+The command produces evidence, not a finding, and never changes the automated
+check exit code.
 
 The tested VoiceOver + Safari workflow reads VoiceOver's last phrase directly.
 For suspected duplicate speech, it also counts local speech starts during the
