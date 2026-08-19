@@ -263,7 +263,7 @@ export interface ScreenReaderRunOptions {
 export async function runScreenReader(options: ScreenReaderRunOptions): Promise<string> {
 	if (platform() !== "darwin") throw new Error("screen-reader currently requires macOS, Safari, and VoiceOver");
 	if (await appleScript('tell application "VoiceOver" to return running') === "true") {
-		throw new Error("VoiceOver is already running. Stop it before this automated session so Praxity Audit cannot take over or stop your existing session.");
+		throw new Error("VoiceOver is already running. Stop it before this automated session so Praxity Accessibility Audit cannot take over or stop your existing session.");
 	}
 
 	const previousApp = await appleScript('tell application "System Events" to return name of first application process whose frontmost is true');

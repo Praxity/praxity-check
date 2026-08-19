@@ -1,4 +1,4 @@
-# Running Praxity Audit
+# Running Praxity Accessibility Audit
 
 Install once with Node 22.18+ and pnpm 11.5.3:
 
@@ -21,7 +21,7 @@ options.
 
 During `check` and `prepare-review`, ordinary web requests outside the local
 audit server, including WebSocket connections, are blocked by default. Only
-audit packages you trust; Praxity Audit is not designed to contain deliberately
+audit packages you trust; Praxity Accessibility Audit is not designed to contain deliberately
 malicious HTML.
 
 ## Confidence threshold
@@ -44,7 +44,7 @@ control.
 Exit codes: `0` nothing at or above the threshold, `1` findings present, `2`
 could not run.
 
-## Audit workflows and evidence
+## Accessibility Audit workflows and evidence
 
 Automated checks produce repeatable findings and may stop CI at the confidence
 level you select. Interaction review examines recognised components through
@@ -75,7 +75,7 @@ unknown triggers, and other unexercised rules. Review the Markdown before
 sending it anywhere because it contains course text and markup.
 
 Append the packet to the prompt and run the LLM reviewer read-only from the
-Audit repo, not from the target. The reviewer needs the evidence, not source
+Accessibility Audit repo, not from the target. The reviewer needs the evidence, not source
 access. This example uses Luna at maximum reasoning effort:
 
 ```bash

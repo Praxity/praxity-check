@@ -107,7 +107,7 @@ function parseArgs(args: string[]): Options {
 			throw new Error("screen-reader launches VoiceOver, opens Safari, moves focus, and sends keyboard input. Rerun with --take-screen-control only when interruption is safe.");
 		}
 		if (!options.allowNetwork) {
-			throw new Error("screen-reader uses your existing Safari profile and network connection, which Audit's Playwright network blocker cannot protect. Rerun with --allow-network only for an export you trust.");
+			throw new Error("screen-reader uses your existing Safari profile and network connection, which Accessibility Audit's Playwright network blocker cannot protect. Rerun with --allow-network only for an export you trust.");
 		}
 		if (!options.page || !options.control || !options.expected) {
 			throw new Error("screen-reader requires --page, --control, and --expected");
