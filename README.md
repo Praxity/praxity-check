@@ -1,4 +1,4 @@
-# Praxity Audit
+# Praxity Accessibility Audit
 
 Find accessibility issues in eLearning exports and interactive websites
 before they reach learners.
@@ -11,7 +11,7 @@ can trap keyboard users, colour contrast can fail when someone hovers over an
 interactive element, and page updates can go unannounced. Checking your HTML
 exports helps you find issues early, before they create barriers for learners.
 
-Run Praxity Audit when evaluating eLearning authoring tools or during iterative
+Run Praxity Accessibility Audit when evaluating eLearning authoring tools or during iterative
 development of an online course. It locates and describes likely accessibility
 issues in your HTML so you can review them and decide what to fix. On macOS, it
 can also use VoiceOver to test specific interactions one at a time and capture
@@ -19,7 +19,7 @@ what was announced.
 
 ## What it is
 
-Praxity Audit is a local command-line tool. Give it a folder or zip file and it
+Praxity Accessibility Audit is a local command-line tool. Give it a folder or zip file and it
 checks every HTML page inside.
 
 Status: alpha. The automated checks are ready to use. Interaction
@@ -46,7 +46,7 @@ the confidence level you choose. It runs:
 
 The pages run locally. During `check` and `prepare-review`, ordinary web requests
 outside the local audit server, including WebSocket connections, are blocked by
-default. Only audit packages you trust; Praxity Audit is not designed to contain
+default. Only audit packages you trust; Praxity Accessibility Audit is not designed to contain
 deliberately malicious HTML.
 
 The terminal summary is brief; an optional JSON report contains every finding,
@@ -115,18 +115,18 @@ and [`test results`](docs/experiments/live-region-capture-2026-08-11/README.md).
 
 ## What it works with
 
-Praxity Audit currently checks local folders and zip files that render as
+Praxity Accessibility Audit currently checks local folders and zip files that render as
 static HTML in Chromium. It works best with exports that can run without an LMS
 or sign-in. If a course needs files from the internet, add `--allow-network`.
 
 ## Licence
 
-Praxity Audit is community source. Personal, educational, nonprofit,
+Praxity Accessibility Audit is community source. Personal, educational, nonprofit,
 governmental, and internal organizational use is permitted. This includes using
 it internally to check paid work. Qualifying free public forks and services must
-display the required credit, publish their Audit source and changes under the
+display the required credit, publish their Accessibility Audit source and changes under the
 same terms, and preserve attribution in reports. Paid access or reports,
-substantially Audit-powered paid services, paid hosting, repackaging, and
+substantially Accessibility Audit-powered paid services, paid hosting, repackaging, and
 white-labelling require separate written permission.
 
 See [`LICENSE`](LICENSE) for the terms and [`LICENSING.md`](LICENSING.md) for

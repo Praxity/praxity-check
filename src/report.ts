@@ -2,7 +2,7 @@ import packageJson from "../package.json" with { type: "json" };
 import type { CheckResult, Finding, ReviewItem, Triage } from "./checks.ts";
 import type { DiscoveredPage, Discovery, RedirectStub } from "./discover.ts";
 
-export const TOOL_NAME = "Praxity Audit";
+export const TOOL_NAME = "Praxity Accessibility Audit";
 export const PROJECT_URL = "https://github.com/Praxity/praxity-audit";
 export const CREDITS_URL = `${PROJECT_URL}/blob/main/NOTICE.md`;
 

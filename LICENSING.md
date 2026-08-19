@@ -1,6 +1,6 @@
-# Praxity Audit licensing
+# Praxity Accessibility Audit licensing
 
-Praxity Audit is **community source**, not open source. The `LICENSE` file is
+Praxity Accessibility Audit is **community source**, not open source. The `LICENSE` file is
 authoritative; this page explains the intended boundary in everyday language.
 The licence uses the unmodified
 [PolyForm Perimeter License 1.0.1](https://polyformproject.org/licenses/perimeter/1.0.1)
@@ -9,17 +9,17 @@ and services.
 
 ## Free uses
 
-You may use and modify Praxity Audit without charge for:
+You may use and modify Praxity Accessibility Audit without charge for:
 
 - personal projects;
 - teaching, learning, and research;
 - nonprofit and governmental work;
 - internal use by any organization, including a for-profit company;
 - checking sites, courses, and interactive products you are paid to develop,
-  when Audit is an internal development tool rather than the paid deliverable;
+  when Accessibility Audit is an internal development tool rather than the paid deliverable;
 - public source forks distributed without charge, under the same terms, and
   with the required attribution;
-- genuinely free public services that visibly credit Praxity Audit and publish
+- genuinely free public services that visibly credit Praxity Accessibility Audit and publish
   the source for their deployed modifications. A free service may receive
   general sponsorship that does not change access, results, or priority.
 
@@ -31,7 +31,7 @@ hosted instance and publishes its modifications.
 
 Contact the project before:
 
-- charging for access to Praxity Audit or its hosted results;
+- charging for access to Praxity Accessibility Audit or its hosted results;
 - selling a dedicated accessibility-audit service powered substantially by it;
 - repackaging, reselling, renting, or white-labelling it;
 - embedding it as substantial audit functionality in a paid product;
@@ -50,17 +50,18 @@ Commercial-licensing contact: **[hello@arielharlap.com](mailto:hello@arielharlap
 
 The required public attribution is:
 
-> **Praxity Audit by Ariel Harlap**  
+> **Praxity Accessibility Audit by Ariel Harlap**
+>
 > <https://github.com/Praxity/praxity-audit>
 
-“Work with Ariel” is not required attribution. Praxity Audit, other Praxity
+“Work with Ariel” is not required attribution. Praxity Accessibility Audit, other Praxity
 names, marks, and logos remain reserved. Forks may identify their origin but may
 not impersonate or imply endorsement by the official project.
 
 ## Your content and reports
 
-Praxity Audit does not claim ownership of the sites, courses, or other content
-you audit. Reports from Praxity Audit, public forks, and free public services
-retain the Praxity Audit attribution. Automated checks run locally; the
+Praxity Accessibility Audit does not claim ownership of the sites, courses, or other content
+you audit. Reports from Praxity Accessibility Audit, public forks, and free public services
+retain the Praxity Accessibility Audit attribution. Automated checks run locally; the
 experimental interaction review sends only the evidence packet you choose to a
 separately invoked model reviewer.

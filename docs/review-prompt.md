@@ -1,4 +1,4 @@
-# Praxity Audit interaction review
+# Praxity Accessibility Audit interaction review
 
 Audit the prepared evidence packet supplied with this prompt for accessibility
 defects. This is an independent review; the model running it is the current
