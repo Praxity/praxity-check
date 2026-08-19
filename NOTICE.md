@@ -1,14 +1,14 @@
 # Notices and acknowledgements
 
-## Praxity Audit
+## Praxity Accessibility Audit
 
 Copyright © 2026 Ariel Harlap.
 
-Canonical attribution: **Praxity Audit by Ariel Harlap**
+Canonical attribution: **Praxity Accessibility Audit by Ariel Harlap**
 
 Project: <https://github.com/Praxity/praxity-audit>
 
-Praxity Audit is community source software for reducing accessibility debt in
+Praxity Accessibility Audit is community source software for reducing accessibility debt in
 learning packages and interactive websites. See `LICENSE` and `LICENSING.md`
 for permitted uses and commercial-licensing requirements.
 
@@ -25,7 +25,7 @@ The licence includes the unmodified
 [PolyForm Perimeter License 1.0.1](https://polyformproject.org/licenses/perimeter/1.0.1),
 copyright PolyForm Project Inc. The PolyForm Project separately permits reuse
 of its licence texts. The Praxity Community Permission is specific to Praxity
-Audit.
+Accessibility Audit.
 
 ## Runtime dependencies
 
@@ -44,10 +44,10 @@ inventory.
 ## Methodology and standards acknowledgements
 
 The following informed the methodology but are not incorporated as Praxity
-Audit code:
+Accessibility Audit code:
 
 - [Community Access Accessibility Agents](https://github.com/Community-Access/accessibility-agents),
-  MIT, Copyright (c) 2026 Taylor Arndt. Praxity Audit distills independently
+  MIT, Copyright (c) 2026 Taylor Arndt. Praxity Accessibility Audit distills independently
   implemented checks and review hypotheses from accessibility knowledge that
   included locally adapted versions of these agents; their agent files are not
   distributed here.
