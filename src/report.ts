@@ -10,6 +10,7 @@ export interface PageAudit extends CheckResult {
 	page: DiscoveredPage;
 	triage: Triage;
 	audited: boolean;
+	title?: string;
 }
 
 export interface BlockedRequest {
@@ -61,6 +62,26 @@ export function createReport(
 	const findings = pages.flatMap((page) => page.findings);
 	const needsReview = pages.flatMap((page) => page.needsReview ?? []);
 	const notes = pages.flatMap((page) => page.notes);
+	const titles = new Map<string, { title: string; pages: string[] }>();
+	for (const page of pages) {
+		const title = page.audited ? page.title?.replace(/\s+/g, " ").trim() : undefined;
+		if (!title) continue;
+		const key = title.toLowerCase();
+		const group = titles.get(key) ?? { title, pages: [] };
+		group.pages.push(page.page.file);
+		titles.set(key, group);
+	}
+	for (const group of titles.values()) {
+		if (group.pages.length < 2) continue;
+		needsReview.push({
+			what: "Multiple audited pages use the same page title; confirm that each title describes and distinguishes its page.",
+			page: group.pages[0] as string,
+			evidence: `title ${JSON.stringify(group.title)} is used by ${group.pages.length} pages: ${group.pages.map((page) => JSON.stringify(page)).join(", ")}`,
+			lens: "a11y",
+			basis: "WCAG 2.4.2 Page Titled (A)",
+			rule: "page-title-repeated",
+		});
+	}
 	const confidence: AuditReport["counts"]["confidence"] = { high: 0, medium: 0, low: 0 };
 	const rule: Record<string, number> = {};
 

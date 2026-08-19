@@ -37,9 +37,12 @@ the confidence level you choose. It runs:
   pointer-down activation;
 - focus visibility, focus obscuring, and keyboard-operable scroll regions;
 - text, control, graphical, hover, and focus-state contrast;
-- 320-pixel reflow and text-spacing clipping;
+- 320-pixel reflow, text-spacing clipping, and 200% operating-system text
+  scaling when a page opts in;
+- contrast and focus visibility in declared dark colour schemes;
 - long automatic motion and audio autoplay; and
-- narrow checks for image alternatives and ambiguous link names.
+- narrow checks for image alternatives and ambiguous link names, plus review
+  questions when multiple pages reuse one title.
 
 The pages run locally. During `check` and `prepare-review`, ordinary web requests
 outside the local audit server, including WebSocket connections, are blocked by

@@ -8,6 +8,7 @@ import {
 	altTextQuality,
 	audioAutoplay,
 	characterKeyShortcuts,
+	darkSchemeVisuals,
 	focusIndicators,
 	focusNotObscured,
 	interactionChecks,
@@ -23,6 +24,7 @@ import {
 	scopeCoverage,
 	settle,
 	stateContrast,
+	textScale,
 	textSpacing,
 } from "../src/checks.ts";
 import { serve, type StaticServer } from "../src/serve.ts";
@@ -154,6 +156,15 @@ const SPACING_CLEAN = `<!doctype html><html lang="en"><head><title>Spacing contr
 <div id="already-clipped">This text is already much too long for its fixed box before spacing changes.</div>
 <div id="scrollable">This text remains available by vertical scrolling after spacing changes.</div>
 </body></html>`;
+
+const TEXT_SCALE_BROKEN = `<!doctype html><html lang="en"><head><title>Text scale</title>
+<meta name="text-scale" content="scale"><style>#scale-clip{font-size:1rem;line-height:1.5;height:30px;overflow:hidden}</style>
+</head><body><div id="scale-clip">Text doubles.</div></body></html>`;
+
+const DARK_BROKEN = `<!doctype html><html lang="en"><head><title>Dark contrast</title>
+<meta name="color-scheme" content="light dark"><style>
+body{background:#fff;color:#111}@media(prefers-color-scheme:dark){body{background:#111;color:#777}}
+</style></head><body><p id="dark-contrast">This text disappears in the declared dark presentation.</p></body></html>`;
 
 const SETTLE_DELAYED = `<!doctype html><html lang="en"><head><title>Delayed render</title></head><body>Loading…
 <script>setTimeout(() => { document.body.innerHTML = "<main><h1>Ready</h1><button>Begin lesson</button></main>"; }, 700);</script>
@@ -302,6 +313,8 @@ describe("automated checks fire on known defects", () => {
 		await writeFile(join(root, "scope-partial.html"), SCOPE_PARTIAL);
 		await writeFile(join(root, "scope-clean.html"), SCOPE_CLEAN);
 		await writeFile(join(root, "spacing-clean.html"), SPACING_CLEAN);
+		await writeFile(join(root, "text-scale-broken.html"), TEXT_SCALE_BROKEN);
+		await writeFile(join(root, "dark-broken.html"), DARK_BROKEN);
 		await writeFile(join(root, "settle-delayed.html"), SETTLE_DELAYED);
 		await writeFile(join(root, "settle-stable.html"), SETTLE_STABLE);
 		await writeFile(join(root, "settle-changing.html"), SETTLE_CHANGING);
@@ -594,6 +607,31 @@ describe("automated checks fire on known defects", () => {
 		const cleanResult = await pointerCancellation(clean, "pointer-clean.html");
 		await clean.close();
 		assert.equal(cleanResult.findings.length, 0, "up-event click activation was reported");
+	});
+
+	test("textScale finds newly clipped text and restores the page", async () => {
+		const page = await open("text-scale-broken.html");
+		const originalViewport = page.viewportSize();
+		const originalSize = await page.locator("#scale-clip").evaluate((element) => getComputedStyle(element).fontSize);
+		const result = await textScale(page, "text-scale-broken.html");
+
+		assert.ok(result.findings.some((finding) =>
+			finding.rule === "text-scale-clip" && finding.selector?.includes("scale-clip")));
+		assert.equal(await page.locator("#scale-clip").evaluate((element) => getComputedStyle(element).fontSize), originalSize);
+		assert.deepEqual(page.viewportSize(), originalViewport);
+		await page.close();
+	});
+
+	test("darkSchemeVisuals finds dark-only contrast and restores light preference", async () => {
+		const context = await browser.newContext();
+		const page = await context.newPage();
+		await page.goto(`${server.origin}/dark-broken.html`, { waitUntil: "load" });
+		const result = await darkSchemeVisuals(page, "dark-broken.html");
+
+		assert.ok(result.findings.some((finding) =>
+			finding.rule === "axe:color-contrast" && finding.evidence.startsWith("dark colour scheme;")));
+		assert.equal(await page.evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches), false);
+		await context.close();
 	});
 
 	test("settle waits through delayed hydration and notes a deadline", async () => {

@@ -59,3 +59,32 @@ test("needs-review evidence never becomes a finding or a withheld finding", () =
 	assert.match(summary, /Basis: WCAG 1\.4\.3/);
 	assert.match(summary, /1 question for a person to review\. It does not count as a finding/);
 });
+
+test("repeated page titles produce one non-gating review question", () => {
+	const discovered = [
+		{ file: "lesson-one.html", url: "http://127.0.0.1/lesson-one.html" },
+		{ file: "lesson-two.html", url: "http://127.0.0.1/lesson-two.html" },
+	];
+	const report = createReport(
+		"/tmp/example",
+		false,
+		{ pages: discovered, stubs: [] },
+		discovered.map((page, index) => ({
+			page,
+			triage: { ok: true },
+			audited: true,
+			title: index === 0 ? "Course player" : " course   PLAYER ",
+			findings: [],
+			needsReview: [],
+			notes: [],
+		})),
+		[],
+		false,
+	);
+
+	assert.equal(report.findings.length, 0);
+	assert.equal(report.needsReview.length, 1);
+	assert.equal(report.needsReview[0]?.rule, "page-title-repeated");
+	assert.match(report.needsReview[0]?.evidence ?? "", /lesson-one\.html.*lesson-two\.html/);
+	assert.equal(report.counts.needsReview, 1);
+});
