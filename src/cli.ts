@@ -6,6 +6,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import {
 	altTextQuality,
 	audioAutoplay,
+	darkSchemeVisuals,
 	focusIndicators,
 	focusNotObscured,
 	interactionChecks,
@@ -18,6 +19,7 @@ import {
 	runAxe,
 	scopeCoverage,
 	stateContrast,
+	textScale,
 	textSpacing,
 	settle,
 	triage,
@@ -142,28 +144,42 @@ async function runChecks(page: Page, pageId: string): Promise<CheckResult> {
 	// Order matters: motion must be observed before anything interacts with the
 	// page, and the last group mutates the viewport or document, so it runs after
 	// every check that reads the natural page state.
-	const ordered = [
+	const natural = [
 		pauseStopHide, audioAutoplay, runAxe, scopeCoverage, interactionChecks,
 		keyboardWalk, altTextQuality, linkTextQuality,
 		keyboardScrollableRegions, focusNotObscured, nonTextContrast,
-		stateContrast, focusIndicators, reflow, textSpacing,
+		stateContrast, focusIndicators,
 	] as const;
+	const mutating = [reflow, textScale, textSpacing] as const;
 
 	const findings: CheckResult["findings"] = [];
 	const needsReview: NonNullable<CheckResult["needsReview"]> = [];
 	const notes: string[] = [];
-	for (const check of ordered) {
+	const run = async (check: (page: Page, pageId: string) => Promise<CheckResult>, newVariantsOnly = false) => {
 		try {
 			const result = await check(page, pageId);
-			findings.push(...result.findings);
-			needsReview.push(...(result.needsReview ?? []));
+			const findingKeys = new Set(findings.map((item) => `${item.rule}\0${item.selector ?? ""}`));
+			const reviewKeys = new Set(needsReview.map((item) => `${item.rule}\0${item.selector ?? ""}`));
+			findings.push(...result.findings.filter((item) =>
+				!newVariantsOnly || !findingKeys.has(`${item.rule}\0${item.selector ?? ""}`)));
+			needsReview.push(...(result.needsReview ?? []).filter((item) =>
+				!newVariantsOnly || !reviewKeys.has(`${item.rule}\0${item.selector ?? ""}`)));
 			notes.push(...result.notes);
 		} catch (error) {
 			notes.push(
 				`${check.name} did not run on ${pageId}: ${error instanceof Error ? error.message : String(error)} — treat as unchecked, not as clean`,
 			);
-			if (page.isClosed()) break;
 		}
+	};
+	for (const check of natural) {
+		await run(check);
+		if (page.isClosed()) return { findings, needsReview, notes };
+	}
+	await run(darkSchemeVisuals, true);
+	if (page.isClosed()) return { findings, needsReview, notes };
+	for (const check of mutating) {
+		await run(check);
+		if (page.isClosed()) break;
 	}
 	return { findings, needsReview, notes };
 }
@@ -205,12 +221,15 @@ async function auditPages(
 				continue;
 			}
 
+			const title = await page.title();
 			const result = await withPageTimeout(page, () => runChecks(page, discoveredPage.file));
 			audits.push({
 				page: discoveredPage,
 				triage: verdict,
 				audited: true,
+				title,
 				findings: result.findings,
+				needsReview: result.needsReview,
 				notes: settleNote ? [settleNote, ...result.notes] : result.notes,
 			});
 		} finally {

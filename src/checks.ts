@@ -1701,6 +1701,37 @@ export async function focusNotObscured(page: Page, pageId: string): Promise<Chec
 
 const EXEMPT = "table, img, svg, video, iframe, canvas, pre, code, object, embed, [role=img]";
 
+interface HorizontalOverflow {
+	selector: string;
+	right: number;
+	exempt: boolean;
+	text: boolean;
+}
+
+async function horizontalOverflow(page: Page): Promise<HorizontalOverflow[]> {
+	return page.evaluate(([exempt, locate]) => {
+		const selector = (0, eval)(locate) as (el: Element) => string;
+		const width = document.documentElement.clientWidth;
+		if (document.documentElement.scrollWidth <= width + 1) return [];
+		const out: HorizontalOverflow[] = [];
+		for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
+			const rect = el.getBoundingClientRect();
+			if (rect.width === 0 || rect.right <= width + 1) continue;
+			// Only the outermost offender: an overflowing parent drags its children.
+			if (el.parentElement && el.parentElement.getBoundingClientRect().right > width + 1) continue;
+			out.push({
+				selector: selector(el),
+				right: Math.round(rect.right),
+				exempt: el.matches(exempt) || el.closest(exempt) !== null,
+				text: Array.from(el.childNodes).some(
+					(node) => node.nodeType === 3 && (node.textContent ?? "").trim().length > 0,
+				) || el.matches("a, button, input, select, textarea"),
+			});
+		}
+		return out;
+	}, [EXEMPT, UNIQUE_SELECTOR] as const);
+}
+
 /**
  * 1.4.10 at a 320 CSS px viewport. `scrollWidth > clientWidth` alone is not the
  * test — maps, diagrams, video and data tables are exempt and legitimately
@@ -1708,33 +1739,14 @@ const EXEMPT = "table, img, svg, video, iframe, canvas, pre, code, object, embed
  */
 export async function reflow(page: Page, pageId: string): Promise<CheckResult> {
 	const original = page.viewportSize();
-	await page.setViewportSize({ width: 320, height: 800 });
-	await page.waitForTimeout(150);
-
-	const overflow = await page.evaluate(([exempt, locate]) => {
-		const selector = (0, eval)(locate) as (el: Element) => string;
-		const width = document.documentElement.clientWidth;
-		if (document.documentElement.scrollWidth <= width + 1) return [];
-		const out: Array<{ selector: string; right: number; exempt: boolean; text: boolean }> = [];
-		for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
-			const r = el.getBoundingClientRect();
-			if (r.width === 0 || r.right <= width + 1) continue;
-			// Only the outermost offender: an overflowing parent drags its children.
-			if (el.parentElement && el.parentElement.getBoundingClientRect().right > width + 1) continue;
-			const own = Array.from(el.childNodes).some(
-				(n) => n.nodeType === 3 && (n.textContent ?? "").trim().length > 0,
-			);
-			out.push({
-				selector: selector(el),
-				right: Math.round(r.right),
-				exempt: el.matches(exempt) || el.closest(exempt) !== null,
-				text: own || el.matches("a, button, input, select, textarea"),
-			});
-		}
-		return out;
-	}, [EXEMPT, UNIQUE_SELECTOR] as const);
-
-	if (original) await page.setViewportSize(original);
+	let overflow: HorizontalOverflow[] = [];
+	try {
+		await page.setViewportSize({ width: 320, height: 800 });
+		await page.waitForTimeout(150);
+		overflow = await horizontalOverflow(page);
+	} finally {
+		if (original && !page.isClosed()) await page.setViewportSize(original);
+	}
 
 	return {
 		findings: overflow.map((o) => ({
@@ -1784,24 +1796,21 @@ const TEXT_RANGE_OVERFLOW = `(el, axis) => {
 	return Math.max(0, overflow);
 }`;
 
-/**
- * 1.4.12. Apply the four values and look for text that no longer fits. Only
- * clipping by an `overflow: hidden|clip` ancestor is conclusive — rectangle
- * overlap alone is far too noisy to report (F104).
- */
-export async function textSpacing(page: Page, pageId: string): Promise<CheckResult> {
-	const baseline = await page.evaluate(
+interface TextClipState {
+	selector: string;
+	vertical: boolean;
+	horizontal: boolean;
+	verticalOverflow: number;
+	horizontalOverflow: number;
+	clamped: boolean;
+}
+
+async function textClipState(page: Page): Promise<TextClipState[]> {
+	return page.evaluate(
 		([locate, measure]) => {
 			const selector = (0, eval)(locate) as (el: Element) => string;
 			const rangeOverflow = (0, eval)(measure) as (el: HTMLElement, axis: "horizontal" | "vertical") => number;
-			const out: Array<{
-				selector: string;
-				vertical: boolean;
-				horizontal: boolean;
-				baselineVertical: number;
-				baselineHorizontal: number;
-				clamped: boolean;
-			}> = [];
+			const out: TextClipState[] = [];
 			for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
 				const style = getComputedStyle(el);
 				const vertical = /hidden|clip/.test(style.overflowY);
@@ -1818,8 +1827,8 @@ export async function textSpacing(page: Page, pageId: string): Promise<CheckResu
 					selector: where,
 					vertical,
 					horizontal,
-					baselineVertical: vertical ? rangeOverflow(el, "vertical") : 0,
-					baselineHorizontal: horizontal ? rangeOverflow(el, "horizontal") : 0,
+					verticalOverflow: vertical ? rangeOverflow(el, "vertical") : 0,
+					horizontalOverflow: horizontal ? rangeOverflow(el, "horizontal") : 0,
 					clamped: style.webkitLineClamp !== "none" && style.webkitLineClamp !== "",
 				});
 			}
@@ -1827,33 +1836,132 @@ export async function textSpacing(page: Page, pageId: string): Promise<CheckResu
 		},
 		[UNIQUE_SELECTOR, TEXT_RANGE_OVERFLOW] as const,
 	);
+}
+
+/** Exercise the new OS text preference only when the document explicitly opts in. */
+export async function textScale(page: Page, pageId: string): Promise<CheckResult> {
+	const optedIn = await page.evaluate(() =>
+		document.querySelector<HTMLMetaElement>('meta[name="text-scale" i]')?.content.trim().toLowerCase() === "scale",
+	);
+	if (!optedIn) return { findings: [], notes: [] };
+
+	const original = page.viewportSize();
+	const session = await page.context().newCDPSession(page);
+	let baselineOverflow: HorizontalOverflow[] = [];
+	let scaledOverflow: HorizontalOverflow[] = [];
+	let baselineClips: TextClipState[] = [];
+	let scaledClips: TextClipState[] = [];
+	let baselineObscured: CheckResult = { findings: [], notes: [] };
+	let scaledObscured: CheckResult = { findings: [], notes: [] };
+	try {
+		await page.setViewportSize({ width: 320, height: 800 });
+		await page.waitForTimeout(150);
+		baselineOverflow = await horizontalOverflow(page);
+		baselineClips = await textClipState(page);
+		baselineObscured = await focusNotObscured(page, pageId);
+
+		await session.send("Emulation.setEmulatedOSTextScale", { scale: 2 });
+		await page.waitForTimeout(150);
+		scaledOverflow = await horizontalOverflow(page);
+		scaledClips = await textClipState(page);
+		scaledObscured = await focusNotObscured(page, pageId);
+	} finally {
+		if (!page.isClosed()) {
+			await session.send("Emulation.setEmulatedOSTextScale", { scale: 1 }).catch(() => {});
+			if (original) await page.setViewportSize(original);
+		}
+		await session.detach().catch(() => {});
+	}
+
+	const findings: Finding[] = [];
+	const baselineOverflowSelectors = new Set(baselineOverflow.map((item) => item.selector));
+	for (const item of scaledOverflow) {
+		if (baselineOverflowSelectors.has(item.selector)) continue;
+		findings.push({
+			what: "Content runs off the side of the screen at 200% operating-system text scale.",
+			page: pageId,
+			selector: item.selector,
+			evidence: `right edge at ${item.right}px in a 320px viewport after text scaled to 200%; baseline fit`,
+			fix: "Let the container wrap or grow when the user's preferred text size increases.",
+			lens: "a11y",
+			confidence: item.exempt || !item.text ? "medium" : "high",
+			basis: "WCAG 1.4.4 Resize Text / 1.4.10 Reflow (AA)",
+			rule: "text-scale-reflow",
+		});
+	}
+
+	const baselineClipsBySelector = new Map(baselineClips.map((item) => [item.selector, item]));
+	for (const after of scaledClips) {
+		const before = baselineClipsBySelector.get(after.selector);
+		for (const [axis, overflow, baseline] of [
+			["vertical", after.verticalOverflow, before?.verticalOverflow ?? 0],
+			["horizontal", after.horizontalOverflow, before?.horizontalOverflow ?? 0],
+		] as const) {
+			if (!after[axis] || baseline > 2 || overflow <= 2) continue;
+			findings.push({
+				what: "Text gets cut off at 200% operating-system text scale.",
+				page: pageId,
+				selector: after.selector,
+				evidence: `${Math.ceil(overflow)}px of text newly hidden ${axis}ly after text scaled to 200%; baseline text fit`,
+				fix: axis === "horizontal"
+					? "Let the text wrap or the container widen instead of clipping its width."
+					: "Let the container grow with its content instead of fixing its height.",
+				lens: "a11y",
+				confidence: after.clamped ? "medium" : "high",
+				basis: "WCAG 1.4.4 Resize Text (AA)",
+				rule: "text-scale-clip",
+			});
+		}
+	}
+
+	const baselineObscuredSelectors = new Set(baselineObscured.findings.map((item) => item.selector));
+	for (const item of scaledObscured.findings) {
+		if (baselineObscuredSelectors.has(item.selector)) continue;
+		findings.push({
+			...item,
+			what: "At 200% operating-system text scale, this control becomes completely hidden when focused.",
+			evidence: `200% text scale; ${item.evidence}`,
+			basis: "WCAG 1.4.4 Resize Text / 2.4.11 Focus Not Obscured (Minimum) (AA)",
+			rule: "text-scale-focus-obscured",
+		});
+	}
+
+	return {
+		findings,
+		needsReview: scaledObscured.needsReview,
+		notes: scaledObscured.notes.map((note) => `200% text scale: ${note}`),
+	};
+}
+
+/**
+ * 1.4.12. Apply the four values and look for text that no longer fits. Only
+ * clipping by an `overflow: hidden|clip` ancestor is conclusive — rectangle
+ * overlap alone is far too noisy to report (F104).
+ */
+export async function textSpacing(page: Page, pageId: string): Promise<CheckResult> {
+	const baseline = await textClipState(page);
 
 	await page.addStyleTag({ content: SPACING });
 	await page.waitForTimeout(150);
 
-	const clipped = await page.evaluate(([items, measure]) => {
-		const rangeOverflow = (0, eval)(measure) as (el: HTMLElement, axis: "horizontal" | "vertical") => number;
-		const out: Array<{ selector: string; overflow: number; axis: "horizontal" | "vertical"; clamped: boolean }> = [];
-		for (const item of items) {
-			const el = document.querySelector<HTMLElement>(item.selector);
-			if (!el) continue;
-			const vertical = item.vertical ? rangeOverflow(el, "vertical") : 0;
-			const horizontal = item.horizontal ? rangeOverflow(el, "horizontal") : 0;
-			if (item.baselineVertical <= 2 && vertical > 2) out.push({
-				selector: item.selector,
-				overflow: vertical,
-				axis: "vertical",
-				clamped: item.clamped,
-			});
-			if (item.baselineHorizontal <= 2 && horizontal > 2) out.push({
-				selector: item.selector,
-				overflow: horizontal,
-				axis: "horizontal",
-				clamped: item.clamped,
-			});
-		}
-		return out;
-	}, [baseline, TEXT_RANGE_OVERFLOW] as const);
+	const after = new Map((await textClipState(page)).map((item) => [item.selector, item]));
+	const clipped: Array<{ selector: string; overflow: number; axis: "horizontal" | "vertical"; clamped: boolean }> = [];
+	for (const item of baseline) {
+		const current = after.get(item.selector);
+		if (!current) continue;
+		if (item.verticalOverflow <= 2 && current.verticalOverflow > 2) clipped.push({
+			selector: item.selector,
+			overflow: current.verticalOverflow,
+			axis: "vertical",
+			clamped: item.clamped,
+		});
+		if (item.horizontalOverflow <= 2 && current.horizontalOverflow > 2) clipped.push({
+			selector: item.selector,
+			overflow: current.horizontalOverflow,
+			axis: "horizontal",
+			clamped: item.clamped,
+		});
+	}
 
 	return {
 		findings: clipped.map((c) => ({
@@ -2015,4 +2123,62 @@ export async function linkTextQuality(page: Page, pageId: string): Promise<Check
 		});
 	}
 	return { findings, notes: [] };
+}
+
+/** Check an author-declared dark presentation without doubling every interaction probe. */
+export async function darkSchemeVisuals(page: Page, pageId: string): Promise<CheckResult> {
+	const declaration = await page.evaluate(() => {
+		const meta = document.querySelector<HTMLMetaElement>('meta[name="color-scheme" i]')?.content ?? "";
+		const computed = getComputedStyle(document.documentElement).colorScheme;
+		let unreadable = 0;
+		let media = false;
+		for (const sheet of Array.from(document.styleSheets)) {
+			try {
+				if (Array.from(sheet.cssRules).some((rule) => /prefers-color-scheme\s*:\s*dark/i.test(rule.cssText))) {
+					media = true;
+					break;
+				}
+			} catch {
+				unreadable++;
+			}
+		}
+		return { supported: /\bdark\b/i.test(`${meta} ${computed}`) || media, unreadable };
+	});
+	if (!declaration.supported) {
+		return {
+			findings: [],
+			notes: declaration.unreadable > 0
+				? [`dark-scheme detection could not inspect ${declaration.unreadable} stylesheet(s) on ${pageId}`]
+				: [],
+		};
+	}
+
+	const findings: Finding[] = [];
+	const needsReview: ReviewItem[] = [];
+	const notes: string[] = [];
+	try {
+		await page.emulateMedia({ colorScheme: "dark" });
+		await page.waitForTimeout(150);
+		for (const check of [runAxe, nonTextContrast, stateContrast, focusIndicators] as const) {
+			try {
+				const result = await check(page, pageId);
+				findings.push(...result.findings.map((finding) => ({
+					...finding,
+					evidence: `dark colour scheme; ${finding.evidence}`,
+				})));
+				needsReview.push(...(result.needsReview ?? []).map((item) => ({
+					...item,
+					evidence: `dark colour scheme; ${item.evidence}`,
+				})));
+				notes.push(...result.notes.map((note) => `dark colour scheme: ${note}`));
+			} catch (error) {
+				notes.push(
+					`dark colour scheme: ${check.name} did not run on ${pageId}: ${error instanceof Error ? error.message : String(error)} — treat as unchecked, not as clean`,
+				);
+			}
+		}
+	} finally {
+		if (!page.isClosed()) await page.emulateMedia({ colorScheme: "light" });
+	}
+	return { findings, needsReview, notes };
 }

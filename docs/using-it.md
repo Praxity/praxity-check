@@ -32,7 +32,7 @@ summary prints and what sets the exit code.
 | Level | What it gates on | Use when |
 |---|---|---|
 | `high` | Measured, unambiguous failures — mostly axe, plus narrow observed checks such as long audio autoplay | You want a quiet gate that only stops on things nobody would argue with |
-| `medium` | Adds the custom checks — focus/state contrast, keyboard scrolling, focus obscuring, non-text contrast, reflow and text spacing | **You want what this tool sees that axe does not.** Most of the custom layer is medium by construction |
+| `medium` | Adds the custom checks — focus/state contrast, keyboard scrolling, focus obscuring, non-text contrast, reflow, text scaling and text spacing | **You want what this tool sees that axe does not.** Most of the custom layer is medium by construction |
 | `low` | Adds axe best-practice advice — landmarks, heading order | Exhaustive review, not a gate |
 
 **`medium` is the interesting setting.** The focus, contrast-state, scrolling
@@ -40,6 +40,11 @@ and layout checks sit at medium because W3C specifies rendered outcomes and
 these probes are conservative proxies. Audio autoplay reaches high only after
 the browser observes more than three seconds of unmuted playback without a
 control.
+
+When a page opts into `<meta name="text-scale" content="scale">`, Audit checks
+the 320-pixel presentation at 200% operating-system text scale. It also reruns
+visual checks when the document declares a dark colour scheme. Repeated titles
+across audited pages are questions for review, not automatic failures.
 
 Exit codes: `0` nothing at or above the threshold, `1` findings present, `2`
 could not run.

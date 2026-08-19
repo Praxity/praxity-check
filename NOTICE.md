@@ -53,4 +53,7 @@ Accessibility Audit code:
   distributed here.
 - [WCAG 2.2](https://www.w3.org/TR/WCAG22/), its Understanding and Techniques
   documents, and the [WAI-ARIA Authoring Practices Guide](https://www.w3.org/WAI/ARIA/apg/).
+- Manuel Matuzović, [My HTML boilerplate in 2026](https://matuzo.at/blog/2026/html-boilerplate),
+  which informed the page-title, operating-system text-scaling, and declared
+  colour-scheme checks; no article text or code is incorporated here.
 - axe-core rule descriptions included in audit results originate from axe-core.
