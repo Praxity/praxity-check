@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Reorderable blocks</title></head>
+<body>
+<main>
+  <h1>Course outline</h1>
+  <ul id="outline">
+    <li draggable="true" tabindex="0">Learning Objectives</li>
+    <li draggable="true" tabindex="0">Key Concepts</li>
+    <li draggable="true" tabindex="0">Summary</li>
+  </ul>
+  <div id="status" aria-live="polite"></div>
+</main>
+<script>
+  const list = document.getElementById("outline");
+  const status = document.getElementById("status");
+  list.addEventListener("keydown", (event) => {
+    const item = event.target.closest("li");
+    if (!item || event.key !== "ArrowDown" || !event.altKey) return;
+    event.preventDefault();
+    const next = item.nextElementSibling;
+    if (!next) return;
+    next.after(item);
+    item.focus();
+    const items = [...list.children];
+    status.textContent = `${item.textContent} moved below ${next.textContent}, now position ${items.indexOf(item) + 1} of ${items.length}`;
+  });
+</script>
+</body>
+</html>

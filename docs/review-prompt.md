@@ -38,7 +38,7 @@ State the evidence methods on every item: `rendered`, `interaction`,
 - Contextual authoring questions are outside this review. A screen reader cannot
   decide whether an authored heading level or activity premise is appropriate.
 
-Exercise and inspect the 37 already-triaged recognised-pattern rules:
+Exercise and inspect the 38 already-triaged recognised-pattern rules:
 
 - Tabs (5): one tab in the page Tab sequence, axis arrows, activation,
   tab/panel relationships, and conditional panel focus. In manual activation,
@@ -61,8 +61,15 @@ Exercise and inspect the 37 already-triaged recognised-pattern rules:
   state, toggle state, and duplicate announcement channels.
 - Live regions and loading (4): pre-existing region, hidden state, duplicate
   channels, and observable completion.
-- Interaction flows (4): drag alternative, hover/focus content, route focus,
-  and deletion focus. Lesson-navigation placement is outside this review.
+- Interaction flows (5): drag alternative, reorder announcement, hover/focus
+  content, route focus, and deletion focus. A linear reorder must be announced
+  in one polite message carrying the moved item's authored name, its new
+  neighbour, and its absolute position — for example, "Key Concepts moved above
+  Learning Objectives, now position 2 of 8." Report a reorder that changes the
+  list silently, or that announces only "moved" or a raw index, as a failure.
+  The packet exercises the lift/arrow/drop and Alt+Arrow conventions only; when
+  neither moves the item, treat the keyboard alternative as unverified rather
+  than absent. Lesson-navigation placement is outside this review.
 
 Recognise the component before applying its recipe. Do not invent actions that
 are absent from the packet. Do not turn contextual preferences into WCAG
