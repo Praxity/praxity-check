@@ -46,9 +46,9 @@ const SURFACES = [
 	},
 	{
 		id: "stateful",
-		name: "Carousels, sortable tables, and toggles",
-		selector: '[aria-roledescription="carousel"], [data-bs-ride="carousel"], th[aria-sort], [aria-pressed], [role="switch"]',
-		rules: "current state; controls; sort state; toggle state; duplicate announcement channels",
+		name: "Carousels, sortable tables, toggles, checkboxes, and sliders",
+		selector: '[aria-roledescription="carousel"], [data-bs-ride="carousel"], th[aria-sort], [aria-pressed], [role="switch"], [role="checkbox"], [role="slider"]',
+		rules: "current state; controls; sort state; toggle and checkbox state; slider keyboard operation; slider value state; duplicate announcement channels",
 	},
 	{
 		id: "live",
@@ -60,7 +60,7 @@ const SURFACES = [
 		id: "flows",
 		name: "Interaction flows",
 		selector: '[draggable="true"], [aria-grabbed], [aria-describedby]',
-		rules: "drag alternative; reorder announcement; hover/focus content; route focus; deletion focus",
+		rules: "drag alternative; reorder announcement; hover and focus access; Escape dismissal; pointer hover persistence; timed persistence; route focus; deletion focus",
 	},
 ] as const;
 
@@ -157,16 +157,19 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 			"aria-expanded", "aria-selected", "aria-checked", "aria-pressed", "aria-current", "aria-sort",
 			"aria-busy", "aria-live", "aria-modal", "aria-haspopup", "aria-controls", "aria-describedby",
 			"aria-label", "aria-labelledby", "aria-required", "aria-invalid", "aria-activedescendant",
+			"aria-valuemin", "aria-valuemax", "aria-valuenow", "aria-valuetext",
 		];
 		const interesting = [
 			root,
 			...Array.from(root.querySelectorAll('button, a[href], input, select, option, textarea, summary, [tabindex], [role], [aria-live], [aria-busy], [draggable="true"], [aria-grabbed]')),
 		].slice(0, 24);
-		const controlled = new Set<string>();
+		const referenced = new Set<string>();
 		for (const element of interesting) {
-			for (const id of (element.getAttribute("aria-controls") ?? "").split(/\s+/).filter(Boolean)) controlled.add(id);
+			for (const name of ["aria-controls", "aria-describedby", "aria-labelledby"]) {
+				for (const id of (element.getAttribute(name) ?? "").split(/\s+/).filter(Boolean)) referenced.add(id);
+			}
 		}
-		for (const id of controlled) {
+		for (const id of referenced) {
 			const element = document.getElementById(id);
 			if (element && !interesting.includes(element)) interesting.push(element);
 		}
@@ -291,7 +294,16 @@ async function dialogTraces(page: Page, root: Locator, selector: string): Promis
 }
 
 async function statefulTraces(page: Page, root: Locator, selector: string): Promise<{ traces: Trace[]; note?: string }> {
-	if (await root.evaluate((element) => element.matches('[aria-pressed], [role="switch"]')) && await root.isVisible()) {
+	if (await root.evaluate((element) => element.matches('[role="slider"]')) && await root.isVisible()) {
+		await root.focus();
+		return {
+			traces: [
+				await record(page, selector, "ArrowRight", () => page.keyboard.press("ArrowRight"), "Focused the slider."),
+				await record(page, selector, "ArrowLeft (restore)", () => page.keyboard.press("ArrowLeft")),
+			],
+		};
+	}
+	if (await root.evaluate((element) => element.matches('[aria-pressed], [role="switch"], [role="checkbox"]')) && await root.isVisible()) {
 		await root.focus();
 		return {
 			traces: [
@@ -342,12 +354,23 @@ async function flowTraces(page: Page, root: Locator, selector: string): Promise<
 		return await reorderTraces(page, root, selector);
 	}
 	const describedBy = await root.getAttribute("aria-describedby");
-	const hasTooltip = describedBy && await page.evaluate((ids) =>
-		ids.split(/\s+/).some((id) => document.getElementById(id)?.getAttribute("role") === "tooltip"), describedBy);
-	if (!hasTooltip || !await root.isVisible()) {
+	const tooltipSelector = describedBy && await page.evaluate(([ids, locateSource]) => {
+		const locate = (0, eval)(locateSource) as (element: Element | null) => string;
+		return locate(ids.split(/\s+/).map((id) => document.getElementById(id))
+			.find((element) => element?.getAttribute("role") === "tooltip") ?? null);
+	}, [describedBy, UNIQUE_SELECTOR] as const);
+	if (!tooltipSelector || !await root.isVisible()) {
 		return { traces: [], note: "No safely recognisable tooltip trigger; reorder, route, and deletion flows remain unexercised." };
 	}
-	const traces = [await record(page, selector, "hover", () => root.hover())];
+	const tooltip = page.locator(tooltipSelector);
+	const traces = [await record(page, selector, "hover", async () => {
+		await root.hover();
+		await page.waitForTimeout(750);
+	})];
+	if (await tooltip.isVisible()) {
+		traces.push(await record(page, selector, "hover described tooltip", () => tooltip.hover()));
+		traces.push(await record(page, selector, "wait 1 second while tooltip remains hovered", () => page.waitForTimeout(750)));
+	}
 	traces.push(await record(page, selector, "focus", () => root.focus()));
 	traces.push(await record(page, selector, "Escape", () => page.keyboard.press("Escape")));
 	return { traces, note: "Reorder, route, and deletion flows remain unexercised." };

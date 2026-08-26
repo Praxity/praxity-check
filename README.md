@@ -80,7 +80,7 @@ do not change the exit code.
 
 The experimental `prepare-review` command examines recognised interactive
 components. It records relevant HTML and accessibility context, performs safe
-before/action/after interactions, and prepares evidence for 38 questions about
+before/action/after interactions, and prepares evidence for 43 questions about
 tabs, dialogs, accordions, forms, choice controls, carousels, live regions, and
 focus-changing flows.
 

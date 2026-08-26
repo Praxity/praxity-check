@@ -59,8 +59,19 @@ test("interaction-review evidence preserves behaviour differences in identical t
 				assert.match(state.markdown, /Viewport: 1280 × 720 CSS px/);
 				assert.match(state.markdown, /Theme: lesson-light; preferred colour scheme: light/);
 				assert.match(state.markdown, /Semantic context: `h3`[\s\S]*Rendered HTML context:[\s\S]*<h3><button id="section"/);
+				const stateful = state.markdown.split("### Carousels, sortable tables, toggles, checkboxes, and sliders")[1]?.split("### Live regions and loading")[0] ?? "";
+				const checkbox = stateful.split("First location: `page.html` — `span#custom-check`")[1]?.split("#### Candidate")[0] ?? "";
+				const slider = stateful.split("First location: `page.html` — `span#speed`")[1]?.split("#### Candidate")[0] ?? "";
+				assert.match(checkbox, /Action: `Space`[\s\S]*?After: `[^`]*"aria-checked":"true"/);
+				assert.match(slider, /Action: `ArrowRight`[\s\S]*?After: `[^`]*"aria-valuenow":"2"/);
+				assert.match(slider, /Action: `ArrowLeft \(restore\)`[\s\S]*?After: `[^`]*"aria-valuenow":"1"/);
 				const live = state.markdown.split("### Live regions and loading")[1]?.split("### Interaction flows")[0] ?? "";
 				assert.doesNotMatch(live, /Reading guide disabled/, "restoration message leaked into a later candidate");
+				const flows = state.markdown.split("### Interaction flows")[1] ?? "";
+				assert.match(state.markdown, /43-rule checklist/);
+				assert.match(flows, /Action: `hover`[\s\S]*?After: `[^`]*span#tip[^`]*"visible":true/);
+				assert.match(flows, /Action: `hover described tooltip`[\s\S]*?After: `[^`]*span#tip[^`]*"visible":true/);
+				assert.match(flows, /Action: `Escape`[\s\S]*?After: `[^`]*span#tip[^`]*"visible":false/);
 			} finally {
 				await stateContext.close();
 				await stateServer.close();
