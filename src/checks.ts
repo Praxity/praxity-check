@@ -51,14 +51,14 @@ const MAX_FOCUS_CHECKS = 60;
 /** Enough to show a page is riddled with them without walking forever. */
 const MAX_TRAPS = 5;
 /**
- * `dataset.praxAuditId` writes the attribute `data-prax-audit-id` -- camel case
+ * `dataset.praxityCheckId` writes the attribute `data-praxity-check-id` -- camel case
  * on the property, kebab case on the attribute. Querying the camel-case form
  * matches nothing and every lookup returns null, which reads as "no problems
  * found" rather than as a failure. Both spellings are named here so they cannot
  * drift apart again.
  */
-const MARK = "praxAuditId";
-const MARK_ATTR = "data-prax-audit-id";
+const MARK = "praxityCheckId";
+const MARK_ATTR = "data-praxity-check-id";
 
 
 /** A source-backed CSS selector, verified unique before it leaves the page. */
@@ -961,7 +961,7 @@ export async function keyboardScrollableRegions(page: Page, pageId: string): Pro
 			const vertical = /^(?:auto|scroll)$/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 1;
 			const horizontal = /^(?:auto|scroll)$/.test(style.overflowX) && el.scrollWidth > el.clientWidth + 1;
 			if (!vertical && !horizontal) return [];
-			el.dataset.praxAuditScrollId = String(index);
+			el.dataset.praxityCheckScrollId = String(index);
 			return [{
 				id: index,
 				selector: selector(el),
@@ -980,7 +980,7 @@ export async function keyboardScrollableRegions(page: Page, pageId: string): Pro
 	const pageScroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
 
 	for (const candidate of candidates.slice(0, limit)) {
-		const region = page.locator(`[data-prax-audit-scroll-id="${candidate.id}"]`);
+		const region = page.locator(`[data-praxity-check-scroll-id="${candidate.id}"]`);
 		const setup = await region.evaluate((el, focusable) => {
 			const region = el as HTMLElement;
 			const original = { top: region.scrollTop, left: region.scrollLeft };

@@ -1,11 +1,11 @@
 {
-	"name": "prax-audit",
+	"name": "praxity-check",
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
 	"description": "Accessibility checker for learning packages",
 	"bin": {
-		"prax-audit": "src/cli.ts"
+		"praxity-check": "src/cli.ts"
 	},
 	"scripts": {
 		"check": "node src/cli.ts",

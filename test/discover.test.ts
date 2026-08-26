@@ -7,7 +7,7 @@ import test from "node:test";
 import { discover } from "../src/discover.ts";
 
 test("discover separates redirect stubs from auditable pages", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "prax-audit-discover-test-"));
+	const root = await mkdtemp(join(tmpdir(), "praxity-check-discover-test-"));
 	try {
 		await mkdir(join(root, "nested"));
 		await mkdir(join(root, "node_modules", "ignored"), { recursive: true });
