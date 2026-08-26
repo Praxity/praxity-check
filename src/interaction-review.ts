@@ -60,7 +60,7 @@ const SURFACES = [
 		id: "flows",
 		name: "Interaction flows",
 		selector: '[draggable="true"], [aria-grabbed], [aria-describedby]',
-		rules: "drag alternative; hover/focus content; route focus; deletion focus",
+		rules: "drag alternative; reorder announcement; hover/focus content; route focus; deletion focus",
 	},
 ] as const;
 
@@ -160,7 +160,7 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 		];
 		const interesting = [
 			root,
-			...Array.from(root.querySelectorAll('button, a[href], input, select, option, textarea, summary, [tabindex], [role], [aria-live], [aria-busy]')),
+			...Array.from(root.querySelectorAll('button, a[href], input, select, option, textarea, summary, [tabindex], [role], [aria-live], [aria-busy], [draggable="true"], [aria-grabbed]')),
 		].slice(0, 24);
 		const controlled = new Set<string>();
 		for (const element of interesting) {
@@ -169,6 +169,11 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 		for (const id of controlled) {
 			const element = document.getElementById(id);
 			if (element && !interesting.includes(element)) interesting.push(element);
+		}
+		// The announcement channel usually sits outside the component it reports on,
+		// so page-level live regions travel with every trace.
+		for (const region of Array.from(document.querySelectorAll('[aria-live], [role="status"], [role="alert"]')).slice(0, 4)) {
+			if (!interesting.includes(region)) interesting.push(region);
 		}
 		return {
 			active: locate(document.activeElement),
@@ -303,17 +308,49 @@ async function statefulTraces(page: Page, root: Locator, selector: string): Prom
 	return { traces: [], note: "No generic reversible carousel or sort action was recognized." };
 }
 
+async function reorderTraces(page: Page, root: Locator, selector: string): Promise<{ traces: Trace[]; note?: string }> {
+	const handle = await root.evaluate((element) =>
+		element.matches('a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]:not([tabindex="-1"])'))
+		? root
+		: root.locator('button, [role="button"], [tabindex]:not([tabindex="-1"])').first();
+	if (!await handle.count() || !await handle.isVisible()) {
+		return { traces: [], note: "The draggable item exposed no visible focusable handle; keyboard reorder remains unexercised." };
+	}
+	// State is recorded on the list, not the item: the announcement rule needs the
+	// item's new neighbour and absolute position, and a moved item's positional
+	// selector no longer identifies it.
+	const scope = await root.evaluate((element, locateSource) => {
+		const locate = (0, eval)(locateSource) as (item: Element | null) => string;
+		return locate(element.closest('ul, ol, [role="list"], [role="listbox"], [role="tree"], [role="grid"]') ?? element.parentElement ?? element);
+	}, UNIQUE_SELECTOR) || selector;
+	await handle.focus();
+	const traces = [
+		await record(page, scope, "Space (lift)", () => page.keyboard.press("Space"), "Focused the draggable item or its handle."),
+		await record(page, scope, "ArrowDown", () => page.keyboard.press("ArrowDown")),
+		await record(page, scope, "Space (drop)", () => page.keyboard.press("Space")),
+	];
+	await handle.focus();
+	traces.push(await record(page, scope, "Alt+ArrowDown", () => page.keyboard.press("Alt+ArrowDown"), "Refocused the item and tried the other common reorder shortcut."));
+	return {
+		traces,
+		note: "Only the lift/arrow/drop and Alt+Arrow conventions were tried; another shortcut or a menu-driven \"Move to…\" alternative may exist. Route and deletion flows remain unexercised.",
+	};
+}
+
 async function flowTraces(page: Page, root: Locator, selector: string): Promise<{ traces: Trace[]; note?: string }> {
+	if (await root.evaluate((element) => element.matches('[draggable="true"], [aria-grabbed]')) && await root.isVisible()) {
+		return await reorderTraces(page, root, selector);
+	}
 	const describedBy = await root.getAttribute("aria-describedby");
 	const hasTooltip = describedBy && await page.evaluate((ids) =>
 		ids.split(/\s+/).some((id) => document.getElementById(id)?.getAttribute("role") === "tooltip"), describedBy);
 	if (!hasTooltip || !await root.isVisible()) {
-		return { traces: [], note: "No safely recognisable tooltip trigger; drag, route, and deletion flows remain unexercised." };
+		return { traces: [], note: "No safely recognisable tooltip trigger; reorder, route, and deletion flows remain unexercised." };
 	}
 	const traces = [await record(page, selector, "hover", () => root.hover())];
 	traces.push(await record(page, selector, "focus", () => root.focus()));
 	traces.push(await record(page, selector, "Escape", () => page.keyboard.press("Escape")));
-	return { traces, note: "Drag, route, and deletion flows remain unexercised." };
+	return { traces, note: "Reorder, route, and deletion flows remain unexercised." };
 }
 
 async function prepareTraces(page: Page, surface: SurfaceId, root: Locator, selector: string): Promise<{ traces: Trace[]; note?: string }> {
@@ -379,7 +416,7 @@ function renderPacket(
 	for (const page of pages.filter((item) => !item.audited)) lines.push(`- Not prepared: \`${page.file}\` — ${page.reason ?? "unknown reason"}`);
 	for (const page of pages.filter((item) => item.note)) lines.push(`- Note for \`${page.file}\`: ${page.note}`);
 
-	lines.push("", "## 37-rule checklist", "");
+	lines.push("", `## ${SURFACES.reduce((total, surface) => total + surface.rules.split(";").length, 0)}-rule checklist`, "");
 	for (const surface of SURFACES) lines.push(`- **${surface.name}:** ${surface.rules}.`);
 	lines.push(
 		"",
