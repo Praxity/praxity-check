@@ -38,7 +38,7 @@ State the evidence methods on every item: `rendered`, `interaction`,
 - Contextual authoring questions are outside this review. A screen reader cannot
   decide whether an authored heading level or activity premise is appropriate.
 
-Exercise and inspect the 38 already-triaged recognised-pattern rules:
+Exercise and inspect the 43 already-triaged recognised-pattern rules:
 
 - Tabs (5): one tab in the page Tab sequence, axis arrows, activation,
   tab/panel relationships, and conditional panel focus. In manual activation,
@@ -57,12 +57,20 @@ Exercise and inspect the 38 already-triaged recognised-pattern rules:
 - Comboboxes, listboxes, and menus (5): role choice, active option, required
   keyboard operation, popup relationship, and mobile dismissal limitations.
   Home/End are optional for comboboxes; absence alone is not a failure.
-- Carousels, sortable tables, and toggles (5): current state, controls, sort
-  state, toggle state, and duplicate announcement channels.
+- Carousels, sortable tables, toggles, checkboxes, and sliders (7): current
+  state, controls, sort state, toggle and checkbox state, slider keyboard
+  operation, slider value state, and duplicate announcement channels. Custom
+  checkboxes must change `aria-checked` with Space. ARIA sliders must respond to
+  arrow keys and keep `aria-valuenow`, plus `aria-valuetext` when present,
+  synchronized with the visible value.
 - Live regions and loading (4): pre-existing region, hidden state, duplicate
   channels, and observable completion.
-- Interaction flows (5): drag alternative, reorder announcement, hover/focus
-  content, route focus, and deletion focus. A linear reorder must be announced
+- Interaction flows (8): drag alternative, reorder announcement, hover and focus
+  access, Escape dismissal, pointer hover persistence, timed persistence, route
+  focus, and deletion focus. For content triggered by hover or focus, confirm it
+  appears through both inputs, remains visible while the pointer moves onto it,
+  stays until hover or focus ends or the user dismisses it, and can be dismissed
+  without moving pointer or focus. A linear reorder must be announced
   in one polite message carrying the moved item's authored name, its new
   neighbour, and its absolute position — for example, "Key Concepts moved above
   Learning Objectives, now position 2 of 8." Report a reorder that changes the
