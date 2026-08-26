@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en" data-theme="lesson-light">
-<head><meta charset="utf-8"><title>Candidate state and context</title></head>
+<head><meta charset="utf-8"><title>Candidate state and context</title>
+<style>#tip[hidden] { display: none; }</style></head>
 <body>
 <main>
   <h1>Lesson controls</h1>
@@ -8,6 +9,10 @@
   <div id="panel" hidden>Details.</div>
   <button id="guide" aria-pressed="false">Reading guide</button>
   <div id="status" aria-live="polite"></div>
+  <span id="custom-check" role="checkbox" tabindex="0" aria-checked="false">Show transcript</span>
+  <span id="speed" role="slider" tabindex="0" aria-label="Playback speed" aria-valuemin="1" aria-valuemax="3" aria-valuenow="1">1×</span>
+  <button id="tip-trigger" aria-describedby="tip">Why?</button>
+  <span id="tip" role="tooltip" hidden>Explains why this matters.</span>
 </main>
 <script>
   const section = document.getElementById("section");
@@ -24,6 +29,43 @@
     const enabled = guide.getAttribute("aria-pressed") !== "true";
     guide.setAttribute("aria-pressed", String(enabled));
     status.textContent = `Reading guide ${enabled ? "enabled" : "disabled"}`;
+  });
+
+  const customCheck = document.getElementById("custom-check");
+  customCheck.addEventListener("keydown", (event) => {
+    if (event.key === " ") customCheck.setAttribute("aria-checked", String(customCheck.getAttribute("aria-checked") !== "true"));
+  });
+
+  const speed = document.getElementById("speed");
+  speed.addEventListener("keydown", (event) => {
+    const change = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!change) return;
+    const value = Math.max(1, Math.min(3, Number(speed.getAttribute("aria-valuenow")) + change));
+    speed.setAttribute("aria-valuenow", String(value));
+    speed.textContent = `${value}×`;
+  });
+
+  const tipTrigger = document.getElementById("tip-trigger");
+  const tip = document.getElementById("tip");
+  let hideTip;
+  const show = () => {
+    clearTimeout(hideTip);
+    tip.hidden = false;
+  };
+  const hide = () => {
+    clearTimeout(hideTip);
+    hideTip = setTimeout(() => {
+      if (!tipTrigger.matches(":hover, :focus") && !tip.matches(":hover")) tip.hidden = true;
+    });
+  };
+  tipTrigger.addEventListener("mouseenter", show);
+  tipTrigger.addEventListener("mouseleave", hide);
+  tipTrigger.addEventListener("focus", show);
+  tipTrigger.addEventListener("blur", hide);
+  tip.addEventListener("mouseenter", show);
+  tip.addEventListener("mouseleave", hide);
+  tipTrigger.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") tip.hidden = true;
   });
 </script>
 </body>

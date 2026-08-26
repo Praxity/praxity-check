@@ -56,4 +56,9 @@ Check code:
 - Manuel Matuzović, [My HTML boilerplate in 2026](https://matuzo.at/blog/2026/html-boilerplate),
   which informed the page-title, operating-system text-scaling, and declared
   colour-scheme checks; no article text or code is incorporated here.
+- T-Mobile USA, [MagentaA11y](https://github.com/tmobile/magentaA11y), Apache
+  License 2.0, reviewed at commit `1581528deb053f868b1881d7bb3b2e9fb9274036`.
+  Its web acceptance criteria informed the custom-checkbox and slider actions,
+  plus the tooltip hover, focus, pointer-persistence, timed-persistence, and
+  Escape evidence. No MagentaA11y code or text is incorporated here.
 - axe-core rule descriptions included in audit results originate from axe-core.
