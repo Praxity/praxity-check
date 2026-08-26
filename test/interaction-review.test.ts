@@ -65,6 +65,21 @@ test("interaction-review evidence preserves behaviour differences in identical t
 				await stateContext.close();
 				await stateServer.close();
 			}
+			const reorderRoot = fileURLToPath(new URL("../bench/interaction-review/reorder", import.meta.url));
+			const reorderServer = await serve(reorderRoot);
+			try {
+				const reorder = await prepareInteractionReview(
+					await browser.newContext({ serviceWorkers: "block" }),
+					(await discover(reorderRoot, reorderServer.origin)).pages,
+					[],
+					"reorder",
+				);
+				const flows = reorder.markdown.split("### Interaction flows")[1] ?? "";
+				assert.match(flows, /Action: `Space \(lift\)`/);
+				assert.match(flows, /Action: `Alt\+ArrowDown`[\s\S]*?After: `[^`]*Key Concepts moved below Summary, now position 3 of 3/);
+			} finally {
+				await reorderServer.close();
+			}
 		} finally {
 		await browser.close();
 		await server.close();

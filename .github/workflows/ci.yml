@@ -21,13 +21,13 @@ jobs:
       - name: Smoke-test automated checks and interaction review
         shell: bash
         run: |
-          mkdir -p /tmp/prax-audit-smoke/defect /tmp/prax-audit-smoke/clean
-          cp bench/wcag/focus-indicator-removed/defect.html /tmp/prax-audit-smoke/defect/
-          cp bench/wcag/focus-indicator-removed/clean.html /tmp/prax-audit-smoke/clean/
+          mkdir -p /tmp/praxity-check-smoke/defect /tmp/praxity-check-smoke/clean
+          cp bench/wcag/focus-indicator-removed/defect.html /tmp/praxity-check-smoke/defect/
+          cp bench/wcag/focus-indicator-removed/clean.html /tmp/praxity-check-smoke/clean/
           set +e
-          node src/cli.ts check /tmp/prax-audit-smoke/defect --min-confidence medium >/tmp/prax-audit-defect.txt
+          node src/cli.ts check /tmp/praxity-check-smoke/defect --min-confidence medium >/tmp/praxity-check-defect.txt
           defect_code=$?
           set -e
           test "$defect_code" -eq 1
-          node src/cli.ts check /tmp/prax-audit-smoke/clean --min-confidence medium >/tmp/prax-audit-clean.txt
-          node src/cli.ts prepare-review bench/interaction-review/tabs >/tmp/prax-audit-review.md
+          node src/cli.ts check /tmp/praxity-check-smoke/clean --min-confidence medium >/tmp/praxity-check-clean.txt
+          node src/cli.ts prepare-review bench/interaction-review/tabs >/tmp/praxity-check-review.md

@@ -163,7 +163,7 @@ export async function openInput(inputPath: string, limits: Limits = {}): Promise
 		return { root: target, wasZip: false, cleanup: async () => {} };
 	}
 
-	const root = await mkdtemp(join(tmpdir(), "prax-audit-"));
+	const root = await mkdtemp(join(tmpdir(), "praxity-check-"));
 	try {
 		await extractZip(target, root, limits);
 	} catch (err) {

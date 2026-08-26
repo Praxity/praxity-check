@@ -1,10 +1,10 @@
-# Running Praxity Accessibility Audit
+# Running Praxity Check
 
 Install once with Node 22.18+ and pnpm 11.5.3:
 
 ```bash
-git clone https://github.com/Praxity/praxity-audit.git
-cd praxity-audit
+git clone https://github.com/Praxity/praxity-check.git
+cd praxity-check
 pnpm install --frozen-lockfile
 pnpm exec playwright install chromium
 ```
@@ -13,15 +13,15 @@ Then run it from any project. The target is a folder or zip, resolved from the
 current directory:
 
 ```bash
-node /absolute/path/to/praxity-audit/src/cli.ts check ./dist --min-confidence medium
+node /absolute/path/to/praxity-check/src/cli.ts check ./dist --min-confidence medium
 ```
 
 Add `--json report.json` for the complete result set. Run with `--help` for all
 options.
 
 During `check` and `prepare-review`, ordinary web requests outside the local
-audit server, including WebSocket connections, are blocked by default. Only
-audit packages you trust; Praxity Accessibility Audit is not designed to contain deliberately
+check server, including WebSocket connections, are blocked by default. Only
+run it on packages you trust; Praxity Check is not designed to contain deliberately
 malicious HTML.
 
 ## Confidence threshold
@@ -41,7 +41,7 @@ these probes are conservative proxies. Audio autoplay reaches high only after
 the browser observes more than three seconds of unmuted playback without a
 control.
 
-When a page opts into `<meta name="text-scale" content="scale">`, Audit checks
+When a page opts into `<meta name="text-scale" content="scale">`, Praxity Check tests
 the 320-pixel presentation at 200% operating-system text scale. It also reruns
 visual checks when the document declares a dark colour scheme. Repeated titles
 across audited pages are questions for review, not automatic failures.
@@ -49,7 +49,7 @@ across audited pages are questions for review, not automatic failures.
 Exit codes: `0` nothing at or above the threshold, `1` findings present, `2`
 could not run.
 
-## Accessibility Audit workflows and evidence
+## Praxity Check workflows and evidence
 
 Automated checks produce repeatable findings and may stop CI at the confidence
 level you select. Interaction review examines recognised components through
@@ -70,7 +70,7 @@ as the automated checks and writes bounded rendered DOM, accessibility
 snapshots, and generic before/action/after traces:
 
 ```bash
-node /absolute/path/to/praxity-audit/src/cli.ts prepare-review ./dist > review-evidence.md
+node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist > review-evidence.md
 ```
 
 The command does not run the automated checks, invoke a model, upload anything,
@@ -80,16 +80,16 @@ unknown triggers, and other unexercised rules. Review the Markdown before
 sending it anywhere because it contains course text and markup.
 
 Append the packet to the prompt and run the LLM reviewer read-only from the
-Accessibility Audit repo, not from the target. The reviewer needs the evidence, not source
+Praxity Check repo, not from the target. The reviewer needs the evidence, not source
 access. This example uses Luna at maximum reasoning effort:
 
 ```bash
 {
-  cat /absolute/path/to/praxity-audit/docs/review-prompt.md
+  cat /absolute/path/to/praxity-check/docs/review-prompt.md
   printf '\n\n# Prepared evidence packet\n'
   cat /absolute/path/to/review-evidence.md
 } | codex -a never exec --ephemeral \
-  -C /absolute/path/to/praxity-audit -s read-only \
+  -C /absolute/path/to/praxity-check -s read-only \
   -m gpt-5.6-luna -c 'model_reasoning_effort="max"' \
   -o /absolute/path/to/review.md -
 ```
@@ -123,7 +123,7 @@ On macOS, run the experimental VoiceOver + Safari command only when the computer
 is free for it to take over:
 
 ```bash
-node /absolute/path/to/praxity-audit/src/cli.ts screen-reader ./dist \
+node /absolute/path/to/praxity-check/src/cli.ts screen-reader ./dist \
   --page lesson.html \
   --control "Show definition" \
   --expected "Definition" \
@@ -174,7 +174,7 @@ Paste into a repo's `AGENTS.md`:
 After changing anything that affects rendered output — components, styles,
 design tokens, navigation, templates — build, then run:
 
-    node /absolute/path/to/praxity-audit/src/cli.ts check ./dist --min-confidence medium
+    node /absolute/path/to/praxity-check/src/cli.ts check ./dist --min-confidence medium
 
 Fix what it reports, rerun, and repeat until it is clean or the remaining
 findings are ones you can justify leaving. Read the caveats below before
