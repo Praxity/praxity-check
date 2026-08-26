@@ -22,7 +22,7 @@ const CLI = join(dirname(dirname(fileURLToPath(import.meta.url))), "src", "cli.t
 let root: string;
 
 before(async () => {
-	root = await mkdtemp(join(tmpdir(), "prax-audit-determinism-"));
+	root = await mkdtemp(join(tmpdir(), "praxity-check-determinism-"));
 	await writeFile(
 		join(root, "index.html"),
 		`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Determinism</title>

@@ -1,9 +1,9 @@
-# Praxity Accessibility Audit interaction review
+# Praxity Check interaction review
 
 Audit the prepared evidence packet supplied with this prompt for accessibility
 defects. This is an independent review; the model running it is the current
 reviewer, not the definition of the method. Do not access the target package,
-source code, an existing `prax-audit` report, or a prior audit.
+source code, an existing `praxity-check` report, or a prior review.
 
 ## Evidence contract
 

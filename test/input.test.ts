@@ -100,7 +100,7 @@ async function deflatedZeros(size: number): Promise<{ data: Buffer; crc: number 
 }
 
 test("openInput rejects unsafe archives and extracts safe ones", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "prax-audit-input-test-"));
+	const root = await mkdtemp(join(tmpdir(), "praxity-check-input-test-"));
 	try {
 		await t.test("rejects zip slip without writing outside the extraction root", async () => {
 			const controlledTmp = join(root, "tmp");

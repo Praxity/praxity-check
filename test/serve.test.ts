@@ -7,7 +7,7 @@ import test from "node:test";
 
 import { isAuditServerUrl, serve } from "../src/serve.ts";
 
-test("network requests are limited to the audit server origin", () => {
+test("network requests are limited to the check server origin", () => {
 	const origin = "http://127.0.0.1:4173";
 	for (const [url, expected] of [
 		["http://127.0.0.1:4173/page.html", true],
@@ -36,7 +36,7 @@ function request(origin: string, path: string): Promise<{ status: number; body: 
 }
 
 test("serve keeps static files inside a loopback-only root", async (t) => {
-	const fixture = await mkdtemp(join(tmpdir(), "prax-audit-serve-test-"));
+	const fixture = await mkdtemp(join(tmpdir(), "praxity-check-serve-test-"));
 	const root = join(fixture, "public");
 	await mkdir(root);
 	const page = Buffer.from("<!doctype html><title>Literal page</title>");

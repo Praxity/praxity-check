@@ -295,7 +295,7 @@ describe("automated checks fire on known defects", () => {
 	let browser: Browser;
 
 	before(async () => {
-		root = await mkdtemp(join(tmpdir(), "prax-audit-checks-"));
+		root = await mkdtemp(join(tmpdir(), "praxity-check-checks-"));
 		await writeFile(join(root, "broken.html"), BROKEN);
 		await writeFile(join(root, "trap.html"), TRAP);
 		await writeFile(join(root, "sibling.html"), SIBLING_INDICATOR);
@@ -365,7 +365,7 @@ describe("automated checks fire on known defects", () => {
 			hits[0]?.selector?.includes("no-indicator"),
 			`locator should identify the suppressed control, got: ${hits[0]?.selector}`,
 		);
-		assert.ok(!hits[0]?.selector?.includes("prax-audit-id"), "internal marker leaked into the locator");
+		assert.ok(!hits[0]?.selector?.includes("praxity-check-id"), "internal marker leaked into the locator");
 	});
 
 	test("keyboardWalk finds a focus trap", async () => {

@@ -36,9 +36,9 @@ const NAVIGATION_TIMEOUT_MS = 15_000;
 const ACTION_TIMEOUT_MS = 10_000;
 const PAGE_AUDIT_TIMEOUT_MS = 60_000;
 const USAGE = `Usage:
-  prax-audit check <folder|zip> [options]
-  prax-audit prepare-review <folder|zip> [--allow-network]
-  prax-audit screen-reader <folder|zip> --page <html> --control <name> --expected <phrase> --take-screen-control --allow-network
+  praxity-check check <folder|zip> [options]
+  praxity-check prepare-review <folder|zip> [--allow-network]
+  praxity-check screen-reader <folder|zip> --page <html> --control <name> --expected <phrase> --take-screen-control --allow-network
 
 Options:
   --json <file>                         Write the complete JSON report
@@ -109,7 +109,7 @@ function parseArgs(args: string[]): Options {
 			throw new Error("screen-reader launches VoiceOver, opens Safari, moves focus, and sends keyboard input. Rerun with --take-screen-control only when interruption is safe.");
 		}
 		if (!options.allowNetwork) {
-			throw new Error("screen-reader uses your existing Safari profile and network connection, which Accessibility Audit's Playwright network blocker cannot protect. Rerun with --allow-network only for an export you trust.");
+			throw new Error("screen-reader uses your existing Safari profile and network connection, which Praxity Check's Playwright network blocker cannot protect. Rerun with --allow-network only for an export you trust.");
 		}
 		if (!options.page || !options.control || !options.expected) {
 			throw new Error("screen-reader requires --page, --control, and --expected");
@@ -256,7 +256,7 @@ async function main(args: string[]): Promise<number> {
 	try {
 		const options = parseArgs(args);
 		if (options.command === "screen-reader") {
-			console.error("prax-audit: starting an acknowledged disruptive session; VoiceOver and Safari will take keyboard and screen focus");
+			console.error("praxity-check: starting an acknowledged disruptive session; VoiceOver and Safari will take keyboard and screen focus");
 		}
 		input = await openInput(options.target);
 		server = await serve(input.root);
@@ -308,7 +308,7 @@ async function main(args: string[]): Promise<number> {
 					return;
 				}
 				blockedRequests.push({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" });
-				await socket.close({ code: 1008, reason: "outbound network blocked by prax-audit" });
+				await socket.close({ code: 1008, reason: "outbound network blocked by praxity-check" });
 			});
 		}
 		if (options.command === "prepare-review") {
@@ -331,7 +331,7 @@ async function main(args: string[]): Promise<number> {
 		if (pages.length === 0 || pages.every((page) => !page.triage.ok)) return 2;
 		return countAtOrAbove(report, options.minConfidence) > 0 ? 1 : 0;
 	} catch (error) {
-		console.error(`prax-audit: ${error instanceof Error ? error.message : String(error)}`);
+		console.error(`praxity-check: ${error instanceof Error ? error.message : String(error)}`);
 		return 2;
 	} finally {
 		await browser?.close().catch(() => {});
