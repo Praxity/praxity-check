@@ -8,7 +8,23 @@ examples, not promises of automatic detection.
 
 ## Run
 
-From the repository root, serve the files as static content:
+Run the automated defect/clean comparison from the repository root:
+
+```sh
+pnpm bench
+```
+
+The command also runs the pinned representative ACT fixtures in `bench/act` and
+prints known consistency limits separately.
+
+The manifest records the current defect-exclusive finding or review rules for
+each pair. The command fails when a recorded result disappears, a new result
+appears without review, a clean page gains a finding, or a check does not run.
+It prints `yes`, `partial`, and `no` coverage separately, including declared
+gaps that do not yet have an automated result.
+
+For manual inspection, serve the files as static content from the repository
+root:
 
 ```sh
 python3 -m http.server 4173 --directory bench/wcag

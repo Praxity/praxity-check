@@ -1,6 +1,6 @@
 {
 	"name": "praxity-check",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"private": true,
 	"type": "module",
 	"description": "Accessibility checker for learning packages",
@@ -8,6 +8,7 @@
 		"praxity-check": "src/cli.ts"
 	},
 	"scripts": {
+		"bench": "node bench/wcag/run.ts",
 		"check": "node src/cli.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "node --test test/*.test.ts"

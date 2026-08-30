@@ -49,6 +49,81 @@ across audited pages are questions for review, not automatic failures.
 Exit codes: `0` nothing at or above the threshold, `1` findings present, `2`
 could not run.
 
+## Named rendered states
+
+A launcher page or closed component can hide most of a course from the initial
+scan. Declare the states that matter in a JSON file:
+
+```json
+{
+  "scenarios": [
+    {
+      "id": "lesson-open",
+      "page": "index.html",
+      "actions": [
+        { "action": "click", "selector": "button#start" },
+        { "action": "waitFor", "selector": "main.lesson" }
+      ]
+    }
+  ]
+}
+```
+
+Run the initial scan and each declared state:
+
+```bash
+node /absolute/path/to/praxity-check/src/cli.ts check ./dist \
+  --scenarios ./check-scenarios.json \
+  --json report.json
+```
+
+Each state starts from a fresh page. Allowed actions are `click`, `waitFor`,
+`select` with a `value`, and `press` with one navigation key such as `Enter`,
+`Space`, `Tab`, `Escape`, or an arrow key. The file cannot execute JavaScript.
+Failed actions appear as `untested` evaluations instead of clean results. The
+report retains the scenario IDs and actions needed to reproduce the run.
+
+## Baselines and review decisions
+
+Save a complete schema-v4 report, review its occurrences, then use that report
+as an exact baseline:
+
+```bash
+node /absolute/path/to/praxity-check/src/cli.ts check ./dist \
+  --baseline ./reviewed-baseline.json \
+  --json ./current-report.json
+```
+
+Without a baseline, each finding and review question has `disposition:
+"unreviewed"` and no `comparison`. With a baseline, current occurrences are
+`new` or `existing`, and prior occurrences no longer present appear under
+`changes.resolved`.
+
+To review an occurrence in the baseline, keep it in its original array and add
+an accountable decision:
+
+```json
+{
+  "disposition": "accepted",
+  "review": {
+    "reason": "Legacy player replacement is scheduled for Q4",
+    "owner": "Accessibility lead",
+    "reviewedAt": "2026-08-29"
+  }
+}
+```
+
+`falsePositive` uses the same metadata. Praxity Check rejects reviewed decisions
+without a reason, owner, or valid `YYYY-MM-DD` date. A matching decision carries
+forward only for the same occurrence and result collection; a second target
+with the same rule is new and unreviewed. Decisions stay visible and do not
+rewrite `failed` or `cantTell` outcomes, remove findings, or change the CLI exit
+threshold.
+
+Use an unmodified report as the starting baseline rather than constructing IDs
+by hand. Occurrence identity is rule + page + selector + state; evidence wording
+is deliberately excluded so clearer excerpts do not create fake regressions.
+
 ## Praxity Check workflows and evidence
 
 Automated checks produce repeatable findings and may stop CI at the confidence

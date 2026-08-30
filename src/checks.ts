@@ -1,5 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import type { Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
+import packageJson from "../package.json" with { type: "json" };
 
 export interface Finding {
 	/** Plain language, what is wrong. Leads the report. */
@@ -14,6 +15,8 @@ export interface Finding {
 	basis: string;
 	/** Stable id, for deduplicating one defect that appears on many pages. */
 	rule: string;
+	/** Named rendered state. Omitted internally for the initial state. */
+	state?: string;
 }
 
 /** Unresolved evidence that must never gate or be described as a violation. */
@@ -25,6 +28,47 @@ export interface ReviewItem {
 	lens: "a11y";
 	basis: string;
 	rule: string;
+	state?: string;
+}
+
+export type WcagLevel = "A" | "AA" | "AAA";
+export type RuleKind = "conformance" | "advisory" | "contentQuality";
+export type EvaluationOutcome = "passed" | "failed" | "cantTell" | "inapplicable" | "untested";
+
+export interface Requirement {
+	standard: "WCAG";
+	criterion: string;
+}
+
+export interface RuleMetadata {
+	id: string;
+	source: "axe-core" | "praxity-check";
+	rulesetVersion: string;
+	kind: RuleKind;
+	confidence: Finding["confidence"] | "variable";
+	testMode: "automated";
+	requirements: Requirement[];
+	levels: WcagLevel[];
+	actRuleIds: string[];
+	tags: string[];
+	assumptions: string[];
+}
+
+export interface RuleEvaluation {
+	type: "rule";
+	rule: string;
+	page: string;
+	state: string;
+	outcome: Exclude<EvaluationOutcome, "untested">;
+}
+
+export interface UntestedEvaluation {
+	type: "check";
+	check: string;
+	page: string;
+	state: string;
+	outcome: "untested";
+	reason: string;
 }
 
 /** No silent truncation: whatever a cap drops gets said out loud (spec §7). */
@@ -32,6 +76,9 @@ export interface CheckResult {
 	findings: Finding[];
 	needsReview?: ReviewItem[];
 	notes: string[];
+	evaluations?: RuleEvaluation[];
+	rules?: RuleMetadata[];
+	untested?: UntestedEvaluation[];
 }
 
 export interface Triage {
@@ -66,7 +113,15 @@ export const UNIQUE_SELECTOR = `(el) => {
 	if (!el) return "";
 	const parts = [];
 	for (let node = el; node; node = node.parentElement) {
-		if (node.id) {
+		const blockId = node.getAttribute("data-block-id");
+		if (blockId) {
+			parts.unshift("[data-block-id=" + CSS.escape(blockId) + "]");
+			const candidate = parts.join(" > ");
+			if (document.querySelectorAll(candidate).length === 1) return candidate;
+		}
+		// Mantine's random per-mount prefix makes otherwise identical findings
+		// look new to an exact baseline on every run.
+		if (node.id && !/^mantine-/i.test(node.id)) {
 			const byId = CSS.escape(node.localName) + "#" + CSS.escape(node.id);
 			if (document.querySelectorAll(byId).length === 1) {
 				parts.unshift(byId);
@@ -166,20 +221,62 @@ export async function settle(page: Page, maxMs = 8000): Promise<string | undefin
 }
 
 const SCOPE_CONTROLS = `${FOCUSABLE}, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="slider"]`;
+const CLOSED_SHADOW_ROOTS = "praxity-check.closed-shadow-roots";
+
+/** Count closed roots before page code makes them inaccessible. */
+export async function instrumentShadowRoots(context: BrowserContext): Promise<void> {
+	await context.addInitScript((key) => {
+		const symbol = Symbol.for(key);
+		Reflect.set(globalThis, symbol, 0);
+		const attachShadow = Element.prototype.attachShadow;
+		Object.defineProperty(Element.prototype, "attachShadow", {
+			configurable: true,
+			writable: true,
+			value(this: Element, init: ShadowRootInit) {
+				const root = attachShadow.call(this, init);
+				if (init.mode === "closed") {
+					Reflect.set(globalThis, symbol, Number(Reflect.get(globalThis, symbol) ?? 0) + 1);
+				}
+				return root;
+			},
+		});
+	}, CLOSED_SHADOW_ROOTS);
+}
 
 /** Report controls in DOM subtrees the custom checks deliberately do not enter. */
 export async function scopeCoverage(page: Page, pageId: string): Promise<CheckResult> {
-	const scope = await page.evaluate((controls) => {
+	const scope = await page.evaluate(([controls, closedRootKey]) => {
 		let sameOriginFrames = 0;
 		let framesWithControls = 0;
+		const unavailableFrames: Array<{ provider: string; title: string; url: string }> = [];
 		let openShadowRoots = 0;
 		let shadowsWithControls = 0;
+		let closedShadowRoots = Number(Reflect.get(globalThis, Symbol.for(closedRootKey)) ?? 0);
 
 		const visit = (root: Document | ShadowRoot) => {
 			for (const el of Array.from(root.querySelectorAll("*"))) {
-				if (el instanceof HTMLIFrameElement && el.contentDocument) {
-					sameOriginFrames++;
-					if (el.contentDocument.querySelector(controls)) framesWithControls++;
+				if (el instanceof HTMLIFrameElement) {
+					if (el.contentDocument) {
+						sameOriginFrames++;
+						if (el.contentDocument.querySelector(controls)) framesWithControls++;
+						if (el.contentWindow) {
+							closedShadowRoots += Number(Reflect.get(el.contentWindow, Symbol.for(closedRootKey)) ?? 0);
+						}
+						visit(el.contentDocument);
+					} else {
+						if (el.hasAttribute("srcdoc")) {
+							unavailableFrames.push({ provider: "inline", title: el.title || "untitled", url: "srcdoc" });
+						} else {
+							const source = new URL(el.getAttribute("src") || "about:blank", location.href);
+							unavailableFrames.push({
+								provider: source.hostname || source.protocol.replace(":", ""),
+								title: el.title || "untitled",
+								url: source.origin === location.origin
+									? source.pathname
+									: `${source.origin}${source.pathname}`,
+							});
+						}
+					}
 				}
 				if (el.shadowRoot) {
 					openShadowRoots++;
@@ -189,15 +286,47 @@ export async function scopeCoverage(page: Page, pageId: string): Promise<CheckRe
 			}
 		};
 		visit(document);
-		return { sameOriginFrames, framesWithControls, openShadowRoots, shadowsWithControls };
-	}, SCOPE_CONTROLS);
+		return { sameOriginFrames, framesWithControls, unavailableFrames, openShadowRoots, shadowsWithControls, closedShadowRoots };
+	}, [SCOPE_CONTROLS, CLOSED_SHADOW_ROOTS] as const);
 
-	if (scope.framesWithControls === 0 && scope.shadowsWithControls === 0) return { findings: [], notes: [] };
+	const untested: UntestedEvaluation[] = [];
+	if (scope.framesWithControls > 0) untested.push({
+		type: "check",
+		check: "native-checks:same-origin-frame",
+		page: pageId,
+		state: "initial",
+		outcome: "untested",
+		reason: `${scope.framesWithControls} of ${scope.sameOriginFrames} same-origin frames contain controls outside native-check scope`,
+	});
+	if (scope.shadowsWithControls > 0) untested.push({
+		type: "check",
+		check: "native-checks:open-shadow-root",
+		page: pageId,
+		state: "initial",
+		outcome: "untested",
+		reason: `${scope.shadowsWithControls} of ${scope.openShadowRoots} open shadow roots contain controls outside native-check scope`,
+	});
+	if (scope.unavailableFrames.length > 0) untested.push({
+		type: "check",
+		check: "page-scope:unavailable-frame",
+		page: pageId,
+		state: "initial",
+		outcome: "untested",
+		reason: `${scope.unavailableFrames.length} frames were unavailable to the page, including cross-origin frames: ${scope.unavailableFrames.map((frame) => `provider ${JSON.stringify(frame.provider)}, title ${JSON.stringify(frame.title)}, URL ${JSON.stringify(frame.url)}`).join("; ")}`,
+	});
+	if (scope.closedShadowRoots > 0) untested.push({
+		type: "check",
+		check: "page-scope:closed-shadow-root",
+		page: pageId,
+		state: "initial",
+		outcome: "untested",
+		reason: `${scope.closedShadowRoots} closed shadow roots could not be inspected`,
+	});
+	if (untested.length === 0) return { findings: [], notes: [] };
 	return {
 		findings: [],
-		notes: [
-			`custom checks examined only the light DOM on ${pageId}; ${scope.framesWithControls} of ${scope.sameOriginFrames} same-origin iframe(s) and ${scope.shadowsWithControls} of ${scope.openShadowRoots} open shadow root(s) contain controls outside their scope — result is partial`,
-		],
+		notes: [`some DOM scope was not covered on ${pageId}; see structured untested evaluations`],
+		untested,
 	};
 }
 
@@ -296,15 +425,29 @@ const UA_SIZED_CONTROLS = `(() => {
 })()`;
 
 export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
+	await page.addStyleTag({ content: NO_MOTION });
 	const results = await new AxeBuilder({ page })
 		.options({
 			rules: {
-				// Both ship disabled by default and both belong in the automated checks.
+				// Target size ships disabled. Keep heading order explicit so this
+				// ruleset does not change when axe changes its defaults.
 				"target-size": { enabled: true },
 				"heading-order": { enabled: true },
 			},
-		})
-		.analyze();
+			})
+			.analyze();
+	const axeMetadata = await page.evaluate(() => {
+		interface AxeRule {
+			ruleId: string;
+			tags: string[];
+			actIds?: string[];
+		}
+		const api = (globalThis as unknown as {
+			axe?: { version: string; getRules: () => AxeRule[] };
+		}).axe;
+		if (!api) throw new Error("axe metadata was unavailable after analysis");
+		return { version: api.version, rules: api.getRules() };
+	});
 	const axeTargets = [...results.violations, ...results.incomplete].flatMap((rule) =>
 		rule.nodes.map((node) => node.target.join(" "))
 	);
@@ -408,7 +551,235 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 	// need review and never gate, regardless of the selected confidence floor.
 	map(results.violations, "high");
 	map(results.incomplete);
-	return { findings, needsReview, notes: [] };
+
+	const resultIds = new Set([
+		...results.violations,
+		...results.incomplete,
+		...results.passes,
+		...results.inapplicable,
+	].map((rule) => rule.id));
+	const rules: RuleMetadata[] = axeMetadata.rules
+		.filter((rule) => resultIds.has(rule.ruleId))
+		.map((rule) => {
+			const levels = [...new Set(rule.tags.flatMap((tag) => {
+				const match = tag.match(/^wcag\d*(a{1,3})$/i);
+				return match?.[1] ? [match[1].toUpperCase() as WcagLevel] : [];
+			}))].sort((a, b) => a.length - b.length);
+			const requirements = rule.tags.flatMap((tag): Requirement[] => {
+				const criterion = wcagCriterion(tag);
+				return criterion
+					? [{ standard: "WCAG", criterion }]
+					: [];
+			});
+			return {
+				id: `axe:${rule.ruleId}`,
+				source: "axe-core",
+				rulesetVersion: axeMetadata.version,
+				kind: rule.tags.includes("best-practice") ? "advisory" : "conformance",
+				confidence: rule.tags.includes("best-practice") ? "low" : "high",
+				testMode: "automated",
+				requirements,
+				levels,
+				actRuleIds: rule.actIds ?? [],
+				tags: rule.tags,
+				assumptions: rule.ruleId === "target-size"
+					? ["Browser-default target sizing is treated as user-agent control."]
+					: [],
+			} satisfies RuleMetadata;
+		});
+	const evaluations: RuleEvaluation[] = [
+		...results.passes.map((rule) => ({
+			type: "rule" as const,
+			rule: `axe:${rule.id}`,
+			page: pageId,
+			state: "initial",
+			outcome: "passed" as const,
+		})),
+		...results.inapplicable.map((rule) => ({
+			type: "rule" as const,
+			rule: `axe:${rule.id}`,
+			page: pageId,
+			state: "initial",
+			outcome: "inapplicable" as const,
+		})),
+		...[...new Set(findings.map((finding) => finding.rule))].map((rule) => ({
+			type: "rule" as const,
+			rule,
+			page: pageId,
+			state: "initial",
+			outcome: "failed" as const,
+		})),
+		...[...new Set(needsReview.map((item) => item.rule))].map((rule) => ({
+			type: "rule" as const,
+			rule,
+			page: pageId,
+			state: "initial",
+			outcome: "cantTell" as const,
+		})),
+	];
+	return { findings, needsReview, notes: [], evaluations, rules };
+}
+
+const MAX_LOCAL_RESOURCES = 100;
+const LOCAL_RESOURCE_RULE: RuleMetadata = {
+	id: "local-resource-missing",
+	source: "praxity-check",
+	rulesetVersion: packageJson.version,
+	kind: "contentQuality",
+	confidence: "high",
+	testMode: "automated",
+	requirements: [],
+	levels: [],
+	actRuleIds: [],
+	tags: ["content-quality", "local-resource"],
+	assumptions: ["Only same-origin media, document, stylesheet, font, and CSS image references are checked."],
+};
+
+/** Find rendered local resource references that the package does not contain. */
+export async function localResources(page: Page, pageId: string): Promise<CheckResult> {
+	const collected = await page.evaluate(([locateSource, limit]) => {
+		const locate = (0, eval)(locateSource) as (element: Element) => string;
+		const references = new Map<string, { url: string; path: string; selector: string; attribute: string }>();
+		const add = (
+			element: Element,
+			value: string | null | undefined,
+			attribute: string,
+			base = document.baseURI,
+		) => {
+			if (!value) return;
+			let url: URL;
+			try {
+				url = new URL(value, base);
+			} catch {
+				return;
+			}
+			if (url.origin !== location.origin || !/^https?:$/.test(url.protocol)) return;
+			if (!references.has(url.href)) {
+				references.set(url.href, {
+					url: url.href,
+					path: `${url.pathname}${url.search}${url.hash}`,
+					selector: locate(element),
+					attribute,
+				});
+			}
+		};
+
+		for (const image of Array.from(document.querySelectorAll("img, input[type=image]"))) {
+			add(
+				image,
+				(image instanceof HTMLImageElement ? image.currentSrc : "") || image.getAttribute("src"),
+				"src",
+			);
+		}
+		for (const media of Array.from(document.querySelectorAll<HTMLMediaElement>("audio, video"))) {
+			add(media, media.currentSrc || media.getAttribute("src"), "src");
+			if (media instanceof HTMLVideoElement) add(media, media.getAttribute("poster"), "poster");
+		}
+		for (const source of Array.from(document.querySelectorAll<HTMLSourceElement>("source[src]"))) {
+			add(source, source.getAttribute("src"), "src");
+		}
+		for (const track of Array.from(document.querySelectorAll<HTMLTrackElement>("track[src]"))) {
+			add(track, track.getAttribute("src"), "src");
+		}
+		for (const object of Array.from(document.querySelectorAll<HTMLObjectElement>("object[data]"))) {
+			add(object, object.getAttribute("data"), "data");
+		}
+		for (const embed of Array.from(document.querySelectorAll<HTMLEmbedElement>("embed[src]"))) {
+			add(embed, embed.getAttribute("src"), "src");
+		}
+		for (const anchor of Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))) {
+			const href = anchor.getAttribute("href");
+			if (anchor.hasAttribute("download") || /\.(?:pdf|docx?|xlsx?|pptx?|od[tp]|ods|rtf|txt|csv|zip)(?:[?#]|$)/i.test(href ?? "")) {
+				add(anchor, href, "href");
+			}
+		}
+		for (const link of Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel~="stylesheet"][href], link[rel~="preload"][href]'))) {
+			if (link.relList.contains("stylesheet") || ["audio", "font", "image", "style", "video"].includes(link.as)) {
+				add(link, link.href, "href");
+			}
+		}
+
+		const cssUrls = (rules: CSSRuleList, base: string) => {
+			for (const rule of Array.from(rules)) {
+				for (const match of rule.cssText.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/g)) {
+					add(document.documentElement, match[1], "CSS url()", base);
+				}
+				if (rule instanceof CSSImportRule && rule.styleSheet) {
+					try {
+						cssUrls(rule.styleSheet.cssRules, rule.styleSheet.href || new URL(rule.href, base).href);
+					} catch {
+						// A cross-origin stylesheet is outside this same-origin integrity check.
+					}
+				} else if ("cssRules" in rule) {
+					cssUrls((rule as CSSGroupingRule).cssRules, base);
+				}
+			}
+		};
+		for (const sheet of Array.from(document.styleSheets)) {
+			try {
+				cssUrls(sheet.cssRules, sheet.href || document.baseURI);
+			} catch {
+				// A cross-origin stylesheet is outside this same-origin integrity check.
+			}
+		}
+
+		return { total: references.size, references: [...references.values()].slice(0, limit) };
+	}, [UNIQUE_SELECTOR, MAX_LOCAL_RESOURCES] as const);
+
+	const findings: Finding[] = [];
+	const notes: string[] = [];
+	for (const reference of collected.references) {
+		try {
+			const response = await page.evaluate(async (url) => {
+				let result = await fetch(url, { method: "HEAD", cache: "no-store" });
+				if (result.status === 405 || result.status === 501) {
+					result = await fetch(url, { method: "GET", cache: "no-store" });
+				}
+				return { ok: result.ok, status: result.status };
+			}, reference.url);
+			if (!response.ok) {
+				findings.push({
+					what: "A local resource referenced by the page could not be loaded.",
+					page: pageId,
+					selector: reference.selector,
+					evidence: `${reference.attribute} ${JSON.stringify(reference.path)} returned HTTP ${response.status}`,
+					fix: "Package the file or correct or remove the local reference.",
+					lens: "a11y",
+					confidence: "high",
+					basis: `Praxity Check content-quality rule; same-origin resource returned HTTP ${response.status}`,
+					rule: LOCAL_RESOURCE_RULE.id,
+				});
+			}
+		} catch (error) {
+			notes.push(
+				`local resource ${JSON.stringify(reference.path)} could not be verified: ${error instanceof Error ? error.message : String(error)} — treat as unchecked`,
+			);
+		}
+	}
+	if (collected.total > MAX_LOCAL_RESOURCES) {
+		notes.push(
+			`local resource check covered ${MAX_LOCAL_RESOURCES} of ${collected.total} distinct references — result is partial`,
+		);
+	}
+
+	return {
+		findings,
+		notes,
+		rules: [LOCAL_RESOURCE_RULE],
+		evaluations: [{
+			type: "rule",
+			rule: LOCAL_RESOURCE_RULE.id,
+			page: pageId,
+			state: "initial",
+			outcome: findings.length > 0
+				? "failed"
+				: collected.total === 0
+					? "inapplicable"
+					: notes.length > 0
+						? "cantTell"
+						: "passed",
+		}],
+	};
 }
 
 function basisFor(tags: string[]): string {
@@ -419,7 +790,15 @@ function basisFor(tags: string[]): string {
 		: tags.some((t) => t.endsWith("aa"))
 			? "AA"
 			: "A";
-	return `WCAG ${tag.slice(4).split("").join(".")} (${level})`;
+	return `WCAG ${wcagCriterion(tag)} (${level})`;
+}
+
+function wcagCriterion(tag: string): string | undefined {
+	const digits = tag.match(/^wcag(\d{3,4})$/)?.[1];
+	if (!digits) return undefined;
+	return digits.length === 3
+		? digits.split("").join(".")
+		: `${digits[0]}.${digits[1]}.${digits.slice(2)}`;
 }
 
 interface ListenerTarget {
@@ -980,7 +1359,7 @@ export async function keyboardScrollableRegions(page: Page, pageId: string): Pro
 	const pageScroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
 
 	for (const candidate of candidates.slice(0, limit)) {
-		const region = page.locator(`[data-praxity-check-scroll-id="${candidate.id}"]`);
+		const region = page.locator(candidate.selector || `[data-praxity-check-scroll-id="${candidate.id}"]`);
 		const setup = await region.evaluate((el, focusable) => {
 			const region = el as HTMLElement;
 			const original = { top: region.scrollTop, left: region.scrollLeft };
@@ -1021,6 +1400,13 @@ export async function keyboardScrollableRegions(page: Page, pageId: string): Pro
 		for (const key of candidate.vertical ? ["PageDown", "ArrowDown"] : ["ArrowRight"]) {
 			if (worked) break;
 			keys.push(key);
+			await region.evaluate((el) => {
+				const active = document.activeElement;
+				const boundary = active && el.contains(active)
+					? active === el ? el.parentElement : el
+					: document.body;
+				boundary?.addEventListener("keydown", (event) => event.stopPropagation(), { once: true });
+			});
 			await page.keyboard.press(key);
 			await page.waitForTimeout(50);
 			worked = await region.evaluate((el) => el.scrollTop > 0 || el.scrollLeft > 0);
@@ -1227,6 +1613,11 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate) => {
 	const rect = el.getBoundingClientRect();
 	if (rect.width === 0 || rect.height === 0 || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return null;
 	let manual = false;
+	// Chromium marks its unmodified browser focus ring with outline style auto.
+	// WCAG 1.4.11 exempts component appearance that the author did not modify.
+	// ponytail: compare cascade origins if another scan engine stops exposing
+	// browser focus rings this way.
+	const authoredOutline = style.outlineStyle !== "auto" && style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0;
 	const rgb = (value) => "rgb(" + value.map((channel) => Math.round(channel)).join(" ") + ")";
 
 	const textNodes = [el, ...el.querySelectorAll("*")].filter((node) => {
@@ -1267,7 +1658,7 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate) => {
 				signature: style["border" + side + "Width"] + " " + style["border" + side + "Style"] + " " + value,
 			});
 		}
-		if (style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0) {
+		if (authoredOutline) {
 			const color = paint(style.outlineColor, outer);
 			if (color) cues.push({
 				name: "outline", ratio: contrast(color, outer),
@@ -1287,7 +1678,7 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate) => {
 		cueSignature: [
 			style.backgroundColor, style.backgroundImage,
 			style.borderTop, style.borderRight, style.borderBottom, style.borderLeft,
-			style.outline, style.boxShadow,
+			authoredOutline ? style.outline : "", style.boxShadow,
 		].join("|"),
 		manual,
 	};
@@ -2156,6 +2547,9 @@ export async function darkSchemeVisuals(page: Page, pageId: string): Promise<Che
 	const findings: Finding[] = [];
 	const needsReview: ReviewItem[] = [];
 	const notes: string[] = [];
+	const evaluations: RuleEvaluation[] = [];
+	const rules: RuleMetadata[] = [];
+	const untested: UntestedEvaluation[] = [];
 	try {
 		await page.emulateMedia({ colorScheme: "dark" });
 		await page.waitForTimeout(150);
@@ -2164,21 +2558,41 @@ export async function darkSchemeVisuals(page: Page, pageId: string): Promise<Che
 				const result = await check(page, pageId);
 				findings.push(...result.findings.map((finding) => ({
 					...finding,
+					state: "dark",
 					evidence: `dark colour scheme; ${finding.evidence}`,
 				})));
 				needsReview.push(...(result.needsReview ?? []).map((item) => ({
 					...item,
+					state: "dark",
 					evidence: `dark colour scheme; ${item.evidence}`,
+				})));
+				evaluations.push(...(result.evaluations ?? []).map((evaluation) => ({
+					...evaluation,
+					state: "dark",
+				})));
+				rules.push(...(result.rules ?? []));
+				untested.push(...(result.untested ?? []).map((evaluation) => ({
+					...evaluation,
+					state: "dark",
 				})));
 				notes.push(...result.notes.map((note) => `dark colour scheme: ${note}`));
 			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				untested.push({
+					type: "check",
+					check: check.name,
+					page: pageId,
+					state: "dark",
+					outcome: "untested",
+					reason,
+				});
 				notes.push(
-					`dark colour scheme: ${check.name} did not run on ${pageId}: ${error instanceof Error ? error.message : String(error)} — treat as unchecked, not as clean`,
+					`dark colour scheme: ${check.name} did not run on ${pageId}: ${reason} — treat as unchecked, not as clean`,
 				);
 			}
 		}
 	} finally {
 		if (!page.isClosed()) await page.emulateMedia({ colorScheme: "light" });
 	}
-	return { findings, needsReview, notes };
+	return { findings, needsReview, notes, evaluations, rules, untested };
 }

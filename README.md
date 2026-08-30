@@ -52,6 +52,8 @@ deliberately malicious HTML.
 The terminal summary is brief; an optional JSON report contains every finding,
 question for review, and coverage note. The `--min-confidence` option controls
 which findings are shown and which make the command exit with an error.
+The [schema v4 guide](docs/report-schema-v4.md) documents rule outcomes,
+occurrence identity, environment evidence, and migration from v3.
 
 ## Quick start
 
@@ -66,7 +68,10 @@ node src/cli.ts check /absolute/path/to/site/dist --min-confidence medium
 ```
 
 The target may be a folder or zip. Add `--json report.json` to save the full
-results. Run `node src/cli.ts --help` to see every option.
+results and `--baseline previous-report.json` to compare exact occurrences with
+a reviewed prior report. Use `--scenarios check-scenarios.json` to scan states revealed by safe
+click, key, selection, and wait actions. The [usage guide](docs/using-it.md#named-rendered-states)
+documents the JSON format. Run `node src/cli.ts --help` to see every option.
 
 Reports and evidence files can contain course content, local paths, requested
 URLs, and VoiceOver speech. Review them before sharing.

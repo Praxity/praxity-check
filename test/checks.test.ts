@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { type Browser, chromium, type Page } from "playwright";
+import packageJson from "../package.json" with { type: "json" };
 import {
 	altTextQuality,
 	audioAutoplay,
@@ -12,9 +13,11 @@ import {
 	focusIndicators,
 	focusNotObscured,
 	interactionChecks,
+	instrumentShadowRoots,
 	keyboardWalk,
 	keyboardScrollableRegions,
 	linkTextQuality,
+	localResources,
 	mouseOnlyControls,
 	nonTextContrast,
 	pauseStopHide,
@@ -26,6 +29,7 @@ import {
 	stateContrast,
 	textScale,
 	textSpacing,
+	UNIQUE_SELECTOR,
 } from "../src/checks.ts";
 import { serve, type StaticServer } from "../src/serve.ts";
 
@@ -137,13 +141,21 @@ document.addEventListener("keydown", (event) => { if (event.ctrlKey && event.key
 </script></body></html>`;
 
 const SCOPE_PARTIAL = `<!doctype html><html lang="en"><head><title>Partial scope</title></head><body>
-<h1>Visible content</h1><iframe title="Embedded exercise" srcdoc="<button>Frame control</button>"></iframe><div id="host"></div>
-<script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<button>Shadow control</button>";</script>
+<h1>Visible content</h1><iframe title="Embedded exercise" srcdoc="<button>Frame control</button>"></iframe><iframe title="Sandboxed exercise" sandbox srcdoc="<button>Unavailable control</button>"></iframe><div id="host"></div><div id="closed-host"></div>
+<script>
+document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<button>Shadow control</button>";
+document.getElementById("closed-host").attachShadow({ mode: "closed" }).innerHTML = "<button>Closed shadow control</button>";
+</script>
 </body></html>`;
 
 const SCOPE_CLEAN = `<!doctype html><html lang="en"><head><title>Complete scope</title></head><body>
 <h1>Visible content</h1><iframe title="Decoration" srcdoc="<p>No controls</p>"></iframe><div id="host"></div>
 <script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<span>No controls</span>";</script>
+</body></html>`;
+
+const SCOPE_AXE = `<!doctype html><html lang="en"><head><title>Axe nested scope</title></head><body>
+<h1>Visible content</h1><iframe title="Embedded exercise" srcdoc="<button></button>"></iframe><div id="host"></div>
+<script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<button></button>";</script>
 </body></html>`;
 
 const SPACING_CLEAN = `<!doctype html><html lang="en"><head><title>Spacing controls</title><style>
@@ -254,16 +266,35 @@ body { background: #fff; }
 #practice:hover, #practice:focus { outline: none; box-shadow: 0 0 0 2px #fff, 0 0 0 4px oklch(0.48 0.16 265); }
 </style></head><body><h1>State contrast</h1><a id="practice" href="#practice">Open practice set</a></body></html>`;
 
+const STATE_CONTRAST_BROWSER_DEFAULT = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Browser focus ring</title></head>
+<body><h1>Browser focus ring</h1><a id="default-link" href="#default-link">Open practice set</a></body></html>`;
+
 const SCROLL_BROKEN = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Scrollable region</title>
 <style>#lesson { height: 60px; overflow-y: auto; width: 240px; }</style></head><body><h1>Lesson</h1>
 <div id="lesson">One<br>Two<br>Three<br>Four<br>Five<br>Six<br>Seven<br>Eight</div></body></html>`;
 
 const SCROLL_CLEAN = SCROLL_BROKEN.replace('id="lesson"', 'id="lesson" tabindex="0" aria-label="Lesson transcript"');
 
+const SCROLL_REACTIVE = SCROLL_CLEAN.replace("</body>", `<script>
+new MutationObserver(() => document.getElementById("lesson")?.removeAttribute("data-praxity-check-scroll-id"))
+	.observe(document.getElementById("lesson"), { attributes: true });
+</script></body>`);
+
+const SCROLL_GLOBAL_SHORTCUT = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Scroll shortcut</title>
+<style>#lesson { overflow-x: auto; width: 120px; white-space: nowrap; } #wide { display: inline-block; width: 300px; }</style>
+</head><body><h1>Lesson</h1><div id="lesson"><button>Collapse sidebar</button><span id="wide">Wide lesson</span></div>
+<script>document.addEventListener("keydown", (event) => { if (event.key === "ArrowRight") location.hash = "next"; });</script></body></html>`;
+
 const AUDIO_BROKEN = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Autoplay audio</title></head><body>
 <h1>Lesson</h1><audio id="narration" autoplay src="tone.wav"></audio></body></html>`;
 
 const AUDIO_CLEAN = AUDIO_BROKEN.replace("autoplay src", "autoplay controls src");
+
+const LOCAL_RESOURCES = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Local resources</title>
+<link rel="stylesheet" href="missing.css"><style>@font-face { font-family: Missing; src: url("missing.woff2"); } #background { background-image: url("missing-background.png"); }</style></head><body>
+<h1>Local resources</h1><div id="background">Background</div><img src="missing.png" alt="Missing illustration"><audio src="missing.mp3" controls></audio><video src="missing.mp4" controls></video>
+<a href="missing.pdf">Download guide</a><img src="tone.wav" alt="Existing local file"><img src="https://example.com/remote.png" alt="Remote image">
+</body></html>`;
 
 const AXE_INCOMPLETE_CONTRAST = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Unresolved contrast</title>
 <style>body { background: #faf9f5; color: #222; } .wrap { position: relative; } .overlap { position: absolute; inset: 0; pointer-events: none; }</style>
@@ -312,6 +343,7 @@ describe("automated checks fire on known defects", () => {
 		await writeFile(join(root, "interaction-clean.html"), INTERACTION_CLEAN);
 		await writeFile(join(root, "scope-partial.html"), SCOPE_PARTIAL);
 		await writeFile(join(root, "scope-clean.html"), SCOPE_CLEAN);
+		await writeFile(join(root, "scope-axe.html"), SCOPE_AXE);
 		await writeFile(join(root, "spacing-clean.html"), SPACING_CLEAN);
 		await writeFile(join(root, "text-scale-broken.html"), TEXT_SCALE_BROKEN);
 		await writeFile(join(root, "dark-broken.html"), DARK_BROKEN);
@@ -325,10 +357,14 @@ describe("automated checks fire on known defects", () => {
 		await writeFile(join(root, "partly-obscured.html"), PARTLY_OBSCURED);
 		await writeFile(join(root, "state-broken.html"), STATE_CONTRAST_BROKEN);
 		await writeFile(join(root, "state-clean.html"), STATE_CONTRAST_CLEAN);
+		await writeFile(join(root, "state-browser-default.html"), STATE_CONTRAST_BROWSER_DEFAULT);
 		await writeFile(join(root, "scroll-broken.html"), SCROLL_BROKEN);
 		await writeFile(join(root, "scroll-clean.html"), SCROLL_CLEAN);
+		await writeFile(join(root, "scroll-reactive.html"), SCROLL_REACTIVE);
+		await writeFile(join(root, "scroll-global-shortcut.html"), SCROLL_GLOBAL_SHORTCUT);
 		await writeFile(join(root, "audio-broken.html"), AUDIO_BROKEN);
 		await writeFile(join(root, "audio-clean.html"), AUDIO_CLEAN);
+		await writeFile(join(root, "local-resources.html"), LOCAL_RESOURCES);
 		await writeFile(join(root, "axe-incomplete-contrast.html"), AXE_INCOMPLETE_CONTRAST);
 		await writeFile(join(root, "tone.wav"), toneWav());
 		server = await serve(root);
@@ -426,6 +462,15 @@ describe("automated checks fire on known defects", () => {
 		const goodResult = await stateContrast(good, "state-clean.html");
 		await good.close();
 		assert.equal(goodResult.findings.length, 0, "conforming hover/focus colors were reported");
+
+		const browserDefault = await open("state-browser-default.html");
+		const browserDefaultResult = await stateContrast(browserDefault, "state-browser-default.html");
+		await browserDefault.close();
+		assert.equal(
+			browserDefaultResult.findings.length,
+			0,
+			"the unmodified browser focus ring was reported as author-styled",
+		);
 	});
 
 	test("keyboardScrollableRegions proves a region responds to a keyboard key", async () => {
@@ -438,6 +483,34 @@ describe("automated checks fire on known defects", () => {
 		const goodResult = await keyboardScrollableRegions(good, "scroll-clean.html");
 		await good.close();
 		assert.equal(goodResult.findings.length, 0, "keyboard-scrollable region was reported");
+
+		const reactive = await open("scroll-reactive.html");
+		const reactiveResult = await keyboardScrollableRegions(reactive, "scroll-reactive.html");
+		await reactive.close();
+		assert.equal(reactiveResult.findings.length, 0, "reactive rerender discarded the scroll probe target");
+	});
+
+	test("keyboard scroll probes do not trigger page-level arrow shortcuts", async () => {
+		const page = await open("scroll-global-shortcut.html");
+		await keyboardScrollableRegions(page, "scroll-global-shortcut.html");
+		assert.equal(new URL(page.url()).hash, "");
+		await page.close();
+	});
+
+	test("selectors stay stable across Mantine's generated id prefixes", async () => {
+		const page = await browser.newPage();
+		const selector = async (id: string) => {
+			await page.setContent(`<div data-block-id="accordion-1"><button id="${id}">Open</button></div>`);
+			return page.locator("button").evaluate(
+				(el, locate) => ((0, eval)(locate) as (node: Element) => string)(el),
+				UNIQUE_SELECTOR,
+			);
+		};
+		assert.equal(
+			await selector("mantine-first-control-item-0"),
+			await selector("mantine-second-control-item-0"),
+		);
+		await page.close();
 	});
 
 	test("audioAutoplay reports long autoplay without a sound control", async () => {
@@ -452,6 +525,23 @@ describe("automated checks fire on known defects", () => {
 		assert.equal(goodResult.findings.length, 0, "native audio controls were ignored");
 	});
 
+	test("localResources reports missing same-origin package resources", async () => {
+		const page = await open("local-resources.html");
+		const result = await localResources(page, "local-resources.html");
+		await page.close();
+
+		assert.deepEqual(
+			result.findings
+				.map((finding) => finding.evidence.match(/missing(?:-background)?\.(?:css|mp3|mp4|pdf|png|woff2)/)?.[0])
+				.sort(),
+			["missing-background.png", "missing.css", "missing.mp3", "missing.mp4", "missing.pdf", "missing.png", "missing.woff2"],
+		);
+		assert.ok(result.findings.every((finding) => finding.evidence.includes("HTTP 404")));
+		assert.equal(result.rules?.[0]?.kind, "contentQuality");
+		assert.equal(result.rules?.[0]?.rulesetVersion, packageJson.version);
+		assert.ok(result.evaluations?.some((evaluation) => evaluation.outcome === "failed"));
+	});
+
 	test("runAxe leaves symbol-only control contrast to the non-text check", async () => {
 		const context = await browser.newContext();
 		const page = await context.newPage();
@@ -462,6 +552,13 @@ describe("automated checks fire on known defects", () => {
 			!result.findings.some((finding) => finding.rule === "axe:color-contrast"),
 			"symbol-only control was misreported as text contrast",
 		);
+		const imageAlt = result.rules?.find((rule) => rule.id === "axe:image-alt");
+		assert.equal(imageAlt?.rulesetVersion, "4.12.1");
+		assert.ok(imageAlt?.requirements.some((requirement) => requirement.criterion === "1.1.1"));
+		assert.ok(imageAlt?.actRuleIds.includes("23a2a8"));
+		assert.ok(result.rules?.find((rule) => rule.id === "axe:target-size")
+			?.requirements.some((requirement) => requirement.criterion === "2.5.8"));
+		assert.ok(result.evaluations?.some((evaluation) => evaluation.outcome === "passed"));
 	});
 
 	test("runAxe keeps incomplete contrast evidence out of findings", async () => {
@@ -474,6 +571,9 @@ describe("automated checks fire on known defects", () => {
 		assert.ok(result.needsReview?.some((item) =>
 			item.rule === "axe:color-contrast" && item.selector?.includes("target") && item.evidence.includes("overlapped")),
 		);
+		assert.ok(result.evaluations?.some((evaluation) =>
+			evaluation.rule === "axe:color-contrast" && evaluation.outcome === "cantTell"
+		));
 	});
 
 	test("focusNotObscured reports total fixed coverage but not partial overlap", async () => {
@@ -523,20 +623,41 @@ describe("automated checks fire on known defects", () => {
 		assert.equal(cleanResult.findings.length, 0, "image overflow or text clipped before spacing was reported as new text loss");
 	});
 
-	test("scopeCoverage reports controls in frames and open shadow roots, but not empty subtrees", async () => {
-		const partial = await open("scope-partial.html");
+	test("scopeCoverage records frame and shadow-root limits, but not empty subtrees", async () => {
+		const context = await browser.newContext();
+		await instrumentShadowRoots(context);
+		const partial = await context.newPage();
+		await partial.goto(`${server.origin}/scope-partial.html`, { waitUntil: "load" });
 		const partialResult = await scopeCoverage(partial, "scope-partial.html");
-		await partial.close();
+		await context.close();
 		assert.equal(partialResult.findings.length, 0, "scope limits must be notes, not defects");
-		assert.ok(
-			partialResult.notes.some((note) => note.includes("1 of 1 same-origin iframe") && note.includes("1 of 1 open shadow root") && note.includes("partial")),
-			`missing partial-scope counts: ${partialResult.notes.join(" | ")}`,
+		const checks = new Set(partialResult.untested?.map((evaluation) => evaluation.check));
+		assert.ok(checks.has("native-checks:same-origin-frame"));
+		assert.ok(checks.has("native-checks:open-shadow-root"));
+		assert.ok(checks.has("page-scope:closed-shadow-root"));
+		assert.match(
+			partialResult.untested?.find((evaluation) => evaluation.check === "page-scope:unavailable-frame")?.reason ?? "",
+			/provider "inline", title "Sandboxed exercise", URL "srcdoc"/,
 		);
 
 		const clean = await open("scope-clean.html");
 		const cleanResult = await scopeCoverage(clean, "scope-clean.html");
 		await clean.close();
 		assert.deepEqual(cleanResult.notes, [], "control-free frame and shadow subtrees made a clean result partial");
+	});
+
+	test("runAxe enters same-origin frames and open shadow roots", async () => {
+		const context = await browser.newContext();
+		await instrumentShadowRoots(context);
+		const page = await context.newPage();
+		await page.goto(`${server.origin}/scope-axe.html`, { waitUntil: "load" });
+		const result = await runAxe(page, "scope-axe.html");
+		await context.close();
+		assert.equal(
+			result.findings.filter((finding) => finding.rule === "axe:button-name").length,
+			2,
+			"axe did not report both nested unnamed buttons",
+		);
 	});
 
 	test("mouseOnlyControls finds a click-only div but not a native button or static chart", async () => {

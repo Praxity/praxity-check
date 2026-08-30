@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import {
@@ -10,9 +10,11 @@ import {
 	focusIndicators,
 	focusNotObscured,
 	interactionChecks,
+	instrumentShadowRoots,
 	keyboardWalk,
 	keyboardScrollableRegions,
 	linkTextQuality,
+	localResources,
 	nonTextContrast,
 	pauseStopHide,
 	reflow,
@@ -27,14 +29,16 @@ import {
 } from "./checks.ts";
 import { discover } from "./discover.ts";
 import { openInput, type Input } from "./input.ts";
-import { countAtOrAbove, createReport, humanSummary, type BlockedRequest, type Confidence, type PageAudit } from "./report.ts";
+import { countAtOrAbove, createReport, humanSummary, parseBaseline, type BlockedRequest, type Confidence, type PageAudit } from "./report.ts";
 import { resolveScreenReaderPage, runScreenReader } from "./screen-reader.ts";
 import { isAuditServerUrl, serve, type StaticServer } from "./serve.ts";
 import { prepareInteractionReview } from "./interaction-review.ts";
+import { loadScenarios, runScenarioActions, type Scenario } from "./scenarios.ts";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const ACTION_TIMEOUT_MS = 10_000;
 const PAGE_AUDIT_TIMEOUT_MS = 60_000;
+const VIEWPORT = { width: 1280, height: 720 } as const;
 const USAGE = `Usage:
   praxity-check check <folder|zip> [options]
   praxity-check prepare-review <folder|zip> [--allow-network]
@@ -42,6 +46,8 @@ const USAGE = `Usage:
 
 Options:
   --json <file>                         Write the complete JSON report
+  --baseline <report.json>              Compare exact occurrences with a prior report
+  --scenarios <file>                    Scan named rendered states from JSON
   --allow-network                       Allow the audited package to use the network
   --min-confidence high|medium|low      Reporting and exit threshold (default: high)
   --page <html>                         Page for the screen-reader action
@@ -61,6 +67,8 @@ interface CommonOptions {
 interface CheckOptions extends CommonOptions {
 	command: "check";
 	json?: string;
+	baselineFile?: string;
+	scenarioFile?: string;
 	minConfidence: Confidence;
 }
 
@@ -102,6 +110,10 @@ function parseArgs(args: string[]): Options {
 		}
 		else if (options.command === "check" && arg === "--json" && args[i + 1] && !args[i + 1]?.startsWith("--")) {
 			options.json = resolve(args[++i] as string);
+		} else if (options.command === "check" && arg === "--baseline" && args[i + 1] && !args[i + 1]?.startsWith("--")) {
+			options.baselineFile = resolve(args[++i] as string);
+		} else if (options.command === "check" && arg === "--scenarios" && args[i + 1] && !args[i + 1]?.startsWith("--")) {
+			options.scenarioFile = resolve(args[++i] as string);
 		} else throw new Error(`unknown or incomplete option: ${arg}`);
 	}
 	if (options.command === "screen-reader") {
@@ -146,7 +158,7 @@ async function runChecks(page: Page, pageId: string): Promise<CheckResult> {
 	// every check that reads the natural page state.
 	const natural = [
 		pauseStopHide, audioAutoplay, runAxe, scopeCoverage, interactionChecks,
-		keyboardWalk, altTextQuality, linkTextQuality,
+		keyboardWalk, altTextQuality, linkTextQuality, localResources,
 		keyboardScrollableRegions, focusNotObscured, nonTextContrast,
 		stateContrast, focusIndicators,
 	] as const;
@@ -155,6 +167,9 @@ async function runChecks(page: Page, pageId: string): Promise<CheckResult> {
 	const findings: CheckResult["findings"] = [];
 	const needsReview: NonNullable<CheckResult["needsReview"]> = [];
 	const notes: string[] = [];
+	const evaluations: NonNullable<CheckResult["evaluations"]> = [];
+	const rules = new Map<string, NonNullable<CheckResult["rules"]>[number]>();
+	const untested: NonNullable<CheckResult["untested"]> = [];
 	const run = async (check: (page: Page, pageId: string) => Promise<CheckResult>, newVariantsOnly = false) => {
 		try {
 			const result = await check(page, pageId);
@@ -165,29 +180,58 @@ async function runChecks(page: Page, pageId: string): Promise<CheckResult> {
 			needsReview.push(...(result.needsReview ?? []).filter((item) =>
 				!newVariantsOnly || !reviewKeys.has(`${item.rule}\0${item.selector ?? ""}`)));
 			notes.push(...result.notes);
+			evaluations.push(...(result.evaluations ?? []));
+			for (const rule of result.rules ?? []) rules.set(`${rule.id}\0${rule.rulesetVersion}`, rule);
+			untested.push(...(result.untested ?? []));
 		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			untested.push({
+				type: "check",
+				check: check.name,
+				page: pageId,
+				state: check === darkSchemeVisuals ? "dark" : "initial",
+				outcome: "untested",
+				reason,
+			});
 			notes.push(
-				`${check.name} did not run on ${pageId}: ${error instanceof Error ? error.message : String(error)} — treat as unchecked, not as clean`,
+				`${check.name} did not run on ${pageId}: ${reason} — treat as unchecked, not as clean`,
 			);
 		}
 	};
-	for (const check of natural) {
-		await run(check);
-		if (page.isClosed()) return { findings, needsReview, notes };
+	const checks: Array<{
+		check: (page: Page, pageId: string) => Promise<CheckResult>;
+		newVariantsOnly?: boolean;
+	}> = [
+		...natural.map((check) => ({ check })),
+		{ check: darkSchemeVisuals, newVariantsOnly: true },
+		...mutating.map((check) => ({ check })),
+	];
+	for (let index = 0; index < checks.length; index++) {
+		const current = checks[index];
+		if (!current) continue;
+		if (page.isClosed()) {
+			for (const remaining of checks.slice(index)) {
+				untested.push({
+					type: "check",
+					check: remaining.check.name,
+					page: pageId,
+					state: remaining.check === darkSchemeVisuals ? "dark" : "initial",
+					outcome: "untested",
+					reason: "page closed before check ran",
+				});
+			}
+			break;
+		}
+		await run(current.check, current.newVariantsOnly);
 	}
-	await run(darkSchemeVisuals, true);
-	if (page.isClosed()) return { findings, needsReview, notes };
-	for (const check of mutating) {
-		await run(check);
-		if (page.isClosed()) break;
-	}
-	return { findings, needsReview, notes };
+	return { findings, needsReview, notes, evaluations, rules: [...rules.values()], untested };
 }
 
 async function auditPages(
 	context: BrowserContext,
 	pages: Awaited<ReturnType<typeof discover>>["pages"],
 	blockedRequests: BlockedRequest[],
+	scenarios: Scenario[],
 ): Promise<PageAudit[]> {
 	const audits: PageAudit[] = [];
 	for (const discoveredPage of pages) {
@@ -201,15 +245,21 @@ async function auditPages(
 					timeout: NAVIGATION_TIMEOUT_MS,
 				});
 			} catch (error) {
+				const reason = `navigation failed: ${error instanceof Error ? error.message : String(error)}`;
 				audits.push({
 					page: discoveredPage,
-					triage: {
-						ok: false,
-						reason: `navigation failed: ${error instanceof Error ? error.message : String(error)}`,
-					},
+					triage: { ok: false, reason },
 					audited: false,
 					findings: [],
 					notes: [],
+					untested: [{
+						type: "check",
+						check: "page-audit",
+						page: discoveredPage.file,
+						state: "initial",
+						outcome: "untested",
+						reason,
+					}],
 				});
 				continue;
 			}
@@ -217,20 +267,114 @@ async function auditPages(
 			const settleNote = await settle(page);
 			const verdict = await triage(page, response?.status() ?? null, blockedRequests.length - blockedBefore);
 			if (!verdict.ok) {
-				audits.push({ page: discoveredPage, triage: verdict, audited: false, findings: [], notes: settleNote ? [settleNote] : [] });
+				audits.push({
+					page: discoveredPage,
+					triage: verdict,
+					audited: false,
+					findings: [],
+					notes: settleNote ? [settleNote] : [],
+					untested: [{
+						type: "check",
+						check: "page-audit",
+						page: discoveredPage.file,
+						state: "initial",
+						outcome: "untested",
+						reason: verdict.reason ?? "page triage failed",
+					}],
+				});
 				continue;
 			}
 
 			const title = await page.title();
-			const result = await withPageTimeout(page, () => runChecks(page, discoveredPage.file));
+			let result: CheckResult;
+			try {
+				result = await withPageTimeout(page, () => runChecks(page, discoveredPage.file));
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				audits.push({
+					page: discoveredPage,
+					triage: { ok: false, reason },
+					audited: false,
+					title,
+					findings: [],
+					notes: settleNote ? [settleNote] : [],
+					untested: [{
+						type: "check",
+						check: "page-audit",
+						page: discoveredPage.file,
+						state: "initial",
+						outcome: "untested",
+						reason,
+					}],
+				});
+				continue;
+			}
+			const stateResults = [result];
+			for (const scenario of scenarios.filter((candidate) => candidate.page === discoveredPage.file)) {
+				const statePage = await context.newPage();
+				try {
+					const blockedBeforeState = blockedRequests.length;
+					const response = await statePage.goto(discoveredPage.url, {
+						waitUntil: "load",
+						timeout: NAVIGATION_TIMEOUT_MS,
+					});
+					const settleNote = await settle(statePage);
+					const stateVerdict = await triage(
+						statePage,
+						response?.status() ?? null,
+						blockedRequests.length - blockedBeforeState,
+					);
+					if (!stateVerdict.ok) throw new Error(stateVerdict.reason ?? "page triage failed");
+					await runScenarioActions(statePage, scenario);
+					const stateResult = await withPageTimeout(statePage, () => runChecks(statePage, discoveredPage.file));
+					stateResults.push({
+						findings: stateResult.findings.map((item) => ({ ...item, state: scenario.id })),
+						needsReview: (stateResult.needsReview ?? []).map((item) => ({ ...item, state: scenario.id })),
+						notes: [
+							...(settleNote ? [`state ${scenario.id}: ${settleNote}`] : []),
+							...stateResult.notes.map((note) => `state ${scenario.id}: ${note}`),
+						],
+						evaluations: (stateResult.evaluations ?? []).map((evaluation) => ({ ...evaluation, state: scenario.id })),
+						rules: stateResult.rules,
+						untested: (stateResult.untested ?? []).map((evaluation) => ({ ...evaluation, state: scenario.id })),
+					});
+				} catch (error) {
+					const reason = error instanceof Error ? error.message : String(error);
+					stateResults.push({
+						findings: [],
+						notes: [`state ${scenario.id} did not run on ${discoveredPage.file}: ${reason} — treat as unchecked, not as clean`],
+						untested: [{
+							type: "check",
+							check: `scenario:${scenario.id}`,
+							page: discoveredPage.file,
+							state: scenario.id,
+							outcome: "untested",
+							reason,
+						}],
+					});
+				} finally {
+					if (!statePage.isClosed()) await statePage.close();
+				}
+			}
+			const combined: CheckResult = {
+				findings: stateResults.flatMap((state) => state.findings),
+				needsReview: stateResults.flatMap((state) => state.needsReview ?? []),
+				notes: stateResults.flatMap((state) => state.notes),
+				evaluations: stateResults.flatMap((state) => state.evaluations ?? []),
+				rules: stateResults.flatMap((state) => state.rules ?? []),
+				untested: stateResults.flatMap((state) => state.untested ?? []),
+			};
 			audits.push({
 				page: discoveredPage,
 				triage: verdict,
 				audited: true,
 				title,
-				findings: result.findings,
-				needsReview: result.needsReview,
-				notes: settleNote ? [settleNote, ...result.notes] : result.notes,
+				findings: combined.findings,
+				needsReview: combined.needsReview,
+				notes: settleNote ? [settleNote, ...combined.notes] : combined.notes,
+				evaluations: combined.evaluations,
+				rules: combined.rules,
+				untested: combined.untested,
 			});
 		} finally {
 			if (!page.isClosed()) await page.close();
@@ -255,6 +399,9 @@ async function main(args: string[]): Promise<number> {
 	let browser: Browser | undefined;
 	try {
 		const options = parseArgs(args);
+		const baseline = options.command === "check" && options.baselineFile
+			? parseBaseline(JSON.parse(await readFile(options.baselineFile, "utf8")) as unknown)
+			: undefined;
 		if (options.command === "screen-reader") {
 			console.error("praxity-check: starting an acknowledged disruptive session; VoiceOver and Safari will take keyboard and screen focus");
 		}
@@ -262,6 +409,14 @@ async function main(args: string[]): Promise<number> {
 		server = await serve(input.root);
 		const auditOrigin = server.origin;
 		const discovery = await discover(input.root, auditOrigin);
+		const scenarios = options.command === "check" && options.scenarioFile
+			? await loadScenarios(options.scenarioFile)
+			: [];
+		const knownPages = new Set(discovery.pages.map((page) => page.file));
+		const missingScenario = scenarios.find((scenario) => !knownPages.has(scenario.page));
+		if (missingScenario) {
+			throw new Error(`scenario ${JSON.stringify(missingScenario.id)} refers to unknown page ${JSON.stringify(missingScenario.page)}`);
+		}
 		if (options.command === "screen-reader") {
 			const page = resolveScreenReaderPage(discovery.pages, auditOrigin, options.page as string);
 			console.log(await runScreenReader({
@@ -281,9 +436,10 @@ async function main(args: string[]): Promise<number> {
 		// also prevents the package from installing one during the run (spec §4).
 		const context = await browser.newContext({
 			serviceWorkers: "block",
-			viewport: { width: 1280, height: 720 },
+			viewport: VIEWPORT,
 			colorScheme: "light",
 		});
+		await instrumentShadowRoots(context);
 		context.setDefaultTimeout(ACTION_TIMEOUT_MS);
 		context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
 
@@ -317,7 +473,7 @@ async function main(args: string[]): Promise<number> {
 			return packet.auditedPages > 0 ? 0 : 2;
 		}
 
-		const pages = await auditPages(context, discovery.pages, blockedRequests);
+		const pages = await auditPages(context, discovery.pages, blockedRequests, scenarios);
 		const report = createReport(
 			options.target,
 			input.wasZip,
@@ -325,6 +481,14 @@ async function main(args: string[]): Promise<number> {
 			pages,
 			blockedRequests,
 			options.allowNetwork,
+			{
+				runtime: { name: "node", version: process.version },
+				browser: { engine: "chromium", version: browser.version() },
+				viewport: VIEWPORT,
+				colorScheme: "light",
+			},
+			scenarios,
+			baseline,
 		);
 		console.log(humanSummary(report, options.minConfidence));
 		if (options.json) await writeFile(options.json, `${JSON.stringify(report, null, 2)}\n`);
