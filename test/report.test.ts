@@ -2,10 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { Finding, ReviewItem } from "../src/checks.ts";
-import { CREDITS_URL, createReport, humanSummary, PROJECT_URL, TOOL_NAME } from "../src/report.ts";
+import {
+	type AuditEnvironment,
+	CREDITS_URL,
+	createReport,
+	humanSummary,
+	parseBaseline,
+	PROJECT_URL,
+	TOOL_NAME,
+} from "../src/report.ts";
+
+const ENVIRONMENT: AuditEnvironment = {
+	runtime: { name: "node", version: "v24.18.0" },
+	browser: { engine: "chromium", version: "140.0.0.0" },
+	viewport: { width: 1280, height: 720 },
+	colorScheme: "light",
+};
 
 test("reports carry canonical attribution and credits", () => {
-	const report = createReport("/tmp/example", false, { pages: [], stubs: [] }, [], [], false);
+	const report = createReport("/tmp/example", false, { pages: [], stubs: [] }, [], [], false, ENVIRONMENT, []);
 
 	assert.equal(report.toolName, TOOL_NAME);
 	assert.equal(report.projectUrl, PROJECT_URL);
@@ -48,10 +63,15 @@ test("needs-review evidence never becomes a finding or a withheld finding", () =
 		}],
 		[],
 		false,
+		ENVIRONMENT,
+		[],
 	);
 
-	assert.equal(report.schemaVersion, 3);
+	assert.equal(report.schemaVersion, 4);
+	assert.deepEqual(report.environment, ENVIRONMENT);
 	assert.equal(report.needsReview.length, 1);
+	assert.match(report.findings[0]?.occurrenceId ?? "", /^occ_[a-f0-9]{16}$/);
+	assert.equal(report.findings[0]?.state, "initial");
 	assert.equal(report.counts.needsReview, 1);
 	const summary = humanSummary(report, "medium");
 	assert.doesNotMatch(summary, /Withheld|people with|affected users/i);
@@ -80,6 +100,8 @@ test("repeated page titles produce one non-gating review question", () => {
 		})),
 		[],
 		false,
+		ENVIRONMENT,
+		[],
 	);
 
 	assert.equal(report.findings.length, 0);
@@ -87,4 +109,151 @@ test("repeated page titles produce one non-gating review question", () => {
 	assert.equal(report.needsReview[0]?.rule, "page-title-repeated");
 	assert.match(report.needsReview[0]?.evidence ?? "", /lesson-one\.html.*lesson-two\.html/);
 	assert.equal(report.counts.needsReview, 1);
+});
+
+test("schema v4 keeps outcomes, occurrence identity, and review disposition separate", () => {
+	const page = { file: "page.html", url: "http://127.0.0.1/page.html" };
+	const finding: Finding = {
+		what: "The control has no accessible name.",
+		page: page.file,
+		selector: "button#save",
+		evidence: "accessible name is empty",
+		fix: "Add a visible label.",
+		lens: "a11y",
+		confidence: "high",
+		basis: "WCAG 4.1.2 Name, Role, Value (A)",
+		rule: "control-name",
+	};
+	const review: ReviewItem = {
+		what: "Confirm that the status message is announced.",
+		page: page.file,
+		selector: "div#status",
+		evidence: "announcement requires assistive-technology review",
+		lens: "a11y",
+		basis: "WCAG 4.1.3 Status Messages (AA)",
+		rule: "status-announcement",
+	};
+	const audit = {
+		page,
+		triage: { ok: true },
+		audited: true,
+		findings: [finding],
+		needsReview: [review],
+		notes: [],
+		evaluations: [
+			{ type: "rule" as const, rule: "clean-rule", page: page.file, state: "initial", outcome: "passed" as const },
+			{ type: "rule" as const, rule: "absent-rule", page: page.file, state: "initial", outcome: "inapplicable" as const },
+		],
+		untested: [{
+			type: "check" as const,
+			check: "shadow-dom",
+			page: page.file,
+			state: "initial",
+			outcome: "untested" as const,
+			reason: "closed shadow root",
+		}],
+	};
+	const report = createReport(
+		"/tmp/example",
+		false,
+		{ pages: [page], stubs: [] },
+		[audit],
+		[],
+		false,
+		ENVIRONMENT,
+		[],
+	);
+	const outcomes = new Set(report.evaluations.map((evaluation) => evaluation.outcome));
+	assert.deepEqual(outcomes, new Set(["passed", "failed", "cantTell", "inapplicable", "untested"]));
+
+	const changedEvidence = createReport(
+		"/tmp/example",
+		false,
+		{ pages: [page], stubs: [] },
+		[{ ...audit, findings: [{ ...finding, evidence: "a clearer excerpt" }] }],
+		[],
+		false,
+		ENVIRONMENT,
+		[],
+	);
+	assert.equal(report.findings[0]?.occurrenceId, changedEvidence.findings[0]?.occurrenceId);
+	assert.ok(!("comparison" in report.findings[0]!));
+	assert.equal(report.findings[0]?.disposition, "unreviewed");
+});
+
+test("a baseline compares exact occurrences without rewriting outcomes", () => {
+	const page = { file: "page.html", url: "http://127.0.0.1/page.html" };
+	const finding = (selector: string): Finding => ({
+		what: "The control has no accessible name.",
+		page: page.file,
+		selector,
+		evidence: "accessible name is empty",
+		fix: "Add a visible label.",
+		lens: "a11y",
+		confidence: "high",
+		basis: "WCAG 4.1.2 Name, Role, Value (A)",
+		rule: "control-name",
+	});
+	const report = (findings: Finding[], baseline?: ReturnType<typeof parseBaseline>) => createReport(
+		"/tmp/example",
+		false,
+		{ pages: [page], stubs: [] },
+		[{
+			page,
+			triage: { ok: true },
+			audited: true,
+			findings,
+			needsReview: [],
+			notes: [],
+		}],
+		[],
+		false,
+		ENVIRONMENT,
+		[],
+		baseline,
+	);
+
+	const prior = JSON.parse(JSON.stringify(report([finding("button#save"), finding("button#old")]))) as {
+		findings: Array<Record<string, unknown>>;
+	};
+	Object.assign(prior.findings[0]!, {
+		disposition: "accepted",
+		review: { reason: "Known legacy control", owner: "Accessibility lead", reviewedAt: "2026-08-29" },
+	});
+	Object.assign(prior.findings[1]!, {
+		disposition: "falsePositive",
+		review: { reason: "Third-party test shim", owner: "Accessibility lead", reviewedAt: "2026-08-29" },
+	});
+	const current = report([finding("button#save"), finding("button#cancel")], parseBaseline(prior));
+	const existing = current.findings.find((item) => item.selector === "button#save");
+	const added = current.findings.find((item) => item.selector === "button#cancel");
+
+	assert.equal(existing?.comparison, "existing");
+	assert.equal(existing?.disposition, "accepted");
+	assert.equal(existing?.review?.reason, "Known legacy control");
+	assert.equal(added?.comparison, "new");
+	assert.equal(added?.disposition, "unreviewed");
+	assert.equal(current.changes?.resolved[0]?.selector, "button#old");
+	assert.equal(current.changes?.resolved[0]?.disposition, "falsePositive");
+	assert.ok(current.evaluations.some((item) =>
+		item.type === "rule" && item.rule === "control-name" && item.outcome === "failed"
+	));
+	assert.match(humanSummary(current), /1 new occurrence, 1 existing occurrence, 1 resolved occurrence/);
+});
+
+test("reviewed baseline occurrences require accountable metadata", () => {
+	const report = createReport("/tmp/example", false, { pages: [], stubs: [] }, [], [], false, ENVIRONMENT, []);
+	const invalid = {
+		...report,
+		findings: [{
+			occurrenceId: "occ_4477f9b76d450328",
+			rule: "control-name",
+			page: "page.html",
+			selector: "button#save",
+			state: "initial",
+			disposition: "accepted",
+			review: { reason: "Known issue", reviewedAt: "2026-08-29" },
+		}],
+	};
+	assert.throws(() => parseBaseline(invalid), /reason, owner, and YYYY-MM-DD/);
 });

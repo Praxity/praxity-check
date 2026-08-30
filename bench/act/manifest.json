@@ -1,0 +1,96 @@
+{
+	"source": {
+		"name": "ACT Task Force test cases",
+		"feed": "https://www.w3.org/WAI/content-assets/wcag-act-rules/testcases.json",
+		"feedSha256": "a9a1483e24335d9ec49429468963823673d7e27ca3085999ecc2770d5307d053",
+		"retrieved": "2026-08-29",
+		"license": "W3C Software and Document Notice and License"
+	},
+	"mappings": [
+		{
+			"actRuleId": "oj04fd",
+			"praxityRule": "focus-visible",
+			"consistency": "partial"
+		},
+		{
+			"actRuleId": "0ssw9k",
+			"praxityRule": "scroll-region-keyboard",
+			"consistency": "partial"
+		}
+	],
+	"cases": [
+		{
+			"actRuleId": "oj04fd",
+			"praxityRule": "focus-visible",
+			"testcaseId": "52be6331dc0978990a8b806a9a4a84bf738a43e1",
+			"title": "Passed Example 1",
+			"expected": "passed",
+			"expectedFinding": false,
+			"consistent": true
+		},
+		{
+			"actRuleId": "oj04fd",
+			"praxityRule": "focus-visible",
+			"testcaseId": "b44aa294df6f0de62f11f6ae732087d92c90b448",
+			"title": "Passed Example 3",
+			"expected": "passed",
+			"expectedFinding": false,
+			"consistent": true
+		},
+		{
+			"actRuleId": "oj04fd",
+			"praxityRule": "focus-visible",
+			"testcaseId": "f1c9efb4c8d1b5f7870c693bce2e6ca046dd768d",
+			"title": "Failed Example 1",
+			"expected": "failed",
+			"expectedFinding": true,
+			"consistent": true
+		},
+		{
+			"actRuleId": "oj04fd",
+			"praxityRule": "focus-visible",
+			"testcaseId": "90789ad82a761b7697418e8cb403db103f0925a2",
+			"title": "Inapplicable Example 1",
+			"expected": "inapplicable",
+			"expectedFinding": false,
+			"consistent": true
+		},
+		{
+			"actRuleId": "0ssw9k",
+			"praxityRule": "scroll-region-keyboard",
+			"testcaseId": "89302c4f9eaf142418751a45e6dd025d5d294591",
+			"title": "Passed Example 1",
+			"expected": "passed",
+			"expectedFinding": false,
+			"consistent": true
+		},
+		{
+			"actRuleId": "0ssw9k",
+			"praxityRule": "scroll-region-keyboard",
+			"testcaseId": "5fa34d0a7eea03109cd12c0e7c21fce793c268db",
+			"title": "Failed Example 1",
+			"expected": "failed",
+			"expectedFinding": true,
+			"consistent": true
+		},
+		{
+			"actRuleId": "0ssw9k",
+			"praxityRule": "scroll-region-keyboard",
+			"testcaseId": "bb9ee4cc0b4779228701779090f461ecb2947b82",
+			"title": "Inapplicable Example 1",
+			"expected": "inapplicable",
+			"expectedFinding": false,
+			"consistent": true
+		},
+		{
+			"actRuleId": "0ssw9k",
+			"praxityRule": "scroll-region-keyboard",
+			"testcaseId": "fa27b58829c18976ac66f3874f40c5be712fe64b",
+			"title": "Passed Example 3",
+			"expected": "passed",
+			"expectedFinding": true,
+			"consistent": false,
+			"note": "Praxity Check inspects a scroll region made inert by an open modal dialog and reports it as unreachable."
+		}
+	]
+}
