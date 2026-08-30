@@ -121,9 +121,17 @@ const CONTENT_QUALITY_RULES = new Set([
 	"local-resource-missing",
 ]);
 
-function occurrenceId(item: Pick<Finding | ReviewItem, "rule" | "page" | "selector" | "state">): string {
-	const identity = [item.rule, item.page, item.selector ?? "", item.state ?? "initial"];
+type OccurrenceIdentity = Pick<Finding | ReviewItem, "rule" | "page" | "selector" | "state">;
+
+const GENERATED_ASSESSMENT_ID = /(#rs-(?:choice|match|cat|hs|matrix)-)[a-z0-9]{6}(?=-|$)/g;
+
+function occurrenceIdForSelector(item: OccurrenceIdentity, selector: string | undefined): string {
+	const identity = [item.rule, item.page, selector ?? "", item.state ?? "initial"];
 	return `occ_${createHash("sha256").update(JSON.stringify(identity)).digest("hex").slice(0, 16)}`;
+}
+
+function occurrenceId(item: OccurrenceIdentity): string {
+	return occurrenceIdForSelector(item, item.selector?.replace(GENERATED_ASSESSMENT_ID, "$1<generated>"));
 }
 
 function reportOccurrence<T extends Finding | ReviewItem>(item: T): T & OccurrenceStatus {
@@ -159,7 +167,9 @@ function parseBaselineOccurrence(value: unknown, result: BaselineOccurrence["res
 		(selector !== undefined && typeof selector !== "string") ||
 		typeof state !== "string"
 	) throw new Error(`${label} has invalid occurrence identity`);
-	if (id !== occurrenceId({ rule, page, selector, state })) {
+	const identity = { rule, page, selector, state };
+	const normalizedId = occurrenceId(identity);
+	if (id !== normalizedId && id !== occurrenceIdForSelector(identity, selector)) {
 		throw new Error(`${label} occurrenceId does not match its rule, page, selector, and state`);
 	}
 
@@ -185,7 +195,7 @@ function parseBaselineOccurrence(value: unknown, result: BaselineOccurrence["res
 	}
 	return {
 		result,
-		occurrenceId: id,
+		occurrenceId: normalizedId,
 		rule,
 		page,
 		...(selector === undefined ? {} : { selector }),

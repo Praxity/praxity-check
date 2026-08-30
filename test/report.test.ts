@@ -241,6 +241,44 @@ test("a baseline compares exact occurrences without rewriting outcomes", () => {
 	assert.match(humanSummary(current), /1 new occurrence, 1 existing occurrence, 1 resolved occurrence/);
 });
 
+test("generated assessment ids do not create baseline churn", () => {
+	const page = { file: "complex-assessments.html", url: "http://127.0.0.1/complex-assessments.html" };
+	const review = (selector: string): ReviewItem => ({
+		what: "Colour contrast could not be determined automatically.",
+		page: page.file,
+		selector,
+		evidence: "background colour could not be determined due to a pseudo element",
+		lens: "a11y",
+		basis: "WCAG 1.4.3 (AA)",
+		rule: "axe:color-contrast",
+	});
+	const report = (selector: string, baseline?: ReturnType<typeof parseBaseline>) => createReport(
+		"/tmp/example",
+		false,
+		{ pages: [page], stubs: [] },
+		[{ page, triage: { ok: true }, audited: true, findings: [], needsReview: [review(selector)], notes: [] }],
+		[],
+		false,
+		ENVIRONMENT,
+		[],
+		baseline,
+	);
+
+	const prior = JSON.parse(JSON.stringify(report("th#rs-cat-0suiak-item-assessment-164-category-1-0"))) as {
+		needsReview: Array<Record<string, unknown>>;
+	};
+	// This is the raw-selector occurrence ID emitted by v0.2.0.
+	prior.needsReview[0]!.occurrenceId = "occ_bf73f072c1c88741";
+	const current = report(
+		"th#rs-cat-rau2xd-item-assessment-164-category-1-0",
+		parseBaseline(prior),
+	);
+
+	assert.equal(current.needsReview[0]?.comparison, "existing");
+	assert.equal(current.needsReview[0]?.selector, "th#rs-cat-rau2xd-item-assessment-164-category-1-0");
+	assert.deepEqual(current.changes?.resolved, []);
+});
+
 test("reviewed baseline occurrences require accountable metadata", () => {
 	const report = createReport("/tmp/example", false, { pages: [], stubs: [] }, [], [], false, ENVIRONMENT, []);
 	const invalid = {

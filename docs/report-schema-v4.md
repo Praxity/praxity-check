@@ -8,7 +8,8 @@ turn unanswered checks into passes.
 `findings` and `needsReview` remain the main occurrence arrays. Each occurrence
 now has:
 
-- `occurrenceId`, derived from rule, page, selector, and state;
+- `occurrenceId`, derived from rule, page, selector, and state after known
+  generated component-ID fragments are removed;
 - `state`, either `initial`, `dark`, or a declared scenario ID;
 - `disposition`, initially `unreviewed`.
 
