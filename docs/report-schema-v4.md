@@ -73,7 +73,10 @@ This keeps execution failure separate from a standards result.
 
 `environment` records the Node runtime, Chromium version, viewport, and colour
 scheme used by `check`. `rulesets` records the Praxity Check and axe-core
-versions. Rule metadata also carries its source version.
+versions. Rule metadata also carries its source version. In an inference-only
+import, no browser runs: `environment.browser`, `viewport` and `colorScheme` are
+`null`. The Node runtime still describes the import process. Browser capture
+conditions remain under each imported review's `retainedEvidence.environment`.
 
 `scenarios` retains the validated page, state ID, and actions supplied with
 `--scenarios`. A scenario that cannot run produces an `untested` evaluation.
@@ -89,3 +92,41 @@ versions. Rule metadata also carries its source version.
    Absence from `findings` is not a pass.
 6. Treat `disposition` independently from the evaluation outcome. Existing v4
    reports without it are accepted as baselines and treated as `unreviewed`.
+
+## Imported HTML interaction reviews
+
+`inferenceReviews` holds validated model observations separately from the
+machine `findings`, `needsReview` and `evaluations` arrays. The shared `feedback`
+view groups them by category and retains `method: "inference"`, model provenance,
+location and evidence references. Inference-only reports leave machine result
+arrays empty and mark deterministic checks `untested` in `feedback.coverage`.
+Imported observations do not affect the deterministic failure exit code.
+
+The optional `contentSha256` identifies the private snapshot used for bundle
+preparation or review import. It hashes sorted relative file paths and each
+file's SHA-256, so a folder and ZIP with identical file contents share a revision.
+Local assets count, including CSS and scripts. Ordinary deterministic reports
+without imported reviews omit this hash and remain unbound to a content revision.
+
+New HTML reviews use `schemaVersion: "html-review-2"`. Version 1 reviews remain
+importable. An HTML review stays beside the bundle's
+`manifest.json` and `evidence.json`. The import verifies its content revision and
+retained evidence hash. Findings identify the primary candidate, its page and
+rendered DOM state; executed-behavior claims must cite its recorded action traces.
+Coverage lists reviewed pages and candidates, not all duplicate occurrences or
+whole-page accessibility. The full schema travels in `review.schema.json`.
+
+A review file is limited to 2 MiB and 200 findings. Retained evidence is limited
+to 16 MiB. Unknown identities, unsupported domains, invented fields and stale
+local assets reject the import. Hashes bind artifacts, not reviewer honesty or
+current runtime state. Review questions and suggestions remain distinct from
+model observations of defects, and none establishes conformance.
+
+Version 2 adds `claim: "coverage"` for a `needs-context` question about missing
+evidence. It may have no action traces and cannot represent an observed defect
+or suggestion. `executed-behavior` still requires a retained trace. A coverage
+question asks for a check before proposing a source change.
+
+Exported schemas bind content and evidence hashes and constrain reference values
+for small packets. Production import still verifies reference relationships,
+unique lists and evidence limits, including after schema-constrained generation.

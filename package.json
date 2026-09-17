@@ -1,6 +1,6 @@
 {
 	"name": "praxity-check",
-	"version": "0.2.1",
+	"version": "0.3.0",
 	"private": true,
 	"type": "module",
 	"description": "Accessibility checker for learning packages",
@@ -10,6 +10,9 @@
 	"scripts": {
 		"bench": "node bench/wcag/run.ts",
 		"check": "node src/cli.ts",
+		"package": "node scripts/package.mjs",
+		"test:package": "node --test scripts/package.test.mjs",
+		"test:bench": "node --test bench/interaction-review/materialize.test.mjs bench/interaction-review/evidence.test.ts bench/interaction-review/score.test.ts bench/pdf/score.test.ts",
 		"typecheck": "tsc --noEmit",
 		"test": "node --test test/*.test.ts"
 	},

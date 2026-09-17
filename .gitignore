@@ -9,3 +9,7 @@ playwright-report/
 # local fixtures and scratch probes
 *.local.json
 probe.ts
+
+# Python benchmark bytecode
+__pycache__/
+*.pyc
