@@ -20,7 +20,11 @@ test("standalone Check relocates with spaces and reports unavailable capabilitie
 	const relocated = join(root, "relocated Check with spaces");
 	await rename(staged, relocated);
 	for (const file of ["runtime/node", "runtime/LICENSE"]) assert.ok((await lstat(join(relocated, file))).isFile(), `${file} must be a regular bundled file`);
-	const env = { PATH: "/usr/bin:/bin", HOME: root };
+	const utilities = join(root, "shell utilities");
+	await mkdir(utilities);
+	// dirname is the launcher's only external shell utility; system PATH may contain Poppler.
+	await symlink("/usr/bin/dirname", join(utilities, "dirname"));
+	const env = { PATH: utilities, HOME: root };
 	const launcher = join(relocated, "bin/praxity-check");
 	assert.match(execFileSync(launcher, ["--help"], { cwd: root, env, encoding: "utf8" }), /compare-pdf/);
 	for (const file of ["LICENSE", "NOTICE.md", "THIRD-PARTY-NOTICES.md", "runtime/LICENSE"]) assert.ok((await readFile(join(relocated, file))).length);
