@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -11,7 +11,9 @@ const CLI = new URL("../src/cli.ts", import.meta.url);
 
 test("--help prints usage and exits successfully", async () => {
 	const { stdout, stderr } = await exec(process.execPath, [CLI.pathname, "--help"]);
-	assert.match(stdout, /^Usage:\n  praxity-check check <folder\|zip>/);
+	assert.match(stdout, /^Usage:\n  praxity-check check <folder\|zip\|pdf>/);
+	assert.match(stdout, /--min-image-ppi <number>/);
+	assert.match(stdout, /--paper-size A4\|Letter/);
 	assert.match(stdout, /praxity-check prepare-review <folder\|zip>/);
 	assert.match(stdout, /praxity-check screen-reader <folder\|zip>/);
 	assert.match(stdout, /--baseline <report\.json>/);
@@ -88,5 +90,26 @@ test("check scans a declared rendered state and records its actions", async () =
 		));
 	} finally {
 		await rm(root, { recursive: true, force: true });
+	}
+});
+
+
+test("PDF-looking folder names and PDF-first ZIPs retain HTML coverage", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "praxity-dispatch-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const folder = join(root, "course.pdf");
+	await mkdir(folder);
+	await writeFile(join(folder, "index.html"), '<!doctype html><html lang="en"><title>Folder</title><h1>Folder course</h1></html>');
+	const archive = join(root, "course.zip");
+	await copyFile(new URL("./fixtures/pdf-first.zip", import.meta.url), archive);
+	const renamedArchive = join(root, "course.bin");
+	await copyFile(archive, renamedArchive);
+	for (const input of [folder, archive, renamedArchive]) {
+		const output = join(root, "report.json");
+		await exec(process.execPath, [CLI.pathname, "check", input, "--json", output]).catch((error: { code?: number }) => { if (error.code !== 1) throw error; });
+		const report = JSON.parse(await readFile(output, "utf8"));
+		assert.equal(report.schemaVersion, 4);
+		assert.equal(report.target.wasZip, input !== folder);
+		assert.ok(report.pages.some((page: { file?: string; page?: string }) => JSON.stringify(page).includes("index.html")));
 	}
 });

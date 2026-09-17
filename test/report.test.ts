@@ -22,6 +22,9 @@ const ENVIRONMENT: AuditEnvironment = {
 test("reports carry canonical attribution and credits", () => {
 	const report = createReport("/tmp/example", false, { pages: [], stubs: [] }, [], [], false, ENVIRONMENT, []);
 
+	assert.deepEqual(report.selection, { checks: ["accessibility"], tier: "deterministic" });
+	const { selection, ...legacy } = report;
+	assert.deepEqual(parseBaseline(legacy), parseBaseline(report));
 	assert.equal(report.toolName, TOOL_NAME);
 	assert.equal(report.projectUrl, PROJECT_URL);
 	assert.equal(report.creditsUrl, CREDITS_URL);

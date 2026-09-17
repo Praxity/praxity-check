@@ -1,3 +1,4 @@
+import type { ImportedHtmlReview } from "./html-review.ts";
 import { createHash } from "node:crypto";
 import packageJson from "../package.json" with { type: "json" };
 import type {
@@ -12,6 +13,8 @@ import type {
 } from "./checks.ts";
 import type { DiscoveredPage, Discovery, RedirectStub } from "./discover.ts";
 import type { Scenario } from "./scenarios.ts";
+import { selectChecks } from "./selection.ts";
+import { htmlFeedback, type Feedback } from "./feedback.ts";
 
 export const TOOL_NAME = "Praxity Check";
 export const PROJECT_URL = "https://github.com/Praxity/praxity-check";
@@ -37,9 +40,9 @@ interface PageVerdict extends DiscoveredPage {
 
 export interface AuditEnvironment {
 	runtime: { name: "node"; version: string };
-	browser: { engine: "chromium"; version: string };
-	viewport: { width: number; height: number };
-	colorScheme: "light";
+	browser: { engine: "chromium"; version: string } | null;
+	viewport: { width: number; height: number } | null;
+	colorScheme: "light" | null;
 }
 
 export type Comparison = "new" | "existing";
@@ -81,6 +84,10 @@ export type Evaluation = RuleEvaluation | UntestedEvaluation;
 
 export interface AuditReport {
 	schemaVersion: 4;
+	contentSha256?: string;
+	inferenceReviews?: ImportedHtmlReview[];
+	feedback?: Feedback;
+	selection?: ReturnType<typeof selectChecks>;
 	toolName: typeof TOOL_NAME;
 	toolVersion: string;
 	projectUrl: typeof PROJECT_URL;
@@ -300,7 +307,7 @@ export function createReport(
 	environment: AuditEnvironment,
 	scenarios: Scenario[],
 	baseline?: Baseline,
-): AuditReport {
+): AuditReport & { feedback: Feedback } {
 	const rawFindings = pages.flatMap((page) => page.findings);
 	const rawNeedsReview = pages.flatMap((page) => page.needsReview ?? []);
 	const notes = pages.flatMap((page) => page.notes);
@@ -381,8 +388,9 @@ export function createReport(
 	const currentIds = new Set([...findings, ...needsReview].map((item) => item.occurrenceId));
 	const resolved = baseline?.occurrences.filter((item) => !currentIds.has(item.occurrenceId)) ?? [];
 
-	return {
+	const report: AuditReport = {
 		schemaVersion: 4,
+		selection: selectChecks({}),
 		toolName: TOOL_NAME,
 		toolVersion: packageJson.version,
 		projectUrl: PROJECT_URL,
@@ -409,6 +417,7 @@ export function createReport(
 			blockedRequests,
 		},
 	};
+	return { ...report, feedback: htmlFeedback(report) };
 }
 
 function count(noun: string, amount: number): string {

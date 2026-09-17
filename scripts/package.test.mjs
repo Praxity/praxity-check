@@ -1,0 +1,43 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { test } from "node:test";
+
+test("standalone Check relocates with spaces and reports unavailable capabilities without development PATH", async t => {
+	const root = await mkdtemp(join(tmpdir(), "standalone check "));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const staged = join(root, "staged");
+	const sourceNode = process.env.CHECK_NODE_DIST ?? dirname(dirname(process.execPath));
+	const linkedNode = join(root, "linked Node distribution");
+	await mkdir(join(linkedNode, "bin"), { recursive: true });
+	await symlink(join(sourceNode, "bin/node"), join(linkedNode, "bin/node"));
+	await symlink(join(sourceNode, "LICENSE"), join(linkedNode, "LICENSE"));
+	execFileSync(process.execPath, [fileURLToPath(new URL("package.mjs", import.meta.url)), "--node", linkedNode, "--output", staged]);
+	await rm(linkedNode, { recursive: true });
+	const relocated = join(root, "relocated Check with spaces");
+	await rename(staged, relocated);
+	for (const file of ["runtime/node", "runtime/LICENSE"]) assert.ok((await lstat(join(relocated, file))).isFile(), `${file} must be a regular bundled file`);
+	const env = { PATH: "/usr/bin:/bin", HOME: root };
+	const launcher = join(relocated, "bin/praxity-check");
+	assert.match(execFileSync(launcher, ["--help"], { cwd: root, env, encoding: "utf8" }), /compare-pdf/);
+	for (const file of ["LICENSE", "NOTICE.md", "THIRD-PARTY-NOTICES.md", "runtime/LICENSE"]) assert.ok((await readFile(join(relocated, file))).length);
+	assert.equal(JSON.parse(await readFile(join(relocated, "capabilities.json"), "utf8")).dependenciesSupplied, false);
+	// A valid synthetic one-page PDF; no source repository or fixture path is needed at runtime.
+	const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"];
+	let pdf = "%PDF-1.4\n";
+	const offsets = objects.map((object, i) => { const offset = Buffer.byteLength(pdf); pdf += `${i + 1} 0 obj\n${object}\nendobj\n`; return offset; });
+	const xref = Buffer.byteLength(pdf);
+	pdf += `xref\n0 4\n0000000000 65535 f \n${offsets.map(n => `${String(n).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+	const input = join(root, "synthetic input.pdf");
+	const output = join(root, "machine report.json");
+	await writeFile(input, pdf);
+	const result = spawnSync(launcher, ["check", input, "--json", output], { cwd: root, env, encoding: "utf8" });
+	assert.equal(result.status, 2, result.stderr);
+	const report = JSON.parse(await readFile(output, "utf8"));
+	assert.equal(report.machineStatus, "incomplete");
+	assert.ok(report.evidence.some(item => item.tool === "pdfinfo" && /ENOENT/.test(item.error)));
+	assert.ok(report.evaluations.some(item => item.rule === "pdf.open" && item.outcome === "untested"));
+});

@@ -1,0 +1,2 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Lesson activity</title></head><body><main><h1>Lesson activity</h1><div id="choice" role="checkbox" aria-describedby="result" tabindex="0" aria-checked="false">Include practice questions</div><p id="result">Practice questions excluded.</p><script>let on=false;function flip(){on=!on;result.textContent=on?'Practice questions included.':'Practice questions excluded.';}choice.onclick=flip;choice.onkeydown=e=>{if(e.key===' '){e.preventDefault();flip();}};</script></main></body></html>

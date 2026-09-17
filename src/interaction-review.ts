@@ -107,9 +107,20 @@ function indented(value: string): string {
 	return value.split("\n").map((line) => `    ${line}`).join("\n");
 }
 
+// ponytail: inspect two adjacent elements, not arbitrary page regions. Distant or
+// deeply nested panels need explicit references or reviewer follow-up.
+const DISCLOSURE_NEARBY = ((root: Element): Element[] => {
+	if (root.matches("details")) return Array.from(root.children).filter((child) => !child.matches("summary")).slice(0, 2);
+	if (!root.matches('button[aria-expanded], [role="button"][aria-expanded]')) return [];
+	const anchor = root.closest("h1, h2, h3, h4, h5, h6") ?? root;
+	const next = anchor.nextElementSibling;
+	return [next, next?.nextElementSibling].filter((element): element is Element => Boolean(element));
+}).toString();
+
 async function domSlice(locator: Locator): Promise<DomSlice> {
-	const data = await locator.evaluate((root, locateSource) => {
+	const data = await locator.evaluate((root, { locateSource, nearbySource }) => {
 		const locate = (0, eval)(locateSource) as (element: Element | null) => string;
+		const nearby = ((0, eval)(nearbySource) as (element: Element) => Element[])(root);
 		const semantic = "h1, h2, h3, h4, h5, h6, fieldset, form, details, nav, main, section, article, aside, li, table, [role]";
 		let context = root;
 		if (!context.matches(semantic)) {
@@ -129,12 +140,13 @@ async function domSlice(locator: Locator): Promise<DomSlice> {
 			html: context.outerHTML.replace(/\s+/g, " ").trim(),
 			contextSelector: locate(context),
 			visible: root.checkVisibility({ opacityProperty: true, visibilityProperty: true }),
-			related: [...references].slice(0, 16).map((id) => {
+			related: [...Array.from(references).slice(0, 16).map((id) => {
 				const element = document.getElementById(id);
 				return element ? `${locate(element)} ${element.outerHTML.replace(/\s+/g, " ").trim()}` : `#${id} [missing]`;
-			}),
+			}), ...nearby.filter((element) => !references.has(element.id)).map((element) =>
+				`[Nearby DOM context; relationship unverified] ${locate(element)} ${element.outerHTML.replace(/\s+/g, " ").trim()}`)].slice(0, 16),
 		};
-	}, UNIQUE_SELECTOR);
+	}, { locateSource: UNIQUE_SELECTOR, nearbySource: DISCLOSURE_NEARBY });
 	const context = data.contextSelector ? locator.page().locator(data.contextSelector) : locator;
 	const aria = await context.ariaSnapshot({ timeout: 2_000 }).catch((error: unknown) =>
 		`[unavailable: ${error instanceof Error ? error.message : String(error)}]`);
@@ -148,10 +160,11 @@ async function domSlice(locator: Locator): Promise<DomSlice> {
 }
 
 async function dynamicState(page: Page, rootSelector: string): Promise<string> {
-	const state = await page.evaluate(({ selector: rootSelector, locateSource }) => {
+	const state = await page.evaluate(({ selector: rootSelector, locateSource, nearbySource }) => {
 		const locate = (0, eval)(locateSource) as (element: Element | null) => string;
 		const root = document.querySelector(rootSelector);
 		if (!root) return { active: locate(document.activeElement), elements: ["candidate detached"] };
+		const nearby = ((0, eval)(nearbySource) as (element: Element) => Element[])(root);
 		const attrs = [
 			"role", "tabindex", "hidden", "inert", "open", "disabled", "required", "aria-hidden",
 			"aria-expanded", "aria-selected", "aria-checked", "aria-pressed", "aria-current", "aria-sort",
@@ -161,6 +174,7 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 		];
 		const interesting = [
 			root,
+			...nearby,
 			...Array.from(root.querySelectorAll('button, a[href], input, select, option, textarea, summary, [tabindex], [role], [aria-live], [aria-busy], [draggable="true"], [aria-grabbed]')),
 		].slice(0, 24);
 		const referenced = new Set<string>();
@@ -182,6 +196,7 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 			active: locate(document.activeElement),
 			elements: interesting.slice(0, 32).map((element) => ({
 				selector: locate(element),
+				...(nearby.includes(element) ? { context: "nearby DOM; relationship unverified" } : {}),
 				text: (element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
 				visible: element.checkVisibility({ opacityProperty: true, visibilityProperty: true }),
 				attributes: Object.fromEntries(attrs.flatMap((name) =>
@@ -195,8 +210,59 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 							: {},
 			})),
 		};
-	}, { selector: rootSelector, locateSource: UNIQUE_SELECTOR });
+	}, { selector: rootSelector, locateSource: UNIQUE_SELECTOR, nearbySource: DISCLOSURE_NEARBY });
 	return clip(JSON.stringify(state), 6_000);
+}
+
+/** Compare only retained fields, never infer DOM mutations or task completion. */
+export function summarizeRetainedState(before: string, after: string): string[] {
+	type ElementState = { selector: string; context?: string; text: string; visible: boolean; attributes: Record<string, string>; properties: Record<string, string | number | boolean> };
+	const object = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+	const parse = (source: string) => {
+		if (source.length > 6_000) throw new Error("bounded snapshot exceeded");
+		const state: unknown = JSON.parse(source);
+		if (!object(state) || Object.keys(state).some(key => !["active", "elements"].includes(key)) || typeof state.active !== "string" || !Array.isArray(state.elements) || state.elements.length > 32) throw new Error("unknown snapshot shape");
+		const elements = new Map<string, ElementState>();
+		for (const element of state.elements) {
+			if (!object(element) || Object.keys(element).some(key => !["selector", "context", "text", "visible", "attributes", "properties"].includes(key)) ||
+				typeof element.selector !== "string" || !element.selector || elements.has(element.selector) ||
+				typeof element.text !== "string" || typeof element.visible !== "boolean" ||
+				(element.context !== undefined && typeof element.context !== "string") ||
+				!object(element.attributes) || !Object.values(element.attributes).every(value => typeof value === "string") ||
+				!object(element.properties) || !Object.values(element.properties).every(value => typeof value === "string" || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value))) throw new Error("unknown or duplicate element shape");
+			elements.set(element.selector, element as ElementState);
+		}
+		return { active: state.active, elements };
+	};
+	try {
+		const previous = parse(before);
+		const current = parse(after);
+		const changes: string[] = [];
+		const value = (item: unknown) => item === undefined ? "absent" : JSON.stringify(item);
+		if (previous.active !== current.active) changes.push(`Focus: ${value(previous.active)} → ${value(current.active)}.`);
+		for (const selector of new Set([...previous.elements.keys(), ...current.elements.keys()])) {
+			const from = previous.elements.get(selector);
+			const to = current.elements.get(selector);
+			const label = `${value(selector)}${(to?.context ?? from?.context) ? ` [${to?.context ?? from?.context}]` : ""}`;
+			if (!from || !to) {
+				changes.push(`${label}: ${from ? "absent from" : "present only in"} the after retained snapshot; DOM presence was not compared.`);
+				continue;
+			}
+			for (const field of ["context", "visible", "text"] as const) {
+				if (from[field] !== to[field]) changes.push(`${label} ${field}: ${value(from[field])} → ${value(to[field])}.`);
+			}
+			for (const field of ["attributes", "properties"] as const) {
+				for (const key of new Set([...Object.keys(from[field]), ...Object.keys(to[field])])) {
+					const oldValue = Object.hasOwn(from[field], key) ? from[field][key] : undefined;
+					const newValue = Object.hasOwn(to[field], key) ? to[field][key] : undefined;
+					if (oldValue !== newValue) changes.push(`${label} ${field}.${key}: ${value(oldValue)} → ${value(newValue)}.`);
+				}
+			}
+		}
+		return changes.length ? changes : ["No change in retained fields; this is not an accessibility or task-completion verdict."];
+	} catch {
+		return ["Comparison unavailable: a retained snapshot is invalid, truncated, duplicated or has an unknown shape."];
+	}
 }
 
 async function record(page: Page, rootSelector: string, action: string, run: () => Promise<void>, setup?: string): Promise<Trace> {
@@ -228,25 +294,40 @@ async function tabTraces(page: Page, root: Locator, selector: string): Promise<{
 async function disclosureTraces(page: Page, root: Locator, selector: string): Promise<{ traces: Trace[]; note?: string }> {
 	const control = (await root.evaluate((element) => element.matches("details"))) ? root.locator("summary").first() : root;
 	if (!await control.count() || !await control.isVisible()) return { traces: [], note: "No visible disclosure control was available." };
-	await control.focus();
-	const traces = [await record(page, selector, "Enter", () => page.keyboard.press("Enter"), "Focused the disclosure control.")];
-	const openedDialog = await root.evaluate((element) => {
-		const target = document.getElementById(element.getAttribute("aria-controls") ?? "");
-		return target?.matches('dialog, [role="dialog"], [role="alertdialog"]') && target.checkVisibility();
-	});
-	if (openedDialog) {
-		traces.push(await record(page, selector, "Tab", () => page.keyboard.press("Tab")));
-		traces.push(await record(page, selector, "Escape", () => page.keyboard.press("Escape")));
-		if (await root.getAttribute("aria-expanded") === "true") {
+	const traces: Trace[] = [];
+	let note = "Nearby DOM context does not establish a panel relationship. Unchanged aria-expanded alone does not prove failed activation. Assess the requested result using the control name, retained content and before/after visibility. An unverified association does not erase an observed task failure when those identify the result; keep the source cause uncertain. Snapshots record state 250 ms after each action; later outcomes are not recorded. Enter and Space are tried independently; page reload resets DOM state between keys, but persisted application state may survive.";
+	try {
+		for (const key of ["Enter", "Space"]) {
+			if (key === "Space") {
+				await page.reload({ waitUntil: "load", timeout: NAVIGATION_TIMEOUT_MS });
+				const resetNote = await settle(page);
+				if (resetNote) note += ` Reset before Space: ${resetNote}`;
+			}
 			await control.focus();
-			traces.push(await record(page, selector, "Enter (restore)", () => page.keyboard.press("Enter"), "Escape did not close the dialog; refocused its trigger."));
+			traces.push(await record(page, selector, key, () => page.keyboard.press(key), "Focused the disclosure control from a fresh page load."));
+			const openedDialog = await root.evaluate((element) => {
+				const target = document.getElementById(element.getAttribute("aria-controls") ?? "");
+				return target?.matches('dialog, [role="dialog"], [role="alertdialog"]') && target.checkVisibility();
+			});
+			if (openedDialog) {
+				traces.push(await record(page, selector, "Tab", () => page.keyboard.press("Tab")));
+				traces.push(await record(page, selector, "Escape", () => page.keyboard.press("Escape")));
+				if (await root.getAttribute("aria-expanded") === "true") {
+					await control.focus();
+					traces.push(await record(page, selector, `${key} (restore)`, () => page.keyboard.press(key), "Escape did not close the dialog; refocused its trigger."));
+				}
+				note += " Containment and background interaction need a dedicated dialog trace.";
+				continue;
+			}
+			if (await root.evaluate((element) => element instanceof HTMLDetailsElement ? element.open : element.getAttribute("aria-expanded") === "true") &&
+				await control.evaluate((element) => element === document.activeElement)) {
+				traces.push(await record(page, selector, `${key} (restore)`, () => page.keyboard.press(key)));
+			}
 		}
-		return { traces, note: "Containment and background interaction need a dedicated dialog trace." };
+	} catch (error) {
+		note += ` Further disclosure actions could not be prepared: ${error instanceof Error ? error.message : String(error)}`;
 	}
-	if (await root.getAttribute("aria-expanded") === "true" && await control.evaluate((element) => element === document.activeElement)) {
-		traces.push(await record(page, selector, "Enter (restore)", () => page.keyboard.press("Enter")));
-	}
-	return { traces };
+	return { traces, note };
 }
 
 async function formTraces(page: Page, root: Locator, selector: string): Promise<{ traces: Trace[]; note?: string }> {
@@ -473,7 +554,7 @@ function renderPacket(
 				indented(candidate.dom.html),
 			);
 			if (candidate.dom.related.length > 0) {
-				lines.push("", "Related rendered elements:", "", ...candidate.dom.related.map(indented));
+				lines.push("", "Referenced or nearby rendered elements:", "", ...candidate.dom.related.map(indented));
 			}
 			if (candidate.traces.length > 0) {
 				lines.push("", "Prepared interactions:");
@@ -481,6 +562,7 @@ function renderPacket(
 					lines.push(
 						"",
 						`- Action: \`${trace.action}\`${trace.setup ? ` (${trace.setup})` : ""}`,
+						...summarizeRetainedState(trace.before, trace.after).map(change => `  - Retained comparison: ${change}`),
 						`  - Before: \`${trace.before}\``,
 						`  - After: \`${trace.after}\``,
 					);
@@ -505,7 +587,7 @@ export async function prepareInteractionReview(
 	pages: DiscoveredPage[],
 	blockedRequests: BlockedRequest[],
 	target: string,
-): Promise<{ markdown: string; auditedPages: number }> {
+) {
 	const pageResults: PageResult[] = [];
 	const evidence: CandidateEvidence[] = [];
 	const bySignature = new Map<string, CandidateEvidence>();
@@ -627,5 +709,6 @@ export async function prepareInteractionReview(
 			perSurfaceCaps,
 		),
 		auditedPages,
+		evidence: { pages: pageResults, candidates: evidence, environment, omitted, perSurfaceCaps },
 	};
 }

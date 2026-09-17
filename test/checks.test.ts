@@ -516,8 +516,13 @@ describe("automated checks fire on known defects", () => {
 	test("audioAutoplay reports long autoplay without a sound control", async () => {
 		const bad = await open("audio-broken.html");
 		const badResult = await audioAutoplay(bad, "audio-broken.html");
+		const playback = await bad.locator("audio").evaluate((audio: HTMLAudioElement) => ({
+			paused: audio.paused, currentTime: audio.currentTime, duration: audio.duration,
+			readyState: audio.readyState, error: audio.error?.message,
+		}));
 		await bad.close();
-		assert.equal(badResult.findings.filter((f) => f.rule === "audio-autoplay").length, 1);
+		assert.equal(badResult.findings.filter((f) => f.rule === "audio-autoplay").length, 1,
+			JSON.stringify({ result: badResult, playback }));
 
 		const good = await open("audio-clean.html");
 		const goodResult = await audioAutoplay(good, "audio-clean.html");
