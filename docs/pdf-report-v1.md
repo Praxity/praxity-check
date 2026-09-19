@@ -109,9 +109,9 @@ Use a new output directory; existing directories are rejected. Without `--output
 the command creates a private temporary directory and prints its path. The bundle
 contains selected page images, extracted words and geometry, a manifest, a review
 prompt and a JSON schema. It contains document content: keep it private and delete
-it when finished. Default preparation runs Poppler locally without calling a
-model or uploading
-content. Optional `--reviewer codex` runs a model review; `--classifier jev` labels
+it when finished. `--tier inference` runs the installed, signed-in Codex CLI by default, sending
+the selected evidence to the model. Add `--reviewer manual` to prepare a local
+bundle without calling a reviewer. Optional `--classifier jev` labels
 extracted page text only. See [reviewer setup](using-it.md#choose-a-classifier-and-reviewer).
 Rendering also requires Poppler's `pdftoppm`.
 

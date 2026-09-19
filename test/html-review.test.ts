@@ -41,7 +41,7 @@ test("HTML bundle captures real actions, imports retained evidence without brows
 	await mkdir(source);
 	await writeFile(join(source, "index.html"), html); await writeFile(join(source, "asset.css"), css);
 	await writeFile(archive, zip([["index.html", html], ["asset.css", css]]));
-	const prepared = run(["prepare-review", archive, "--tier", "inference", "--checks", "accessibility", "--output", bundle]);
+	const prepared = run(["prepare-review", archive, "--tier", "inference", "--checks", "accessibility", "--output", bundle, "--reviewer", "manual"]);
 	assert.equal(prepared.status, 0, prepared.stderr);
 	assert.match(prepared.stdout, /Prepared interactions/);
 	const evidence = JSON.parse(await readFile(join(bundle, "evidence.json"), "utf8"));
