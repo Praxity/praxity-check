@@ -9,6 +9,20 @@ import { normalizePdfReview, preparePdfReview, selectReviewPages, validatePdfRev
 const hash = "a".repeat(64);
 const review = { schemaVersion: "pdf-review-1", documentSha256: hash, tier: "visual", pagesReviewed: [1], reviewer: { model: "test-model" }, findings: [{ page: 1, confidence: "medium", message: "The title overlaps the first instruction.", consequence: "The instruction is difficult to read.", action: "Increase spacing after the title in the source.", origin: "Hypothesis: the source uses a fixed title height.", verification: "Regenerate and inspect the title and first instruction.", evidence: { observation: "The title descenders cross the instruction baseline." } }] };
 
+function assertStructuredSchema(value: unknown) {
+	assert.ok(value && typeof value === "object" && !Array.isArray(value));
+	const schema = value as Record<string, unknown>;
+	assert.equal(typeof schema.type, "string", "Every structured-output schema node needs an explicit type");
+	assert.equal(Object.hasOwn(schema, "uniqueItems"), false, "The importer enforces uniqueness outside the provider schema");
+	if (schema.type === "object") {
+		assert.equal(schema.additionalProperties, false);
+		assert.ok(schema.properties && typeof schema.properties === "object");
+		assert.deepEqual(schema.required, Object.keys(schema.properties));
+		for (const property of Object.values(schema.properties)) assertStructuredSchema(property);
+	}
+	if (schema.type === "array") assertStructuredSchema(schema.items);
+}
+
 test("PDF review import rejects stale, malformed and out-of-coverage evidence", () => {
 	assert.deepEqual(validatePdfReview(review, hash, 3), review);
 	const accepted = validatePdfReview(review, hash, 3);
@@ -65,6 +79,7 @@ test("real PDF renders privately, imports without changing machine verdict and c
 	assert.match(await readFile(join(output, "review-prompt.md"), "utf8"), /untrusted source material/);
 	const schema = JSON.parse(await readFile(join(output, "review.schema.json"), "utf8"));
 	assert.equal(schema.properties.schemaVersion.const, "pdf-review-2");
+	assertStructuredSchema(schema);
 	assert.deepEqual(schema.properties.findings.items.properties.category.enum, ["observed-defect", "needs-context", "suggestion"]);
 	await assert.rejects(stat(join(output, "input.pdf")));
 	await writeFile(imported, JSON.stringify({ ...review, documentSha256: bundle.manifest.documentSha256 }));
@@ -109,6 +124,7 @@ test("bound PDF imports verify retained artifacts, context, selection and partia
 	const path = join(dir, "test.pdf"), manifestPath = join(dir, "bundle", "manifest.json");
 	await writeFile(path, pdf());
 	const prepared = await preparePdfReview(path, { tier: "inference", checks: "design", output: join(dir, "bundle") });
+	assertStructuredSchema(JSON.parse(await readFile(join(prepared.directory, "review.schema.json"), "utf8")));
 	const manifestBytes = await readFile(manifestPath);
 	const boundReview = { schemaVersion: "pdf-review-4", documentSha256: prepared.manifest.documentSha256, bundleSha256: prepared.bundleSha256, tier: "inference", focus: "visual", checks: ["design"], pagesReviewed: [1], reviewer: { model: "synthetic-test" }, findings: [] };
 	const accepted = validatePdfReview(boundReview, prepared.manifest.documentSha256, 2);

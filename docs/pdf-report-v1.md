@@ -5,7 +5,7 @@ Poppler's `pdfinfo`, `pdffonts`, `pdfimages`, and `pdftotext`, plus the veraPDF
 CLI and its Java runtime. Install these tools separately. No browser starts. HTML folders and ZIPs keep their existing
 coverage; PDFs inside them are not scanned by this command.
 
-PDF checks now run veraPDF's `ua1` machine profile by default. Use `--pdfua ua2`
+PDF checks run veraPDF's `ua1` machine profile by default. Use `--pdfua ua2`
 for PDF/UA-2, or `--pdfua off` to explicitly request only the Poppler checks.
 Select the executable with `--verapdf /path/to/verapdf`, the `VERAPDF` environment
 variable, or `verapdf` on PATH, in that order. Configure its Java runtime as the
@@ -19,7 +19,7 @@ Masks are excluded. `--paper-size A4` or `--paper-size Letter` compares MediaBox
 dimensions in default user space, allowing either orientation and one point of
 rounding tolerance. It does not validate UserUnit scaling or physical printing.
 
-The JSON discriminant is `schemaVersion: "pdf-1"`, independent of HTML report
+The report uses `schemaVersion: "pdf-1"`, independent of HTML report
 schema v4. `document` identifies the original absolute path, byte count, kind,
 and SHA-256 of the exact private snapshot used for every extraction. The snapshot
 is read-only and removed after the report captures evidence. The original PDF
@@ -39,7 +39,7 @@ placement rectangle in its image inventory. UserUnit is not extracted.
 `untested`. Extraction passes mean facts were obtained, not that the document
 is accessible. Missing tools, failed commands, unsupported encryption, and
 unrecognized parser output produce `untested` and an `incomplete` machine
-status. Recoverable Poppler stderr diagnostics remain manual review items.
+status. Review Poppler stderr warnings even when extraction succeeds.
 Empty font or raster inventories can be valid on vector-only pages.
 
 `findings` records nonembedded fonts, requested MediaBox mismatches and each
@@ -50,7 +50,9 @@ the validator's rules for tags, language, metadata, headings, tables, graphics,
 annotations and fonts; it does not implement a second standards validator.
 
 `pdfua.machine` reports the selected machine profile result. A validator exit 1
-is a completed validation with failures, not an execution error. Missing, malformed, contradictory or wrong-profile reports remain untested/incomplete.
+is a completed validation with failures, not an execution error. A missing or
+invalid report leaves the run incomplete and the check untested.
+This also applies when the report contradicts itself or uses the wrong profile.
 When a normal validation job supplies consistent failed-rule totals but omits
 some check details, Check retains the validated findings and keeps the run
 incomplete with exit 2. `pdfuaValidation.coverage` records total, retained and
@@ -59,8 +61,7 @@ the rules with missing evidence. A failed rule with no retained details has no
 invented occurrence or location. Raw validator JSON remains in evidence.
 `needsReview` separately records low-PPI images and tool diagnostics. Items
 have a rule, severity, confidence, remedy, evidence, and document-hash location.
-Occurrence IDs include the document hash, so a regenerated file cannot inherit
-an old occurrence identity. PDF baseline and machine-finding disposition import are not
+Occurrence IDs include the document hash. Changed PDF bytes produce new IDs. PDF baseline and machine-finding disposition import are not
 supported in this version. Optional inference reviews use a separate format below. HTML `--baseline`, `--scenarios`, and network options
 are rejected for PDF input. `--min-confidence` is accepted; all current machine
 findings have high confidence, so its values give the same exit result.
@@ -72,8 +73,8 @@ exit 0 into exit 1. JSON is still written for extraction failures. Failed JSON
 writes preserve an existing report; output paths that alias the source PDF are
 rejected.
 
-Overall PDF/UA conformance, human visual review, physical printing and
-assistive-technology testing remain explicitly untested. Optional model inference
+Overall PDF/UA conformance remains untested. Human visual review, print testing
+and tests with assistive technology also remain untested. Optional model inference
 does not complete these evaluations. A passed machine profile
 does not settle human checkpoints such as meaningful reading order or alt-text quality. Tagged metadata is a
 fact, never proof of meaningful tags, reading order, alt text, or accessible
@@ -108,11 +109,14 @@ Use a new output directory; existing directories are rejected. Without `--output
 the command creates a private temporary directory and prints its path. The bundle
 contains selected page images, extracted words and geometry, a manifest, a review
 prompt and a JSON schema. It contains document content: keep it private and delete
-it when finished. Preparation runs Poppler locally; it does not call a model or
-upload content. Rendering also requires Poppler's `pdftoppm`.
+it when finished. Default preparation runs Poppler locally without calling a
+model or uploading
+content. Optional `--reviewer codex` runs a model review; `--classifier jev` labels
+extracted page text only. See [reviewer setup](using-it.md#choose-a-classifier-and-reviewer).
+Rendering also requires Poppler's `pdftoppm`.
 
-Visual and usability are review focuses within the inference tier. Visual covers
-visible layout and legibility. Usability asks
+Visual and usability are review focuses within the inference tier. Visual
+review checks the visible layout and whether text can be read. Usability asks
 whether the stated audience can complete the intended task. `--audience` and
 `--use` supply optional context for either focus. Each bundle requests one focus.
 The default selects up to eight evenly spaced pages, including the first and last.
@@ -141,9 +145,11 @@ context. Partial reviews may list a subset of selected pages; omitted pages stay
 unreviewed. Hash verification cannot prove image inspection or correct inference.
 
 `inferenceReviews` holds imported review envelopes separately from machine
-`findings` and `needsReview`. Each inferred concern identifies its page, confidence,
-observed problem, reader consequence, proposed action, verification step and
-evidence observation. Imported findings normalize to stable `id`, `rule`,
+`findings` and `needsReview`. Each inferred concern names the page and observed
+problem, with a confidence
+level. It states the effect on readers, proposes an action and explains how to
+check the result. It also cites the evidence. Imported findings normalize to
+stable `id`, `rule`,
 `location`, `message`, `remedy`, `confidence`, `consequence`, `verification`,
 `provenance` and `evidence` fields. `provenance` records method, the canonical inference tier, review focus and model.
 Version 2 reviews classify each concern as `observed-defect`, `needs-context`,
@@ -154,9 +160,11 @@ which adds `bundleSha256` to version 3's `tier: "inference"`, `focus`, selected
 `checks` and a `check` domain for each finding. Versions 1–3 remain importable
 and are explicitly marked `document-only` in `evidenceBinding`; they cannot
 verify which prepared evidence or context the reviewer used. Version 4 imports
-are marked `bundle`. Explicit domain selections reject ambiguous legacy reviews.
+are marked `bundle`. When you select a domain, the import rejects legacy reviews
+that do not state
+their domain.
 The CLI prints the category beside each concern.
-Inferred concerns receive moderate severity pending confirmation. IDs bind
+Inferred concerns have moderate severity until someone confirms them. IDs bind
 the document hash, tier, page and evidence. The submitted origin statement is
 retained as a reviewer hypothesis in evidence; uncertain source causes should be stated as hypotheses.
 Page regions are not accepted because this workflow does not establish reliable
@@ -166,8 +174,7 @@ codes. `check --tier inference --review ...` extracts supporting facts only and
 skips deterministic quality and conformance checks; it requires an imported review.
 An explicit `--tier deterministic` rejects `--review`. Omitting the tier retains
 the legacy combined report. Unreviewed pages remain outside coverage; an empty findings array is not a
-whole-document pass, an accessibility verdict or a conformance claim. After changing
-the PDF, prepare and review the new revision.
+whole-document pass, an accessibility verdict or a conformance claim. After you change the PDF, prepare and review the new version.
 
 Preparation currently requires all Poppler fact extractions to succeed. A font
 or image inventory failure can therefore block a visual bundle even when the
@@ -199,9 +206,8 @@ praxity-check compare-pdf before.check.json after.check.json
 praxity-check compare-pdf before.check.json after.check.json --json
 ```
 
-Comparison reads two `pdf-1` reports. `--json` writes structured output to stdout;
-it is not an output filename. A successful comparison exits 0, including when
-findings remain. Invalid input exits 2. Use the original check reports for their
+Compare two `pdf-1` reports. `--json` writes structured output to stdout;
+it is not an output filename. A valid comparison exits 0, even when findings remain. Invalid input exits 2. Use the original check reports for their
 check outcomes. Each comparison input is limited to 64 MiB.
 
 The output identifies both document hashes and keeps occurrence IDs within their
@@ -210,9 +216,9 @@ They describe reported problems, not proven object identity across exports.
 Newly reported does not mean newly introduced. Reduced counts do not identify
 individual repairs, and page moves are not matched automatically.
 
-A missing machine finding is resolved only when comparable complete checks
-establish absence. Different policy, missing tool versions, incomplete coverage
-or changed page counts prevent that conclusion. Unknown rules remain unverified.
+Treat a missing machine finding as resolved only when complete, comparable
+checks show it is absent. Different policy, missing tool versions, incomplete coverage
+or changed page counts prevent that conclusion. Rules the comparison does not know remain unverified.
 Missing model concerns and review questions always remain unverified, even after
 an empty fresh review. Comparison is evidence for the next repair decision, not
 a conformance verdict or a record of human acceptance.

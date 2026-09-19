@@ -1,6 +1,8 @@
 # Praxity Check evidence and Studio adoption plan
 
-**Status:** Praxity Check work complete; Studio handoff continues in the sibling plan
+Historical plan, completed for Praxity Check on 2026-08-29. This document
+records that work and its Studio handoff. It is not the current release roadmap.
+Use [the usage guide](using-it.md) for current commands.
 
 **Updated:** 2026-08-29
 

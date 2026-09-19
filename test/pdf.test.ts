@@ -66,6 +66,7 @@ test("missing tools remain untested, with JSON and exit 2 and no browser import"
 	await copyFile(resolve("src/pdf-accessibility.ts"), join(dir, "pdf-accessibility.ts"));
 	await copyFile(resolve("src/pdf-print.ts"), join(dir, "pdf-print.ts"));
 	await copyFile(resolve("src/pdf-review.ts"), join(dir, "pdf-review.ts"));
+	await copyFile(resolve("src/review-runner.ts"), join(dir, "review-runner.ts"));
 	await copyFile(resolve("src/selection.ts"), join(dir, "selection.ts"));
 	await copyFile(resolve("src/pdf-design.ts"), join(dir, "pdf-design.ts"));
 	const result = spawnSync(process.execPath, [join(dir, "cli.ts"), "check", path, "--json", output], { encoding: "utf8", env: { ...process.env, PATH: dir } });

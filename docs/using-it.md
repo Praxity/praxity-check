@@ -1,4 +1,4 @@
-# Running Praxity Check
+# Run Praxity Check
 
 Install once with Node 22.18+ and pnpm 11.5.3:
 
@@ -31,13 +31,13 @@ summary prints and what sets the exit code.
 
 | Level | What it gates on | Use when |
 |---|---|---|
-| `high` | Measured, unambiguous failures — mostly axe, plus narrow observed checks such as long audio autoplay | You want a quiet gate that only stops on things nobody would argue with |
-| `medium` | Adds the custom checks — focus/state contrast, keyboard scrolling, focus obscuring, non-text contrast, reflow, text scaling and text spacing | **You want what this tool sees that axe does not.** Most of the custom layer is medium by construction |
-| `low` | Adds axe best-practice advice — landmarks, heading order | Exhaustive review, not a gate |
+| `high` | Axe failures and narrow measured checks, including long audio autoplay | Start with the highest-confidence findings |
+| `medium` | Also includes focus, contrast, scrolling and layout probes | Review the custom checks alongside axe results |
+| `low` | Also includes best-practice advice, such as landmarks and heading order | Include advice in your review |
 
-**`medium` is the interesting setting.** The focus, contrast-state, scrolling
-and layout checks sit at medium because W3C specifies rendered outcomes and
-these probes are conservative proxies. Audio autoplay reaches high only after
+Use `medium` to include focus, contrast-state, scrolling and layout checks.
+These probes approximate rendered outcomes and need review. Audio autoplay
+reaches high only after
 the browser observes more than three seconds of unmuted playback without a
 control.
 
@@ -148,8 +148,8 @@ snapshots, and generic before/action/after traces:
 node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist > review-evidence.md
 ```
 
-The command does not run the automated checks, invoke a model, upload anything,
-or decide that a trace is a defect. It records only recognised candidates and
+With the default options, the command collects evidence locally without running
+automated checks or calling a model. It records only recognised candidates and
 reversible generic actions; the packet names missing components, unsafe or
 unknown triggers, and other unexercised rules. Review the Markdown before
 sending it anywhere because it contains course text and markup.
@@ -184,9 +184,94 @@ using the packet's page, selector, IDs, classes, and text. That follow-up may
 inspect the smallest relevant source slice; the reviewer may not search the
 package or a minified bundle.
 
-`prepare-review` exits `0` when it prepared at least one page and `2` when it
-could not prepare any. It never exits `1`: evidence is not a finding and cannot
+With the default options, `prepare-review` exits `0` when it prepared at least
+one page and `2` when it could not prepare any. It never exits `1`: evidence is not a finding and cannot
 gate CI.
+
+### Import a review into a report
+
+Create a new bundle directory outside the checked folder:
+
+```bash
+node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist \
+  --output /private/new-review
+```
+
+Give your reviewer the bundle's `review-prompt.md`, `review.schema.json` and
+retained evidence. This prompt requests JSON; the Markdown prompt above requests
+a written review. Save the JSON response as `review.json` beside `manifest.json`
+and `evidence.json`, then import it:
+
+```bash
+node /absolute/path/to/praxity-check/src/cli.ts check ./dist \
+  --tier inference --checks accessibility \
+  --review /private/new-review/review.json --json report.json
+```
+
+The import verifies the local files and retained evidence. It does not run a
+browser or repeat the automated checks. Omit `--tier inference` to run those
+checks alongside the imported review. Only automated findings affect the failure
+exit code; model observations remain separate.
+
+After changing any HTML or local asset, prepare and review a new bundle.
+Keep report outputs outside the checked folder so they do not change its snapshot.
+A valid import binds files to evidence; it does not prove that the reviewer
+inspected that evidence or reached the right conclusion.
+
+### Choose a classifier and reviewer
+
+By default, `prepare-review` creates local evidence for a manual review.
+You can give that bundle to your preferred model in a subscription app, or ask
+Check to run the installed Codex CLI. Luna is the default Codex reviewer.
+The reviewer judges the evidence; you decide which proposed changes to accept.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `--classifier none\|jev` | `none` | Optionally asks Jev to label retained content. |
+| `--reviewer manual\|codex` | `manual` | Leaves the bundle for you, or runs Codex to write a JSON review. |
+| `--model <id>` | `gpt-5.6-luna` | Selects the Codex reviewer model. Requires `--reviewer codex`. |
+
+For HTML, either optional service requires `--output`. Use a new directory
+outside the checked folder. PDF preparation can create its own temporary bundle.
+
+```bash
+node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist \
+  --output /private/new-review --reviewer codex
+```
+
+Codex must be installed and signed in. It runs read-only with an ephemeral
+session. The default Luna reviewer uses maximum reasoning effort. A custom
+model uses its CLI default. Check validates the response against the bundle
+before saving
+`review.json`. Import that file with the command above. An ephemeral session
+still sends evidence to the model service. If the review fails, Check exits
+with `2` and keeps the bundle for inspection. It saves `review.json` only after
+validation succeeds.
+
+To use Jev, set `JEV_API_KEY` in your environment and add `--classifier jev`.
+This sends retained HTML component slices or extracted PDF page text to the
+Jev API, even if the reviewer is manual. PDF text is capped at 10,000 characters
+per page. Jev receives no page images; the Codex reviewer receives the selected
+PDF images.
+The classifier uses the pinned `jev-1.13.0` model; `--model` changes only the
+Codex reviewer.
+
+Jev is an optional classifier. For HTML, it labels the kind of component among
+candidates Check already captured. For PDFs, it labels the purpose of extracted
+page text. These labels do not discover new components, inspect PDF images or
+establish whether evidence is sufficient. Jev does not decide whether a defect
+exists or a task succeeded. Keep those decisions with Luna or your chosen reviewer.
+
+Classification retains its model, confidence and source evidence in
+`classifier.json`, beside the unchanged browser or PDF evidence.
+`classifier-attempts.jsonl` keeps completed requests and service errors, including
+when classification stops before it can finish. Empty or truncated text is
+marked unknown without a request to Jev.
+`review-run.json` records the selected services and hashes. A Codex run also
+keeps its raw response in `review-response.txt` and its log in `reviewer.log`.
+Treat classification as advice. A high confidence score is not an accessibility verdict.
+
+Neither workflow requires BAML.
 
 ## VoiceOver evidence
 
@@ -246,8 +331,8 @@ Paste into a repo's `AGENTS.md`:
 ```markdown
 ## Accessibility check
 
-After changing anything that affects rendered output — components, styles,
-design tokens, navigation, templates — build, then run:
+After changing components, styles, design tokens, navigation or templates,
+build the project, then run:
 
     node /absolute/path/to/praxity-check/src/cli.ts check ./dist --min-confidence medium
 
@@ -260,9 +345,9 @@ deciding a finding is wrong.
 - **Deduplicate before fixing.** Many findings can come from one shared token or
   component. Group by rule and by the colour pair or selector shape in the
   evidence.
-- **It starts from the initial rendered state.** It exercises hover and focus on
-  initial controls, but anything behind a click, route, or closed component is
-  invisible to it.
+- The default scan starts from the initial rendered state and exercises hover
+  and focus. Add `--scenarios` to check named states behind clicks or closed
+  components. States you do not declare can remain untested.
 - **It reports its own blind spots.** If a note says custom checks examined only
   the light DOM, controls inside an iframe or shadow root were not checked.
 - Medium confidence means the check is a proxy for a rendered outcome, not that
@@ -273,10 +358,11 @@ deciding a finding is wrong.
 
 Findings state what is wrong, where it was found, and the standards or guidance
 behind it. They do not infer which people are affected. Locators are real CSS
-selectors — `div:nth-of-type(3) > span` — and the accessible name is in the
-evidence.
+selectors such as `div:nth-of-type(3) > span`. The evidence includes the
+accessible name.
 
-The human summary is budgeted; **the JSON is complete**. If the summary says
+The terminal summary has a length limit. The JSON retains all results. If the
+summary says
 findings were withheld, they are all in the `--json` file.
 
 Reports and evidence files can contain course content, local paths, requested

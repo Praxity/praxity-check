@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import {
 	altTextQuality,
@@ -33,7 +33,8 @@ import { countAtOrAbove, createReport, humanSummary, parseBaseline, type Blocked
 import { resolveScreenReaderPage, runScreenReader } from "./screen-reader.ts";
 import { isAuditServerUrl, serve, type StaticServer } from "./serve.ts";
 import { htmlFeedback } from "./feedback.ts";
-import { importHtmlReview, writeHtmlReviewBundle } from "./html-review.ts";
+import { importHtmlReview, readHtmlReviewBundle, writeHtmlReviewBundle } from "./html-review.ts";
+import { parseReviewExecutionOption, runPreparedReview, validateReviewExecutionOptions, type ReviewExecutionOptions } from "./review-runner.ts";
 import { prepareInteractionReview } from "./interaction-review.ts";
 import { loadScenarios, runScenarioActions, type Scenario } from "./scenarios.ts";
 
@@ -60,6 +61,9 @@ Options:
   --min-image-ppi <number>              PDF: review rasters below an explicit PPI threshold
   --max-sparse-words <number>          PDF: review sparse pages using this word-count threshold
   --review <file>                     Import model review JSON; HTML reviews stay beside their manifest and evidence
+  --classifier none|jev              prepare-review: optional advisory classifier (default none; Jev requires JEV_API_KEY)
+  --reviewer manual|codex            prepare-review: manual bundle or authenticated Codex CLI (default manual)
+  --model <id>                       Codex review model (default gpt-5.6-luna); requires --reviewer codex
   --paper-size A4|Letter                PDF: require this MediaBox size, either orientation
   --pdfua <ua1|ua2|off>    PDF/UA machine profile, default ua1 (requires veraPDF)
   --verapdf <path>         Path to the veraPDF executable
@@ -94,7 +98,7 @@ interface CheckOptions extends CommonOptions {
 	reviewFiles: string[];
 }
 
-interface ReviewOptions extends CommonOptions {
+interface ReviewOptions extends CommonOptions, ReviewExecutionOptions {
 	command: "prepare-review";
 	output?: string;
 }
@@ -126,6 +130,7 @@ function parseArgs(args: string[]): Options {
 		if (options.command !== "screen-reader" && arg === "--checks" && args[i + 1]) { options.checks = parseChecks(args[++i]!).join(","); }
 		else if (options.command !== "screen-reader" && arg === "--tier" && args[i + 1]) { options.tier = parseTier(args[++i]!); }
 		else if (options.command === "prepare-review" && arg === "--output" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.output = resolve(args[++i]!);
+		else if (options.command === "prepare-review" && parseReviewExecutionOption(options, arg!, args[i + 1])) i++;
 		else if (options.command === "check" && arg === "--review" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.reviewFiles.push(resolve(args[++i]!));
 		else if (arg === "--allow-network") options.allowNetwork = true;
 		else if (options.command === "screen-reader" && arg === "--take-screen-control") options.takeScreenControl = true;
@@ -155,6 +160,7 @@ function parseArgs(args: string[]): Options {
 		}
 	}
 	if (options.command !== "screen-reader") validateHtmlSelection(options.command, options);
+	if (options.command === "prepare-review") validateReviewExecutionOptions(options, Boolean(options.output));
 	if (options.command === "check") {
 		if (options.tier === "inference" && !options.reviewFiles.length) throw new Error("HTML --tier inference requires --review from a prepare-review --output bundle");
 		if (options.tier === "deterministic" && options.reviewFiles.length) throw new Error("--tier deterministic cannot import inference reviews; use --tier inference or omit --tier for a combined report");
@@ -547,7 +553,11 @@ ${report.feedback.findings.length} model observations, ${report.feedback.questio
 			console.log(packet.markdown);
 			if (options.output && snapshot) {
 				const result = await writeHtmlReviewBundle(options.output, options.target, snapshot.contentSha256, packet, options.allowNetwork);
-				console.error(`HTML review bundle: ${result.directory}. Read review-prompt.md and save review.json beside manifest.json and evidence.json.`);
+				if (options.classifier === "jev" || options.reviewer === "codex") {
+					const { evidence } = await readHtmlReviewBundle(join(result.directory, "review.json"), snapshot.contentSha256, discovery);
+					await runPreparedReview(result.directory, options, { kind: "html", sourceSha256: result.manifest.evidenceSha256, items: evidence.candidates.map(candidate => ({ id: candidate.id, text: candidate.dom.html })) }, path => importHtmlReview(path, snapshot.contentSha256, discovery));
+				}
+				console.error(`HTML review bundle: ${result.directory}. ${options.reviewer === "codex" ? "Validated review.json is ready for check --review." : "Read review-prompt.md and save review.json beside manifest.json and evidence.json."}`);
 			}
 			return packet.auditedPages > 0 ? 0 : 2;
 		}
