@@ -190,7 +190,7 @@ in another app. Codex uses Luna by default; `--model` selects another
 reviewer. The optional `--classifier jev` labels captured component kinds or PDF
 page-text purpose. Jev does not judge defects. Both options send evidence to the
 chosen service. See [Choose a classifier and reviewer](docs/using-it.md#choose-a-classifier-and-reviewer)
-for setup and limits.
+for setup and limits, including [private Jev key setup](docs/using-it.md#store-and-load-your-jev-key).
 
 ## VoiceOver evidence
 
