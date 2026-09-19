@@ -130,3 +130,23 @@ question asks for a check before proposing a source change.
 Exported schemas bind content and evidence hashes and constrain reference values
 for small packets. Production import still verifies reference relationships,
 unique lists and evidence limits, including after schema-constrained generation.
+
+## Shared feedback fields
+
+HTML, SCORM and PDF JSON reports include `feedback.schemaVersion: "feedback-1"`.
+It groups findings, unresolved questions, suggestions and coverage using the same
+fields. `domains` records accessibility or design independently of `method`.
+Model observations retain their review category and `method: "inference"`.
+`source`, `evidence` and each `provenance` entry are JSON Pointers relative to the
+containing report; the original entries remain the evidence authority. Use
+`source` to identify an entry within a report. An `id` can repeat across imported
+reviews of the same evidence by different reviewers. Actions and confidence
+appear only when the source supplies them.
+
+Coverage keeps `untested` and `cantTell` outcomes. Its `purpose` distinguishes
+extraction from checks and review. `status` describes retained validator evidence
+or reviewed pages, independently of any outcome. Partial reviews list the pages
+reviewed. Human review remains untested until performed. HTML review imports bind
+feedback to a local content snapshot and retained browser evidence. Ordinary HTML
+deterministic reports lack that revision hash. Legacy PDF reviews lack declared
+domains and use an empty `domains` array with an explanation in `limitations`.

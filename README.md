@@ -23,25 +23,24 @@ Praxity Check is a local command-line tool. Give it a folder or zip file to chec
 the HTML pages inside, or a PDF to check its accessibility and selected design
 requirements. PDF checks use separately installed Poppler and veraPDF tools.
 
-Status: alpha. The automated checks are ready to use. Interaction
-review, PDF model review and VoiceOver evidence are experimental. In testing, a capable LLM
-successfully triaged the review candidates and flagged those that needed human
-review.
+Status: alpha. Run from source with the steps below. Interaction review,
+PDF model review and VoiceOver evidence are experimental. Review model claims
+against the retained evidence before changing your content.
 
 ## Automated checks
 
 For HTML, the `check` command scans every page and can produce findings or stop CI at
 the confidence level you choose. It runs:
 
-- axe-core's browser checks;
+- axe-core's browser checks.
 - keyboard traps, focus order, mouse-only controls, character shortcuts, and
-  pointer-down activation;
-- focus visibility, focus obscuring, and keyboard-operable scroll regions;
-- text, control, graphical, hover, and focus-state contrast;
+  pointer-down activation.
+- focus visibility, focus obscuring, and keyboard-operable scroll regions.
+- text, control, graphical, hover, and focus-state contrast.
 - 320-pixel reflow, text-spacing clipping, and 200% operating-system text
-  scaling when a page opts in;
-- contrast and focus visibility in declared dark colour schemes;
-- long automatic motion and audio autoplay; and
+  scaling when a page opts in.
+- contrast and focus visibility in declared dark colour schemes.
+- long automatic motion and audio autoplay.
 - narrow checks for image alternatives and ambiguous link names, plus review
   questions when multiple pages reuse one title.
 
@@ -54,26 +53,9 @@ The terminal summary is brief; an optional JSON report contains every finding,
 question for review, and coverage note. The `--min-confidence` option controls
 which findings are shown and which make the command exit with an error.
 
-HTML, SCORM and PDF JSON reports include `feedback.schemaVersion: "feedback-1"`.
-It groups findings, unresolved questions, suggestions and coverage using the same
-fields. `domains` records accessibility or design independently of `method`.
-Model observations retain their review category and `method: "inference"`.
-`source`, `evidence` and each `provenance` entry are JSON Pointers relative to the
-containing report; the original entries remain the evidence authority. Use
-`source` to identify an entry within a report. An `id` can repeat across imported
-reviews of the same evidence by different reviewers. Actions and confidence
-appear only when the source supplies them.
-
-Coverage keeps `untested` and `cantTell` outcomes. Its `purpose` distinguishes
-extraction from checks and review. `status` describes retained validator evidence
-or reviewed pages, independently of any outcome. Partial reviews list the pages
-reviewed. Human review remains untested until performed. HTML review imports bind
-feedback to a local content snapshot and retained browser evidence. Ordinary HTML
-deterministic reports lack that revision hash. Legacy PDF reviews lack declared
-domains and use an empty `domains` array with an explanation in `limitations`.
-
-The [schema v4 guide](docs/report-schema-v4.md) documents rule outcomes,
-occurrence identity, environment evidence, and migration from v3.
+HTML, SCORM and PDF reports share a feedback format for findings, review
+questions, suggestions and coverage. See the [schema guide](docs/report-schema-v4.md)
+for fields, evidence links and migration from v3.
 
 ## Quick start
 
@@ -105,8 +87,8 @@ do not change the exit code.
 
 `--checks accessibility|design|accessibility,design` selects what to assess.
 `--tier deterministic|inference` selects how evidence is assessed, consistently
-across HTML folders, SCORM ZIPs and PDFs. Canonical commands default to
-accessibility; add design explicitly. Deterministic checks use fixed rules and
+across HTML folders, SCORM ZIPs and PDFs. With either selection flag, checks default to accessibility. Add design when
+you need it. Deterministic checks use fixed rules and
 measurements. Inference reviews require a reviewer and never establish machine
 conformance, even when their confidence is high.
 
@@ -143,8 +125,10 @@ For compatibility, PDF commands with neither selection flag retain their previou
 combined checks. Existing `--tier visual|usability` review commands remain aliases
 for inference review focus. New commands use `--tier inference --focus visual|usability`.
 Legacy review JSON does not declare domains and can only be imported without an
-explicit selection. New version 3 reviews declare domains; imports reject findings
-outside them. Existing version 1 and 2 files remain valid for legacy combined runs.
+explicit selection. New version 4 reviews declare domains and bind the prepared
+bundle; imports
+reject findings outside those domains. Versions 1–3 remain importable under the
+limits described in the [PDF report guide](docs/pdf-report-v1.md#optional-inference-review).
 
 ## Check a PDF
 
@@ -193,11 +177,19 @@ same 20,000-entry and 4 GiB limits as archive extraction. The retained DOM and
 traces describe the earlier browser session; matching files do not establish
 current network responses, dynamic state or screen-reader behavior.
 
-The file contains course text and HTML. Nothing leaves your computer until you
-choose to send it to a reviewer. Luna at maximum reasoning effort was used
+The file contains course text and HTML. Default preparation stays local.
+Send it to a reviewer only when you are ready to share that content.
+Luna at maximum reasoning effort was used
 during testing. The model does not define the method, and you decide which
 conclusions to accept. See [`docs/using-it.md`](docs/using-it.md) for the review
 command and evidence guidance.
+
+To run the installed Codex CLI as the reviewer, add `--reviewer codex` to
+`prepare-review --output ...`. It uses Luna by default; `--model` selects another
+reviewer. The optional `--classifier jev` labels captured component kinds or PDF
+page-text purpose. Jev does not judge defects. Both options send evidence to the
+chosen service. See [Choose a classifier and reviewer](docs/using-it.md#choose-a-classifier-and-reviewer)
+for setup and limits. Manual review remains the default.
 
 ## VoiceOver evidence
 

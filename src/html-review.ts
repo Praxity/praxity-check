@@ -183,7 +183,7 @@ export async function writeHtmlReviewBundle(output: string, target: string, cont
 	} catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
 }
 
-export async function importHtmlReview(path: string, contentSha256: string, discovery: Discovery) {
+export async function readHtmlReviewBundle(path: string, contentSha256: string, discovery: Discovery) {
 	const directory = dirname(resolve(path));
 	const manifest: unknown = JSON.parse(await readBounded(join(directory, "manifest.json"), 64 * 1024));
 	record(manifest, ["schemaVersion", "contentSha256", "evidenceSha256", "tier", "checks", "allowNetwork"]);
@@ -193,6 +193,11 @@ export async function importHtmlReview(path: string, contentSha256: string, disc
 	const bytes = await readBounded(join(directory, "evidence.json"), 16 * 1024 * 1024);
 	if (hash(bytes) !== manifest.evidenceSha256) throw new Error("Retained HTML evidence SHA-256 does not match the manifest");
 	const evidence = validateEvidence(JSON.parse(bytes), discovery);
+	return { manifest: { contentSha256, evidenceSha256: manifest.evidenceSha256, allowNetwork: manifest.allowNetwork }, evidence };
+}
+
+export async function importHtmlReview(path: string, contentSha256: string, discovery: Discovery) {
+	const { manifest, evidence } = await readHtmlReviewBundle(path, contentSha256, discovery);
 	const review = validateHtmlReview(JSON.parse(await readBounded(path, 2 * 1024 * 1024)), contentSha256, manifest.evidenceSha256, evidence);
 	return { ...review, retainedEvidence: evidence, allowNetwork: manifest.allowNetwork, findings: review.findings.map((finding) => ({
 		...finding, id: identity([contentSha256, manifest.evidenceSha256, finding]), rule: "html.interaction.inference",
