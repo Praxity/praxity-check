@@ -275,6 +275,79 @@ Treat classification as advice. A high confidence score is not an accessibility 
 
 Neither workflow requires BAML.
 
+### Store and load your Jev key
+
+You need a Jev API key only for `--classifier jev`. Codex-only reviews use your
+signed-in CLI account. Your Codex subscription does not supply the Jev key.
+
+1. Get a key from the [TypeSafe console](https://console.typesafe.ai/), as described
+   in its [quick start](https://docs.typesafe.ai/introduction/quickstart).
+   Check reads `JEV_API_KEY`; the TypeSafe SDK examples use `TYPESAFE_API_KEY`,
+   which Check does not read.
+2. Create a private file outside your repositories, checked folders, ZIP
+   exports and review bundles. Avoid shared or synced folders. On macOS/Linux:
+
+   ```bash
+   mkdir -p "$HOME/.config/praxity-check"
+   chmod 700 "$HOME/.config/praxity-check"
+   touch "$HOME/.config/praxity-check/.env"
+   chmod 600 "$HOME/.config/praxity-check/.env"
+   ```
+
+3. Open that file in a text editor. Add this line, replacing the placeholder
+   with your key. Keep the quotes. Enter the key in the editor, not a shell
+   command that could save it in history.
+
+   ```dotenv
+   JEV_API_KEY="replace-with-your-key"
+   ```
+
+The file is plain text, not encrypted. These permissions limit access to your
+account; they do not hide it from tools running under that account. On Windows,
+choose a private path outside your projects and restrict access through file
+permissions to your account.
+
+Check does **not** load `.env` automatically. Pass Node's `--env-file` flag
+**before** the script path. From any folder, on macOS/Linux:
+
+```bash
+node --env-file="$HOME/.config/praxity-check/.env" \
+  /absolute/path/to/praxity-check/src/cli.ts prepare-review /absolute/path/to/site/dist \
+  --tier inference --output /absolute/path/to/new-review --classifier jev
+```
+
+Replace the script, target and output paths. The output directory must be new
+and outside the target. For a PDF, replace the target with its PDF path. On
+Windows, pass your file's absolute path to `--env-file`.
+
+To check that Node loaded a nonempty value without printing the key:
+
+```bash
+node --env-file="$HOME/.config/praxity-check/.env" \
+  -e 'console.log(process.env.JEV_API_KEY?.trim() ? "Jev key loaded" : "Jev key missing")'
+```
+
+This checks presence only; it makes no API request and does not validate the
+key. A missing file produces a Node error. If the key is already set in your
+shell, that value overrides the file. On macOS/Linux, run `unset JEV_API_KEY`
+then retry to use the file. See [Node's env-file rules](https://nodejs.org/download/release/v22.18.0/docs/api/cli.html#--env-fileconfig).
+For an HTTP 401 or 403, check the key and your account's API access in TypeSafe.
+
+Keep the secret file out of Git, prompts, AI attachments, reports and support
+messages. If you choose to store a secret file in a repository, add `.env` and
+`.env.*` to that repository's `.gitignore` before saving the key. A shared
+`.env.example` must contain placeholders only. Ignore rules do not remove a
+secret already tracked or committed.
+
+If a key is exposed, revoke it in TypeSafe first. Create a replacement and
+update your private file and any other places that used the old key. Remove
+exposed copies; if it entered Git history, coordinate history cleanup with the
+repository maintainers. Deleting a file or adding an ignore rule does not revoke
+a leaked key.
+
+To stop using Jev, omit `--classifier jev` (or set `--classifier none`) and omit
+`--env-file` when you no longer need it. No Jev key is needed for that run.
+
 ## VoiceOver evidence
 
 Use screen-reader evidence for one named action whose open question is what was
