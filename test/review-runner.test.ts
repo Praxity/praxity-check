@@ -105,11 +105,26 @@ process.stdin.on('end', () => {
 `);
 	await chmod(executable, 0o700);
 	const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, JEV_API_KEY: "do-not-forward-to-reviewer" };
-	const run = (target: string, bundle: string, extra: string[] = [], environment = env) => spawnSync(process.execPath, [cli, "prepare-review", target, "--tier", "inference", "--output", bundle, "--reviewer", "codex", ...extra], { encoding: "utf8", env: environment });
+	const run = (target: string, bundle: string, extra: string[] = [], environment = env) => spawnSync(process.execPath, [cli, "prepare-review", target, "--tier", "inference", "--output", bundle, ...extra], { encoding: "utf8", env: environment });
 	const legacy = spawnSync(process.execPath, [cli, "prepare-review", document, "--tier", "visual", "--reviewer", "codex"], { encoding: "utf8", env });
 	assert.equal(legacy.status, 2);
 	assert.match(legacy.stderr, /--tier inference --focus visual/);
+	const legacyBundle = join(dir, "pdf-legacy");
+	const legacyManual = spawnSync(process.execPath, [cli, "prepare-review", document, "--tier", "visual", "--output", legacyBundle], { encoding: "utf8", env });
+	assert.equal(legacyManual.status, 0, legacyManual.stderr);
+	await assert.rejects(stat(join(legacyBundle, "reviewer.log")), { code: "ENOENT" });
+	const missingOutput = spawnSync(process.execPath, [cli, "prepare-review", source, "--tier", "inference"], { encoding: "utf8", env });
+	assert.equal(missingOutput.status, 2);
+	assert.match(missingOutput.stderr, /require --output/);
+	const stdoutOnly = spawnSync(process.execPath, [cli, "prepare-review", source], { encoding: "utf8", env });
+	assert.equal(stdoutOnly.status, 0, stdoutOnly.stderr);
+	assert.match(stdoutOnly.stdout, /Review/);
 	for (const [kind, target] of [["html", source], ["pdf", document]]) {
+		const manual = join(dir, `${kind}-manual`);
+		const prepared = run(target!, manual, ["--reviewer", "manual"]);
+		assert.equal(prepared.status, 0, prepared.stderr);
+		assert.ok((await stat(join(manual, "review-prompt.md"))).size > 0);
+		for (const name of ["reviewer.log", "review.json", "review-run.json"]) await assert.rejects(stat(join(manual, name)), { code: "ENOENT" });
 		const bundle = join(dir, kind!);
 		const result = run(target!, bundle, ["--model", "preferred-model"]);
 		assert.equal(result.status, 0, result.stderr);

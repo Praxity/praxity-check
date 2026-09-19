@@ -241,6 +241,7 @@ export async function pdfReviewCli(args: string[]): Promise<number> {
 		else throw new Error(`Unsupported PDF review option: ${flag}`);
 	}
 	if (!tier) throw new Error("PDF prepare-review requires --tier inference (legacy visual or usability aliases remain supported)");
+	options.reviewer ??= options.tier === "inference" ? "codex" : "manual";
 	validateReviewExecutionOptions(options, true);
 	if (options.reviewer === "codex" && options.tier !== "inference") throw new Error(`--reviewer codex requires --tier inference --focus ${options.tier}; legacy PDF tiers support manual review only`);
 	const result = await preparePdfReview(args[1]!, options);

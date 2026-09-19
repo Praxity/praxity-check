@@ -194,7 +194,7 @@ Create a new bundle directory outside the checked folder:
 
 ```bash
 node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist \
-  --output /private/new-review
+  --output /private/new-review --reviewer manual
 ```
 
 Give your reviewer the bundle's `review-prompt.md`, `review.schema.json` and
@@ -220,23 +220,25 @@ inspected that evidence or reached the right conclusion.
 
 ### Choose a classifier and reviewer
 
-By default, `prepare-review` creates local evidence for a manual review.
-You can give that bundle to your preferred model in a subscription app, or ask
-Check to run the installed Codex CLI. Luna is the default Codex reviewer.
+`prepare-review --tier inference` launches the installed Codex CLI by default.
+Sign in with your subscription first. Luna reviews the evidence automatically.
+Use `--reviewer manual` to prepare files for your preferred AI app instead.
+Older HTML commands without `--tier inference` and legacy PDF `visual` or
+`usability` tiers still prepare manual evidence unless you select a reviewer.
 The reviewer judges the evidence; you decide which proposed changes to accept.
 
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--classifier none\|jev` | `none` | Optionally asks Jev to label retained content. |
-| `--reviewer manual\|codex` | `manual` | Leaves the bundle for you, or runs Codex to write a JSON review. |
-| `--model <id>` | `gpt-5.6-luna` | Selects the Codex reviewer model. Requires `--reviewer codex`. |
+| `--reviewer manual\|codex` | `codex` with `--tier inference`; otherwise `manual` | Leaves the bundle for you, or runs Codex to write a JSON review. |
+| `--model <id>` | `gpt-5.6-luna` | Selects the Codex reviewer model. Requires Codex review. |
 
-For HTML, either optional service requires `--output`. Use a new directory
+For HTML, automatic review and optional Jev classification require `--output`. Use a new directory
 outside the checked folder. PDF preparation can create its own temporary bundle.
 
 ```bash
 node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist \
-  --output /private/new-review --reviewer codex
+  --tier inference --output /private/new-review
 ```
 
 Codex must be installed and signed in. It runs read-only with an ephemeral

@@ -62,8 +62,8 @@ Options:
   --max-sparse-words <number>          PDF: review sparse pages using this word-count threshold
   --review <file>                     Import model review JSON; HTML reviews stay beside their manifest and evidence
   --classifier none|jev              prepare-review: optional advisory classifier (default none; Jev requires JEV_API_KEY)
-  --reviewer manual|codex            prepare-review: manual bundle or authenticated Codex CLI (default manual)
-  --model <id>                       Codex review model (default gpt-5.6-luna); requires --reviewer codex
+  --reviewer manual|codex            prepare-review: Codex CLI by default for --tier inference; manual saves a bundle
+  --model <id>                       Codex review model (default gpt-5.6-luna); unavailable with manual review
   --paper-size A4|Letter                PDF: require this MediaBox size, either orientation
   --pdfua <ua1|ua2|off>    PDF/UA machine profile, default ua1 (requires veraPDF)
   --verapdf <path>         Path to the veraPDF executable
@@ -160,7 +160,10 @@ function parseArgs(args: string[]): Options {
 		}
 	}
 	if (options.command !== "screen-reader") validateHtmlSelection(options.command, options);
-	if (options.command === "prepare-review") validateReviewExecutionOptions(options, Boolean(options.output));
+	if (options.command === "prepare-review") {
+		options.reviewer ??= options.tier === "inference" ? "codex" : "manual";
+		validateReviewExecutionOptions(options, Boolean(options.output));
+	}
 	if (options.command === "check") {
 		if (options.tier === "inference" && !options.reviewFiles.length) throw new Error("HTML --tier inference requires --review from a prepare-review --output bundle");
 		if (options.tier === "deterministic" && options.reviewFiles.length) throw new Error("--tier deterministic cannot import inference reviews; use --tier inference or omit --tier for a combined report");
