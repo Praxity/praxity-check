@@ -229,6 +229,20 @@ const LOW_GRAPHIC_CONTRAST = `<!doctype html><html lang="en"><head><meta charset
 <svg role="img" aria-label="Upward trend" width="100" height="100"><path id="trend" d="M10 90 L50 50 L90 10" fill="none" stroke="#aaa" stroke-width="4"/></svg>
 </body></html>`;
 
+const SVG_LINE_CONTRAST = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Marks on lines</title>
+<style>
+main { --surface: #fcfcfb; --ink: #0b0b0b; --muted: #6b6a65; background: var(--surface); }
+line { stroke: var(--muted); stroke-width: 5; stroke-linecap: butt; }
+.dot { fill: var(--ink); } .ring { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+</style></head><body><main><svg width="220" height="80" role="img" aria-label="Pages along a line">
+<line x1="10" y1="60" x2="60" y2="30"/><line x1="60" y1="30" x2="110" y2="20"/>
+<line x1="110" y1="20" x2="160" y2="30"/><line x1="160" y1="30" x2="210" y2="60"/>
+<circle class="dot" cx="35" cy="45" r="2"/><circle class="ring" cx="85" cy="25" r="2"/>
+<circle class="dot" cx="135" cy="25" r="2"/><circle class="ring" cx="185" cy="45" r="2"/>
+<circle id="stroke-match" fill="#6b6a65" cx="45" cy="39" r="2"/>
+<circle id="low-contrast" fill="#e1e0d9" cx="35" cy="37" r="2"/>
+</svg></main></body></html>`;
+
 const GOOD_NON_TEXT_CONTRAST = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Good non-text contrast</title>
 <style>
 body { background: #fff; }
@@ -352,6 +366,7 @@ describe("automated checks fire on known defects", () => {
 		await writeFile(join(root, "settle-changing.html"), SETTLE_CHANGING);
 		await writeFile(join(root, "low-component-contrast.html"), LOW_COMPONENT_CONTRAST);
 		await writeFile(join(root, "low-graphic-contrast.html"), LOW_GRAPHIC_CONTRAST);
+		await writeFile(join(root, "svg-line-contrast.html"), SVG_LINE_CONTRAST);
 		await writeFile(join(root, "good-non-text-contrast.html"), GOOD_NON_TEXT_CONTRAST);
 		await writeFile(join(root, "obscured.html"), OBSCURED);
 		await writeFile(join(root, "partly-obscured.html"), PARTLY_OBSCURED);
@@ -436,6 +451,16 @@ describe("automated checks fire on known defects", () => {
 		assert.ok(
 			result.findings.some((f) => f.rule === "non-text-contrast-graphic"),
 			"2.32:1 meaning-bearing SVG stroke was not reported",
+		);
+	});
+
+	test("nonTextContrast uses painted line strokes and the surface behind nearby marks", async () => {
+		const page = await open("svg-line-contrast.html");
+		const result = await nonTextContrast(page, "svg-line-contrast.html");
+		await page.close();
+		assert.deepEqual(
+			result.findings.filter((f) => f.rule === "non-text-contrast-graphic").map((f) => f.selector),
+			["circle#stroke-match", "circle#low-contrast"],
 		);
 	});
 
