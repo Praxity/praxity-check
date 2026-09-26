@@ -1943,7 +1943,7 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 				continue;
 			}
 
-			type Painted = { rect: DOMRect; color: RGB };
+			type Painted = { rect: DOMRect; color: RGB; line?: SVGLineElement };
 			const painted: Painted[] = [];
 			const svgRect = svg.getBoundingClientRect();
 			const shapes = svg.querySelectorAll("path, rect, circle, ellipse, line, polyline, polygon") as NodeListOf<SVGGraphicsElement>;
@@ -1951,24 +1951,34 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 				if (!visible(shape) || shape.closest("defs, clipPath, mask, symbol")) continue;
 				const style = getComputedStyle(shape);
 				const rect = shape.getBoundingClientRect();
-				const backdrop = [...painted].reverse().find((item) =>
-					item.rect.left <= rect.left && item.rect.top <= rect.top &&
-					item.rect.right >= rect.right && item.rect.bottom >= rect.bottom
-				)?.color ?? svgBackground;
+				const backdrop = [...painted].reverse().find((item) => {
+					if (item.line) {
+						// A line's bounds include unpainted space; sample its actual stroke.
+						const matrix = item.line.getScreenCTM();
+						return matrix && item.line.isPointInStroke(new DOMPoint(
+							(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2,
+						).matrixTransform(matrix.inverse()));
+					}
+					return item.rect.left <= rect.left && item.rect.top <= rect.top &&
+						item.rect.right >= rect.right && item.rect.bottom >= rect.bottom;
+				})?.color ?? svgBackground;
 				const opacity = Number.parseFloat(style.opacity || "1");
 				const cues: Array<{ ratio: number; name: string }> = [];
-				const backdropShape = painted.length === 0 && rect.width >= svgRect.width * 0.9 && rect.height >= svgRect.height * 0.9;
+				const backdropShape = painted.every((item) => item.line) && rect.width >= svgRect.width * 0.9 && rect.height >= svgRect.height * 0.9;
 
-				if (style.fill !== "none" && !style.fill.startsWith("url(")) {
+				if (shape.localName !== "line" && style.fill !== "none" && !style.fill.startsWith("url(")) {
 					const fill = paint(style.fill, backdrop, opacity * Number.parseFloat(style.fillOpacity || "1"));
 					if (fill) {
 						if (!backdropShape) cues.push({ ratio: contrast(fill, backdrop), name: "fill" });
 						painted.push({ rect, color: fill });
 					}
-				} else if (style.fill.startsWith("url(")) review("graphic", shape, "SVG fill uses a paint server such as a gradient or pattern");
+				} else if (shape.localName !== "line" && style.fill.startsWith("url(")) review("graphic", shape, "SVG fill uses a paint server such as a gradient or pattern");
 				if (style.stroke !== "none" && Number.parseFloat(style.strokeWidth) > 0 && !style.stroke.startsWith("url(")) {
 					const stroke = paint(style.stroke, backdrop, opacity * Number.parseFloat(style.strokeOpacity || "1"));
-					if (stroke) cues.push({ ratio: contrast(stroke, backdrop), name: "stroke" });
+					if (stroke) {
+						cues.push({ ratio: contrast(stroke, backdrop), name: "stroke" });
+						if (shape instanceof SVGLineElement) painted.push({ rect, color: stroke, line: shape });
+					}
 				} else if (style.stroke.startsWith("url(")) review("graphic", shape, "SVG stroke uses a paint server such as a gradient or pattern");
 
 				const strongest = cues.sort((a, b) => b.ratio - a.ratio)[0];
