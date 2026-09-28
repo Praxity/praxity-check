@@ -3,7 +3,9 @@ import { resolve } from "node:path";
 import type { Page } from "playwright";
 
 const MAX_SCENARIOS = 50;
-const MAX_ACTIONS = 20;
+// Sequential players (Guided slides, locked outlines) send a fresh learner back
+// to the start, so reaching a late slide takes a click and a wait per step.
+const MAX_ACTIONS = 100;
 const MAX_TEXT = 500;
 const SAFE_KEYS = new Set([
 	"Enter",

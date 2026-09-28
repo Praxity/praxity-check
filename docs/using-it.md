@@ -77,7 +77,13 @@ node /absolute/path/to/praxity-check/src/cli.ts check ./dist \
   --json report.json
 ```
 
-Each state starts from a fresh page. Allowed actions are `click`, `waitFor`,
+Each state starts from a fresh page. A player that unlocks slides in order, such as
+Praxity Studio's Guided slides, sends a fresh visitor back to its first slide, so
+start each state there and step forward. After each click, wait for something
+unique to the next slide, such as its heading
+(`.deck-slide:not([hidden]) h1:has-text("Slide title")`), rather than for the
+Next button, which stays visible during the transition. A state can have up to
+100 actions. Allowed actions are `click`, `waitFor`,
 `select` with a `value`, and `press` with one navigation key such as `Enter`,
 `Space`, `Tab`, `Escape`, or an arrow key. The file cannot execute JavaScript.
 Failed actions appear as `untested` evaluations instead of clean results. The
