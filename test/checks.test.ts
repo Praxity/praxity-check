@@ -54,6 +54,8 @@ const BROKEN = `<!doctype html>
 	#clipped { font: 16px Arial, sans-serif; height: 20px; overflow: hidden; width: 160px; }
 	#clipped-x { font: 16px Arial, sans-serif; overflow-x: hidden; white-space: nowrap; width: 180px; }
 	#scrollable-menu { height: 20px; overflow: hidden auto; width: 200px; }
+	#grown-clip { height: 40px; overflow: hidden; width: 200px; font: 16px/1.1 Arial, sans-serif; }
+	#grown-clip div { overflow-y: auto; }
 </style></head>
 <body>
 <h1>Positive controls</h1>
@@ -63,6 +65,7 @@ const BROKEN = `<!doctype html>
 <div id="clipped">fit fit fit fit fit fit fit</div>
 <div id="clipped-x">iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii</div>
 <div id="scrollable-menu">Scrollable menu text remains reachable vertically.</div>
+<div id="grown-clip"><div>An auto region that grows<br>with its text still clips</div></div>
 <img src="a.png" alt="{{imageAlt}}">
 <img src="b.png" alt="IMG_4021.jpg">
 </body></html>`;
@@ -163,7 +166,11 @@ const SPACING_CLEAN = `<!doctype html><html lang="en"><head><title>Spacing contr
 #image-only img { width: 100px; height: 100px; }
 #already-clipped { width: 120px; height: 20px; overflow: hidden; }
 #scrollable { width: 120px; height: 20px; overflow-y: auto; }
+#panel { width: 200px; height: 200px; overflow: hidden; display: flex; flex-direction: column; }
+#panel-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+#panel-scroll p { margin: 0 0 8px; font: 16px/1.2 sans-serif; }
 </style></head><body><h1>Spacing controls</h1>
+<div id="panel"><div>Transcript</div><div id="panel-scroll"><p>First line.</p><p>Second line.</p><p>Third line.</p><p>Fourth line.</p><p>Fifth line.</p></div></div>
 <div id="image-only"><img alt="Blue square" src="a.png"></div>
 <div id="already-clipped">This text is already much too long for its fixed box before spacing changes.</div>
 <div id="scrollable">This text remains available by vertical scrolling after spacing changes.</div>
@@ -646,11 +653,15 @@ describe("automated checks fire on known defects", () => {
 			!result.findings.some((f) => f.selector === "div#scrollable-menu"),
 			"reachable overflow:auto menu text was reported as clipped",
 		);
+		assert.ok(
+			result.findings.some((f) => f.selector === "div#grown-clip"),
+			"text in an overflow:auto region that grew past a clipping parent was not reported",
+		);
 
 		const clean = await open("spacing-clean.html");
 		const cleanResult = await textSpacing(clean, "spacing-clean.html");
 		await clean.close();
-		assert.equal(cleanResult.findings.length, 0, "image overflow or text clipped before spacing was reported as new text loss");
+		assert.equal(cleanResult.findings.length, 0, "image overflow, text clipped before spacing, or text in a visible scroll region was reported as new text loss");
 	});
 
 	test("scopeCoverage records frame and shadow-root limits, but not empty subtrees", async () => {

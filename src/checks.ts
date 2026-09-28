@@ -2185,8 +2185,20 @@ const TEXT_RANGE_OVERFLOW = `(el, axis) => {
 	const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
 	const range = document.createRange();
 	let overflow = 0;
+	// Text inside a nested scroll region stays reachable when that region's own
+	// box is visible inside the clip; a region that grew past the clip is not.
+	const scrolls = (a) => {
+		if (!/auto|scroll/.test(axis === "vertical" ? getComputedStyle(a).overflowY : getComputedStyle(a).overflowX)) return false;
+		const r = a.getBoundingClientRect();
+		return axis === "vertical"
+			? r.top >= bounds.top - 2 && r.bottom <= bounds.bottom + 2
+			: r.left >= bounds.left - 2 && r.right <= bounds.right + 2;
+	};
 	for (let node = walker.nextNode(); node; node = walker.nextNode()) {
 		if (!(node.textContent || "").trim()) continue;
+		let reachable = false;
+		for (let a = node.parentElement; a && a !== el; a = a.parentElement) if (scrolls(a)) { reachable = true; break; }
+		if (reachable) continue;
 		range.selectNodeContents(node);
 		for (const rect of Array.from(range.getClientRects())) {
 			overflow = Math.max(overflow, axis === "vertical"
