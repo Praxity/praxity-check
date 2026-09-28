@@ -2,7 +2,7 @@
 
 import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import {
 	altTextQuality,
 	audioAutoplay,
@@ -289,12 +289,57 @@ async function runChecks(page: Page, pageId: string): Promise<CheckResult> {
 	return { findings, needsReview, notes, evaluations, rules: [...rules.values()], untested };
 }
 
+async function createAuditContext(
+	browser: Browser,
+	auditOrigin: string,
+	allowNetwork: boolean,
+	blockedRequests: BlockedRequest[],
+) {
+	// A fresh context has no registrations to clear; blocking service workers
+	// also prevents the package from installing one during the run (spec §4).
+	const context = await browser.newContext({
+		serviceWorkers: "block",
+		viewport: VIEWPORT,
+		colorScheme: "light",
+	});
+	await instrumentShadowRoots(context);
+	context.setDefaultTimeout(ACTION_TIMEOUT_MS);
+	context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
+	if (!allowNetwork) {
+		await context.route("**/*", async (route) => {
+			const request = route.request();
+			if (isAuditServerUrl(request.url(), auditOrigin)) {
+				await route.continue();
+				return;
+			}
+			blockedRequests.push({
+				url: request.url(),
+				method: request.method(),
+				resourceType: request.resourceType(),
+			});
+			await route.abort("blockedbyclient");
+		});
+		await context.routeWebSocket(/.*/, async (socket) => {
+			if (isAuditServerUrl(socket.url(), auditOrigin)) {
+				socket.connectToServer();
+				return;
+			}
+			blockedRequests.push({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" });
+			await socket.close({ code: 1008, reason: "outbound network blocked by praxity-check" });
+		});
+	}
+	return context;
+}
+
 async function auditPages(
-	context: BrowserContext,
+	browser: Browser,
 	pages: Awaited<ReturnType<typeof discover>>["pages"],
 	blockedRequests: BlockedRequest[],
 	scenarios: Scenario[],
+	auditOrigin: string,
+	allowNetwork: boolean,
 ): Promise<PageAudit[]> {
+	const context = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
 	const audits: PageAudit[] = [];
 	for (const discoveredPage of pages) {
 		const blockedBefore = blockedRequests.length;
@@ -373,8 +418,9 @@ async function auditPages(
 			}
 			const stateResults = [result];
 			for (const scenario of scenarios.filter((candidate) => candidate.page === discoveredPage.file)) {
-				const statePage = await context.newPage();
+				const stateContext = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
 				try {
+					const statePage = await stateContext.newPage();
 					const blockedBeforeState = blockedRequests.length;
 					const response = await statePage.goto(discoveredPage.url, {
 						waitUntil: "load",
@@ -415,7 +461,7 @@ async function auditPages(
 						}],
 					});
 				} finally {
-					if (!statePage.isClosed()) await statePage.close();
+					await stateContext.close();
 				}
 			}
 			const combined: CheckResult = {
@@ -516,42 +562,9 @@ ${report.feedback.findings.length} model observations, ${report.feedback.questio
 			timeout: NAVIGATION_TIMEOUT_MS,
 			args: ["--autoplay-policy=no-user-gesture-required"],
 		});
-		// A fresh context has no registrations to clear; blocking service workers
-		// also prevents the package from installing one during the run (spec §4).
-		const context = await browser.newContext({
-			serviceWorkers: "block",
-			viewport: VIEWPORT,
-			colorScheme: "light",
-		});
-		await instrumentShadowRoots(context);
-		context.setDefaultTimeout(ACTION_TIMEOUT_MS);
-		context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-
 		const blockedRequests: BlockedRequest[] = [];
-		if (!options.allowNetwork) {
-			await context.route("**/*", async (route) => {
-				const request = route.request();
-				if (isAuditServerUrl(request.url(), auditOrigin)) {
-					await route.continue();
-					return;
-				}
-				blockedRequests.push({
-					url: request.url(),
-					method: request.method(),
-					resourceType: request.resourceType(),
-				});
-				await route.abort("blockedbyclient");
-			});
-			await context.routeWebSocket(/.*/, async (socket) => {
-				if (isAuditServerUrl(socket.url(), auditOrigin)) {
-					socket.connectToServer();
-					return;
-				}
-				blockedRequests.push({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" });
-				await socket.close({ code: 1008, reason: "outbound network blocked by praxity-check" });
-			});
-		}
 		if (options.command === "prepare-review") {
+			const context = await createAuditContext(browser, auditOrigin, options.allowNetwork, blockedRequests);
 			const packet = await prepareInteractionReview(context, discovery.pages, blockedRequests, basename(options.target));
 			console.log(packet.markdown);
 			if (options.output && snapshot) {
@@ -565,7 +578,7 @@ ${report.feedback.findings.length} model observations, ${report.feedback.questio
 			return packet.auditedPages > 0 ? 0 : 2;
 		}
 
-		const pages = await auditPages(context, discovery.pages, blockedRequests, scenarios);
+		const pages = await auditPages(browser, discovery.pages, blockedRequests, scenarios, auditOrigin, options.allowNetwork);
 		const report = createReport(
 			options.target,
 			input.wasZip,
