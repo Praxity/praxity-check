@@ -1,67 +1,53 @@
 # Praxity Check licensing
 
-Praxity Check is **community source**, not open source. The `LICENSE` file is
-authoritative; this page explains the intended boundary in everyday language.
-The licence uses the unmodified
-[PolyForm Perimeter License 1.0.1](https://polyformproject.org/licenses/perimeter/1.0.1)
-plus the narrow Praxity Community Permission for qualifying free public forks
-and services.
+Praxity Check is source-available under the unmodified
+[PolyForm Perimeter License 1.0.1](https://polyformproject.org/licenses/perimeter/1.0.1).
+The `LICENSE` file is authoritative. This page explains it in everyday language.
 
-## Free uses
+## Free to use
 
-You may use and modify Praxity Check without charge for:
+Use and change Praxity Check without charge, at home and at work. That includes
+personal projects, teaching and research, nonprofit and government work,
+internal use at any company, and paid client work where Praxity Check is one of the
+tools you use to do the job.
 
-- personal projects;
-- teaching, learning, and research;
-- nonprofit and governmental work;
-- internal use by any organization, including a for-profit company;
-- checking sites, courses, and interactive products you are paid to develop,
-  when Praxity Check is an internal development tool rather than the paid deliverable;
-- public source forks distributed without charge, under the same terms, and
-  with the required attribution;
-- genuinely free public services that visibly credit Praxity Check and publish
-  the source for their deployed modifications. A free service may receive
-  general sponsorship that does not change access, results, or priority.
+## What the licence rules out
 
-Examples: a company runs it in CI; an agency checks a course it is building for
-a customer; a university uses it in class; a nonprofit offers a free credited
-hosted instance and publishes its modifications.
+You may not use Praxity Check to provide others with a product that competes with it.
+The licence's test is whether a product, which can be a good or a service, is
+marketed as a substitute for what Praxity Check does. Selling, hosting, repackaging or
+white-labelling Praxity Check falls in that category, and so does a service sold
+mainly as Praxity Check's function.
 
-## Uses requiring separate permission
+If your business adds its own work on top, such as course design, content or
+training, you don't need to ask. If it mainly resells what Praxity Check does, talk to
+me first. I'm glad to work together when improvements and test results flow
+back into Praxity Check.
 
-Contact the project before:
+Want to embed Praxity Check in your product or service, or run a free public fork or
+service? Contact me at [hello@arielharlap.com](mailto:hello@arielharlap.com).
+I usually say yes to free public projects.
 
-- charging for access to Praxity Check or its hosted results;
-- selling a dedicated accessibility-audit service powered substantially by it;
-- repackaging, reselling, renting, or white-labelling it;
-- embedding it as substantial audit functionality in a paid product;
-- operating a nominally free version primarily as a funnel for a paid audit
-  offering;
-- funding a public service through paid advertising or requiring users to let
-  the service reuse their content or data for another purpose; or
-- selling faster processing, higher limits, extra features, or priority.
+## Earlier versions
 
-Commercial permission may involve attribution, contribution, partnership,
-payment, or another negotiated exchange. It need not be exclusively monetary.
-
-Commercial-licensing contact: **[hello@arielharlap.com](mailto:hello@arielharlap.com)**
+Versions up to and including v0.4.0 were released under PolyForm Perimeter
+1.0.1 with the Praxity Community Permission 1.0. Copies of those versions keep
+those terms.
 
 ## Attribution and trademarks
 
-The required public attribution is:
+When you mention it, please credit it as:
 
 > **Praxity Check by Ariel Harlap**
 >
 > <https://github.com/Praxity/praxity-check>
 
-“Work with Ariel” is not required attribution. Praxity Check, other Praxity
-names, marks, and logos remain reserved. Forks may identify their origin but may
-not impersonate or imply endorsement by the official project.
+Praxity Check, other Praxity names, marks, and logos remain reserved.
+Forks may identify their origin but may not impersonate or imply endorsement by the official project.
 
 ## Your content and reports
 
 Praxity Check does not claim ownership of the sites, courses, or other content
-you check. Reports from Praxity Check, public forks, and free public services
-retain the Praxity Check attribution. Automated checks run locally; the
+you check. Automated checks run locally; the
 experimental interaction review sends only the evidence packet you choose to a
 separately invoked model reviewer.
