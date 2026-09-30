@@ -8,9 +8,7 @@ Canonical attribution: **Praxity Check by Ariel Harlap**
 
 Project: <https://github.com/Praxity/praxity-check>
 
-Praxity Check is community source software for reducing accessibility debt in
-learning packages and interactive websites. See `LICENSE` and `LICENSING.md`
-for permitted uses and commercial-licensing requirements.
+Praxity Check by Ariel Harlap. Source-available under the PolyForm Perimeter License 1.0.1: free at home and at work, including paid client work. See [LICENSING.md](LICENSING.md).
 
 ## Contributors
 
@@ -24,8 +22,7 @@ metadata alone is not used to infer copyright ownership or contributor credit.
 The licence includes the unmodified
 [PolyForm Perimeter License 1.0.1](https://polyformproject.org/licenses/perimeter/1.0.1),
 copyright PolyForm Project Inc. The PolyForm Project separately permits reuse
-of its licence texts. The Praxity Community Permission is specific to Praxity
-Check.
+of its licence texts.
 
 ## Runtime dependencies
 
