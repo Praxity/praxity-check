@@ -57,7 +57,7 @@ Options:
   --tier deterministic|inference   How to check: automated rules, or import a model review
   --min-confidence high|medium|low Lowest confidence to show and fail on (default high)
   --json <file>                    Save the full report, with evidence, as JSON
-  --baseline <report.json>         Compare with an earlier JSON report
+  --baseline <report.json>         Compare issues and possible issues with an earlier JSON report
   --scenarios <file>               Also check the page states listed in this JSON file
   --allow-network                  Let the course make internet requests
   --review <file>                  Import a model review (review.json); keep HTML reviews in their bundle folder

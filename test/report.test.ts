@@ -80,7 +80,70 @@ test("needs-review evidence never becomes a finding or a withheld finding", () =
 	assert.doesNotMatch(summary, /Withheld|people with|affected users/i);
 	assert.match(summary, /Page: page\.html\n  Element: button/);
 	assert.match(summary, /Basis: WCAG 1\.4\.3/);
-	assert.match(summary, /1 issue found\. 1 possible issue to review\./);
+	assert.match(summary, /1 issue found at medium confidence or higher\. 1 possible issue to review\./);
+});
+
+test("summary names the confidence threshold and separates mixed-confidence rule groups", () => {
+	const page = { file: "page.html", url: "http://127.0.0.1/page.html" };
+	const findings: Finding[] = (["high", "medium", "low"] as const).map((confidence) => ({
+		what: "The control has no accessible name.",
+		page: page.file,
+		selector: `button#${confidence}`,
+		evidence: "accessible name is empty",
+		fix: "Add a visible label.",
+		lens: "a11y",
+		confidence,
+		basis: "WCAG 4.1.2 Name, Role, Value (A)",
+		rule: "control-name",
+	}));
+	const empty = createReport("/tmp/example", false, { pages: [], stubs: [] }, [], [], false, ENVIRONMENT, []);
+	const report = createReport(
+		"/tmp/example", false, { pages: [page], stubs: [] },
+		[{ page, triage: { ok: true }, audited: true, findings, notes: [] }],
+		[], false, ENVIRONMENT, [], parseBaseline(empty),
+	);
+	const high = humanSummary(report);
+	assert.match(high, /1 high-confidence issue found\./);
+	assert.match(high, /Not shown: 1 medium-confidence and 1 low-confidence issues\./);
+	assert.match(high, /counting issues and possible issues at all confidence levels: 3 new, 0 still present, 0 no longer found\./);
+	assert.doesNotMatch(high, /Element: button#(?:medium|low)|Confidence:/);
+	const medium = humanSummary(report, "medium");
+	assert.match(medium, /2 issues found at medium confidence or higher\./);
+	assert.match(medium, /Element: button#medium\n  Confidence: medium/);
+	assert.doesNotMatch(medium, /Element: button#low|Confidence: high/);
+	const low = humanSummary(report, "low");
+	assert.match(low, /3 issues found across all confidence levels\./);
+	assert.match(low, /Element: button#low\n  Confidence: low/);
+	assert.equal(low.match(/Found once on 1 page\./g)?.length, 3);
+	assert.doesNotMatch(low, /Not shown:/);
+
+	assert.match(humanSummary(empty), /0 high-confidence issues found\./);
+	assert.match(humanSummary(empty, "medium"), /0 issues found at medium confidence or higher\./);
+	assert.match(humanSummary(empty, "low"), /0 issues found across all confidence levels\./);
+});
+
+test("summary groups sampled focus coverage by behavior and unique page without changing JSON notes", () => {
+	const report = createReport("/tmp/example", false, { pages: [], stubs: [] }, [], [], false, ENVIRONMENT, []);
+	const notes = [
+		"Tested whether focus stays visible on 60 of 61 controls on page.html; the rest were not tested.",
+		"state lesson-open: Tested whether focus stays visible on 60 of 70 controls on page.html; the rest were not tested.",
+		"Tested whether focus stays visible on 60 of 80 controls on second.html; the rest were not tested.",
+		"Tested hover and focus contrast on 30 of 31 controls on page.html; the rest were not tested.",
+		"state lesson-open: Tested hover and focus contrast on 30 of 35 controls on page.html; the rest were not tested.",
+		"Tested focus indicators on 30 of 31 controls on page.html; the rest were not tested.",
+		"dark colour scheme: Tested focus indicators on 30 of 40 controls on page.html; the rest were not tested.",
+		"A separate note stays visible.",
+	];
+	report.notes = [...notes];
+	const summary = humanSummary(report, "high", "report.json");
+	assert.match(summary, /Tested whether focus stays visible on only some controls on 2 pages; the rest were not tested\. Per-page and state details: report\.json/);
+	assert.match(summary, /Tested hover and focus contrast on only some controls on 1 page; the rest were not tested\. Per-page and state details: report\.json/);
+	assert.match(summary, /Tested focus indicators on only some controls on 1 page; the rest were not tested\. Per-page and state details: report\.json/);
+	assert.equal(summary.match(/Per-page and state details:/g)?.length, 3);
+	assert.doesNotMatch(summary, /60 of 61|lesson-open|dark colour scheme/);
+	assert.match(summary, /Note: A separate note stays visible\./);
+	assert.match(humanSummary(report), /Add --json <file> for per-page and state details\./);
+	assert.deepEqual(report.notes, notes);
 });
 
 test("repeated page titles produce one non-gating review question", () => {
@@ -241,7 +304,7 @@ test("a baseline compares exact occurrences without rewriting outcomes", () => {
 	assert.ok(current.evaluations.some((item) =>
 		item.type === "rule" && item.rule === "control-name" && item.outcome === "failed"
 	));
-	assert.match(humanSummary(current), /Compared with the baseline: 1 new, 1 still present, 1 no longer found\./);
+	assert.match(humanSummary(current), /Compared with the baseline, counting issues and possible issues at all confidence levels: 1 new, 1 still present, 1 no longer found\. No longer found does not mean fixed\./);
 });
 
 test("generated assessment ids do not create baseline churn", () => {
@@ -280,6 +343,7 @@ test("generated assessment ids do not create baseline churn", () => {
 	assert.equal(current.needsReview[0]?.comparison, "existing");
 	assert.equal(current.needsReview[0]?.selector, "th#rs-cat-rau2xd-item-assessment-164-category-1-0");
 	assert.deepEqual(current.changes?.resolved, []);
+	assert.match(humanSummary(current), /counting issues and possible issues at all confidence levels: 0 new, 1 still present, 0 no longer found\./);
 });
 
 test("reviewed baseline occurrences require accountable metadata", () => {

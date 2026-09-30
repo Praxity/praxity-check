@@ -105,6 +105,10 @@ Without a baseline, each finding and review question has `disposition:
 `new` or `existing`, and prior occurrences no longer present appear under
 `changes.resolved`.
 
+The terminal baseline comparison counts issues and possible issues at all
+confidence levels. "No longer found" means absent from the current run. It does
+not prove that an issue was fixed.
+
 To review an occurrence in the baseline, keep it in its original array and add
 an accountable decision:
 
@@ -442,9 +446,27 @@ behind it. They do not infer which people are affected. Locators are real CSS
 selectors such as `div:nth-of-type(3) > span`. The evidence includes the
 accessible name.
 
-The terminal summary has a length limit. The JSON retains all results. If the
-summary says
-findings were withheld, they are all in the `--json` file.
+The terminal summary names the confidence threshold used for its issue count.
+For example, with `--min-confidence medium`:
+
+```text
+Checked 3 pages.
+2 issues found at medium confidence or higher. 1 possible issue to review.
+```
+
+Medium and low confidence findings include their confidence in each finding
+group. The summary says how many lower-confidence findings it leaves out and
+which `--min-confidence` option shows them. The JSON retains all findings.
+
+Repeated notes about sampled focus checks become one line per behaviour,
+counting each affected page once even when several states were checked:
+
+```text
+Note: Tested hover and focus contrast on only some controls on 3 pages; the rest were not tested. Per-page and state details: report.json
+```
+
+The JSON keeps the tested-control counts for each page and state. If you did
+not save JSON, the summary tells you to add `--json <file>` for those details.
 
 Reports and evidence files can contain course content, local paths, requested
 URLs, and VoiceOver speech. Review them before sharing.

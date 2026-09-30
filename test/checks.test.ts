@@ -29,6 +29,7 @@ import {
 	stateContrast,
 	textScale,
 	textSpacing,
+	triage,
 	UNIQUE_SELECTOR,
 } from "../src/checks.ts";
 import { serve, type StaticServer } from "../src/serve.ts";
@@ -290,6 +291,16 @@ body { background: #fff; }
 const STATE_CONTRAST_BROWSER_DEFAULT = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Browser focus ring</title></head>
 <body><h1>Browser focus ring</h1><a id="default-link" href="#default-link">Open practice set</a></body></html>`;
 
+const HIDDEN_RADIO_RING = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Chart or table</title>
+<style>
+body { background: #161a21; color: #fafbfc; }
+label { display: inline-block; padding: 12px; background: #c6f55c; color: #161a21; }
+input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+input:focus-visible { outline: 2px solid #c6f55c; }
+@media (prefers-color-scheme: dark) { label:has(input:focus-visible) { outline: 2px solid #fafbfc; outline-offset: 2px; } }
+</style></head><body><label><input id="chart" type="radio" name="view" checked>Chart</label></body></html>`;
+const HIDDEN_RADIO_NO_RING = HIDDEN_RADIO_RING.replace("outline: 2px solid #fafbfc", "outline: none");
+
 const SCROLL_BROKEN = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Scrollable region</title>
 <style>#lesson { height: 60px; overflow-y: auto; width: 240px; }</style></head><body><h1>Lesson</h1>
 <div id="lesson">One<br>Two<br>Three<br>Four<br>Five<br>Six<br>Seven<br>Eight</div></body></html>`;
@@ -380,6 +391,8 @@ describe("automated checks fire on known defects", () => {
 		await writeFile(join(root, "state-broken.html"), STATE_CONTRAST_BROKEN);
 		await writeFile(join(root, "state-clean.html"), STATE_CONTRAST_CLEAN);
 		await writeFile(join(root, "state-browser-default.html"), STATE_CONTRAST_BROWSER_DEFAULT);
+		await writeFile(join(root, "hidden-radio-ring.html"), HIDDEN_RADIO_RING);
+		await writeFile(join(root, "hidden-radio-no-ring.html"), HIDDEN_RADIO_NO_RING);
 		await writeFile(join(root, "scroll-broken.html"), SCROLL_BROKEN);
 		await writeFile(join(root, "scroll-clean.html"), SCROLL_CLEAN);
 		await writeFile(join(root, "scroll-reactive.html"), SCROLL_REACTIVE);
@@ -505,6 +518,60 @@ describe("automated checks fire on known defects", () => {
 		);
 	});
 
+	test("stateContrast measures a hidden radio's enclosing label ring in dark mode", async () => {
+		const page = await open("hidden-radio-ring.html");
+		await page.emulateMedia({ colorScheme: "dark" });
+		await page.locator("input").focus();
+		const result = await stateContrast(page, "hidden-radio-ring.html");
+		assert.deepEqual(result.findings, [], "the label's contrasting ring was missed");
+		assert.deepEqual(result.needsReview, []);
+		await page.close();
+	});
+
+	test("stateContrast reports a hidden radio without an adequate label focus change", async () => {
+		const page = await open("hidden-radio-no-ring.html");
+		await page.emulateMedia({ colorScheme: "dark" });
+		for (const ring of ["none", "2px solid #161a21"]) {
+			await page.addStyleTag({ content: `label:has(input:focus-visible) { outline: ${ring}; }` });
+			const result = await stateContrast(page, "hidden-radio-no-ring.html");
+			assert.deepEqual(result.findings.map((finding) => [finding.rule, finding.selector]), [["state-non-text-contrast", "input#chart"]]);
+		}
+		// A ring that is always there does not convey focus.
+		await page.addStyleTag({ content: `label, label:has(input:focus-visible) { outline: 2px solid #fafbfc; outline-offset: 2px; } input:focus-visible { outline: none; }` });
+		const staticRing = await stateContrast(page, "hidden-radio-no-ring.html");
+		assert.equal(staticRing.findings.filter((finding) => finding.rule === "state-non-text-contrast").length, 1);
+		await page.setContent(`<style>div { opacity: 0; } input { opacity: 0; } label { display: inline-block; } label:has(input:focus-visible) { outline: 2px solid black; }</style><div><label><input type="radio">Chart</label></div>`);
+		const invisibleRing = await stateContrast(page, "invisible-label.html");
+		assert.equal(invisibleRing.findings.filter((finding) => finding.rule === "state-non-text-contrast").length, 1, "an ancestor hides the label ring");
+		await page.close();
+	});
+
+	test("stateContrast shares sibling and associated-label sampling with focusIndicators", async () => {
+		const page = await open("sibling.html");
+		const result = await stateContrast(page, "sibling.html");
+		assert.deepEqual(result.findings.map((finding) => finding.selector), ["input#dead"]);
+		// An explicitly associated label may be outside the sampled ancestors/siblings.
+		await page.setContent(`<style>input { opacity: 0; } label { display: inline-block; } body:has(input:focus-visible) label { outline: 2px solid black; }</style><div><input id="option" type="radio"></div><section><label for="option">Chart</label></section>`);
+		assert.deepEqual((await stateContrast(page, "associated-label.html")).findings, []);
+		assert.deepEqual((await focusIndicators(page, "associated-label.html")).findings, []);
+		// A zero-sized sibling can still draw a visible pseudo-element indicator.
+		await page.setContent(`<style>input { opacity: 0; } span { display: inline-block; width: 0; height: 0; } span::before { content: ""; position: absolute; width: 30px; height: 30px; } input:focus-visible + span::before { outline: 2px solid black; }</style><input id="option" type="radio" aria-label="Chart"><span></span>`);
+		assert.deepEqual((await stateContrast(page, "pseudo-ring.html")).findings, []);
+		await page.close();
+	});
+
+	test("triage checks content pages with large forms and skips empty frame launchers", async () => {
+		const page = await open("hidden-radio-ring.html");
+		const frame = `<iframe title="Support form" srcdoc="<p>Form</p>" style="width:100vw;height:100vh"></iframe>`;
+		await page.setContent(`<h1>Support</h1><p>Tell us what happened so we can help with your course.</p>${frame}`);
+		assert.deepEqual(await triage(page, 200), { ok: true });
+		await page.setContent(`<h1>Support</h1>${frame}`);
+		assert.deepEqual(await triage(page, 200), { ok: true }, "ambiguous page should be checked");
+		await page.setContent(frame);
+		assert.equal((await triage(page, 200)).ok, false, "empty launcher should still be skipped");
+		await page.close();
+	});
+
 	test("keyboardScrollableRegions proves a region responds to a keyboard key", async () => {
 		const bad = await open("scroll-broken.html");
 		const badResult = await keyboardScrollableRegions(bad, "scroll-broken.html");
@@ -608,9 +675,21 @@ describe("automated checks fire on known defects", () => {
 		assert.ok(result.needsReview?.some((item) =>
 			item.rule === "axe:color-contrast" && item.selector?.includes("target") && item.evidence.includes("overlapped")),
 		);
+		assert.equal(result.needsReview?.find((item) => item.rule === "axe:color-contrast")?.what,
+			"Check the contrast of this text by hand: it needs 4.5:1, or 3:1 for large text.");
 		assert.ok(result.evaluations?.some((evaluation) =>
 			evaluation.rule === "axe:color-contrast" && evaluation.outcome === "cantTell"
 		));
+	});
+
+	test("runAxe asks plainly for a video caption review", async () => {
+		const context = await browser.newContext();
+		const page = await context.newPage();
+		await page.goto(`${server.origin}/axe-incomplete-contrast.html`, { waitUntil: "load" });
+		await page.setContent(`<html lang="en"><title>Video</title><main><h1>Video</h1><video src="${server.origin}/tone.wav" controls></video></main></html>`);
+		const result = await runAxe(page, "video.html");
+		assert.equal(result.needsReview?.find((item) => item.rule === "axe:video-caption")?.what, "Check that this video has captions.");
+		await context.close();
 	});
 
 	test("focusNotObscured reports total fixed coverage but not partial overlap", async () => {
@@ -680,6 +759,8 @@ describe("automated checks fire on known defects", () => {
 			partialResult.untested?.find((evaluation) => evaluation.check === "page-scope:unavailable-frame")?.reason ?? "",
 			/provider "inline", title "Sandboxed exercise", URL "srcdoc"/,
 		);
+		assert.ok(partialResult.notes.some((note) => note.includes('embedded frame "Sandboxed exercise" could not be checked')));
+		assert.ok(!partialResult.notes.join(" ").includes("DOM scope"));
 
 		const clean = await open("scope-clean.html");
 		const cleanResult = await scopeCoverage(clean, "scope-clean.html");

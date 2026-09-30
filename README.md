@@ -49,9 +49,11 @@ outside the local check server, including WebSocket connections, are blocked by
 default. Only run it on packages you trust; Praxity Check is not designed to contain
 deliberately malicious HTML.
 
-The terminal summary is brief. Add `--json report.json` to save every issue,
-every possible issue to review, and coverage notes, each with evidence. The `--min-confidence` option controls
-which findings are shown and which make the command exit with an error.
+For HTML, the terminal summary names the confidence threshold used for its issue count.
+It groups repeated focus coverage notes by behaviour and counts affected pages.
+Add `--json report.json` to save every issue, every possible issue to review,
+and coverage notes for each page and state, with evidence. The `--min-confidence`
+option controls which findings are shown and which make the command exit with an error.
 
 HTML, SCORM and PDF reports share a feedback format for findings, review
 questions, suggestions and coverage. See the [schema guide](docs/report-schema-v4.md)
