@@ -263,6 +263,6 @@ export async function pdfReviewCli(args: string[]): Promise<number> {
 			validatePdfReviewBundleSelection(review, bundle);
 		});
 	}
-	console.log(`PDF ${options.tier} review bundle: ${result.directory}\nSelected pages: ${result.manifest.selectedPages.join(", ")} of ${result.manifest.pageCount}. ${options.reviewer === "codex" ? "Validated review.json is ready for check --review." : "Read review-prompt.md; import the resulting JSON with check --review."}`);
+	console.log(`Review bundle saved to ${result.directory}, covering pages ${result.manifest.selectedPages.join(", ")} of ${result.manifest.pageCount}.\n${options.reviewer === "codex" ? "Its review.json is ready to import with check --review." : "Follow review-prompt.md, then import the result with check --review."}`);
 	return 0;
 }

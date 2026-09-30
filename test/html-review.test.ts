@@ -69,7 +69,7 @@ test("HTML bundle captures real actions, imports retained evidence without brows
 	const unavailableBrowser = { ...process.env, PLAYWRIGHT_BROWSERS_PATH: join(dir, "no-browser") };
 	const checked = run(["check", source, "--tier", "inference", "--review", reviewPath, "--json", output], unavailableBrowser);
 	assert.equal(checked.status, 0, checked.stderr);
-	assert.match(checked.stdout, /Deterministic checks were not selected/);
+	assert.match(checked.stdout, /Automated checks did not run because --tier inference was selected/);
 	assert.match(checked.stdout, /ArrowRight leaves focus/); assert.match(checked.stdout, /Move focus to the next tab/);
 	const report = JSON.parse(await readFile(output, "utf8"));
 	assert.deepEqual(report.findings, []); assert.deepEqual(report.evaluations, []); assert.deepEqual(report.rules, []);
@@ -92,7 +92,7 @@ test("HTML bundle captures real actions, imports retained evidence without brows
 	assert.ok(mixed.findings.length > 0, "omitted tier keeps deterministic checks active");
 	assert.ok(mixed.evaluations.length > 0);
 	assert.equal(mixed.inferenceReviews.length, 1);
-	assert.match(combined.stdout, /tier was omitted/);
+	assert.match(combined.stdout, /Ran automated checks and imported model reviews/);
 	assert.equal(mixed.feedback.findings.filter((item: { method: string }) => item.method === "inference").length, 1);
 	for (const change of [
 		{ contentSha256: "0".repeat(64) }, { evidenceSha256: "0".repeat(64) }, { pagesReviewed: ["unknown.html"] },

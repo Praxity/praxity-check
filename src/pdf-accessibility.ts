@@ -131,7 +131,7 @@ export async function checkPdfAccessibility(snapshot: string, options: { profile
 		} else {
 			output.evaluations.push({ rule: "pdfua.machine", outcome: result.machineCompliant ? "passed" : "failed", reason: `veraPDF ${result.version} ${profile}: ${result.passedRules} passed rules, ${result.failedRules} failed rules, ${result.failedChecks} failed checks.` });
 		}
-		if (evidence.stderr.trim()) output.needsReview.push({ rule: "pdfua.diagnostics", message: "veraPDF emitted diagnostics.", remedy: "Inspect stderr and resolve warnings before relying on the machine result.", evidence: evidence.stderr, location: {}, severity: "moderate", confidence: "medium" });
+		if (evidence.stderr.trim()) output.needsReview.push({ rule: "pdfua.diagnostics", message: "veraPDF reported warnings.", remedy: "Read the warnings in the evidence and resolve them before you rely on the PDF/UA result.", evidence: evidence.stderr, location: {}, severity: "moderate", confidence: "medium" });
 	} catch (error) {
 		output.machineStatus = "incomplete";
 		output.evaluations.push({ rule: "pdfua.machine", outcome: "untested", reason: error instanceof Error ? error.message : String(error) });

@@ -52,37 +52,48 @@ const USAGE = `Usage:
   praxity-check screen-reader <folder|zip> --page <html> --control <name> --expected <phrase> --take-screen-control --allow-network
 
 Options:
-  --checks accessibility|design|accessibility,design  Select independent check domains
-  --tier deterministic|inference        Select the evidence method
-  --focus visual|usability              PDF inference review focus (default visual)
-  --design-evidence                    PDF: add measured design facts and detail crops
-  --min-text-size-pt <number>           PDF: explicit requirement for all extracted text; requires --design-evidence
-  --json <file>                         Write the complete JSON report
-  --min-image-ppi <number>              PDF: review rasters below an explicit PPI threshold
-  --max-sparse-words <number>          PDF: review sparse pages using this word-count threshold
-  --review <file>                     Import model review JSON; HTML reviews stay beside their manifest and evidence
-  --classifier none|jev              prepare-review: optional advisory classifier (default none; Jev requires JEV_API_KEY)
-  --reviewer manual|codex            prepare-review: Codex CLI by default for --tier inference; manual saves a bundle
-  --model <id>                       Codex review model (default gpt-5.6-luna); unavailable with manual review
-  --paper-size A4|Letter                PDF: require this MediaBox size, either orientation
-  --pdfua <ua1|ua2|off>    PDF/UA machine profile, default ua1 (requires veraPDF)
-  --verapdf <path>         Path to the veraPDF executable
-  --baseline <report.json>              Compare exact occurrences with a prior report
-  --scenarios <file>                    Scan named rendered states from JSON
-  --allow-network                       Allow the audited package to use the network
-  --min-confidence high|medium|low      Reporting and exit threshold (default: high)
-  --page <html>                         Page for the screen-reader action
-  --control <name>                      VoiceOver control name to find and activate
-  --expected <phrase>                   Phrase expected after activation
-  --take-screen-control                 Allow VoiceOver, Safari, focus, and keyboard control
-  -h, --help                            Show this help
+  --checks accessibility|design|accessibility,design
+                                   What to check (default accessibility)
+  --tier deterministic|inference   How to check: automated rules, or import a model review
+  --min-confidence high|medium|low Lowest confidence to show and fail on (default high)
+  --json <file>                    Save the full report, with evidence, as JSON
+  --baseline <report.json>         Compare with an earlier JSON report
+  --scenarios <file>               Also check the page states listed in this JSON file
+  --allow-network                  Let the course make internet requests
+  --review <file>                  Import a model review (review.json); keep HTML reviews in their bundle folder
+  -h, --help                       Show this help
 
-HTML prepare-review writes Markdown to stdout; --output also writes a private importable bundle.
-HTML check --tier inference requires --review and runs no deterministic checks.
-Omitting --tier with --review runs deterministic checks plus imported model observations.
-screen-reader writes Markdown evidence to stdout.
-PDF prepare-review writes a private bundle of page images, facts and review instructions.
-screen-reader is macOS-only, disruptive, and never runs as part of check or prepare-review.`;
+prepare-review options:
+  --output <new-directory>         Save the review bundle in this new folder
+  --reviewer manual|codex          Run the review with Codex (default), or save a bundle to review yourself
+  --model <id>                     Codex model (default gpt-5.6-luna)
+  --classifier none|jev            Optional Jev classifier (default none; needs JEV_API_KEY)
+  --focus visual|usability         PDF: what the model review looks at (default visual)
+  --pages <list>                   PDF: pages to review, such as 1,3
+  --audience <text>                PDF: who the document is for
+  --use <text>                     PDF: how people will use the document
+
+PDF options:
+  --review-bundle <manifest.json>  The bundle manifest for a --review; newer PDF reviews need it
+  --design-evidence                Add measured design facts and close-up crops
+  --min-text-size-pt <number>      Smallest allowed text size; needs --design-evidence
+  --min-image-ppi <number>         Flag images below this resolution
+  --max-sparse-words <number>      Flag pages with this many words or fewer
+  --paper-size A4|Letter           Flag pages of a different size, in either orientation
+  --pdfua ua1|ua2|off              PDF/UA profile to validate (default ua1; needs veraPDF)
+  --verapdf <path>                 Path to the veraPDF program
+
+screen-reader options:
+  --page <html>                    Page to open
+  --control <name>                 VoiceOver name of the control to activate
+  --expected <phrase>              Phrase VoiceOver should say after activation
+  --take-screen-control            Confirm that VoiceOver and Safari may take over the keyboard and screen
+
+check --tier inference needs --review and runs no automated checks.
+check --review without --tier runs automated checks and imports the review.
+prepare-review prints Markdown evidence for HTML. Add --output to also save a review bundle.
+prepare-review for a PDF saves a bundle of page images, facts and review instructions.
+screen-reader runs only on macOS, prints Markdown evidence, and never runs during check or prepare-review.`;
 
 interface CommonOptions extends SelectionOptions {
 	target: string;
@@ -167,7 +178,7 @@ function parseArgs(args: string[]): Options {
 	if (options.command === "check") {
 		if (options.tier === "inference" && !options.reviewFiles.length) throw new Error("HTML --tier inference requires --review from a prepare-review --output bundle");
 		if (options.tier === "deterministic" && options.reviewFiles.length) throw new Error("--tier deterministic cannot import inference reviews; use --tier inference or omit --tier for a combined report");
-		if (options.tier === "inference" && (options.baselineFile || options.scenarioFile || options.allowNetwork)) throw new Error("HTML inference import uses retained evidence; --baseline, --scenarios and --allow-network require a deterministic run");
+		if (options.tier === "inference" && (options.baselineFile || options.scenarioFile || options.allowNetwork)) throw new Error("--tier inference only imports saved review evidence, so it cannot use --baseline, --scenarios or --allow-network. Omit --tier to also run automated checks.");
 		if (options.reviewFiles.length > 16 || new Set(options.reviewFiles).size !== options.reviewFiles.length) throw new Error("Use at most 16 distinct HTML reviews");
 	}
 	return options;
@@ -175,8 +186,8 @@ function parseArgs(args: string[]): Options {
 
 function inferenceSummary(report: AuditReport) {
 	return (report.inferenceReviews ?? []).flatMap((review) => review.findings.flatMap((item) => [
-		`${item.category === "observed-defect" ? "Model observation" : item.category === "needs-context" ? "Question" : "Suggestion"} (${review.reviewer.model}): ${item.message}`,
-		`  Location: ${item.location.page}, ${item.location.selector}`,
+		`${item.category === "observed-defect" ? "Issue" : item.category === "needs-context" ? "Question" : "Suggestion"} from ${review.reviewer.model}: ${item.message}`,
+		`  Page: ${item.location.page}`, `  Element: ${item.location.selector}`,
 		`  Consequence: ${item.consequence}`, `  Change: ${item.action}`, `  Verify: ${item.verification}`,
 	])).join("\n");
 }
@@ -379,7 +390,7 @@ async function auditPages(
 					triage: verdict,
 					audited: false,
 					findings: [],
-					notes: settleNote ? [settleNote] : [],
+					notes: settleNote ? [`${discoveredPage.file}: ${settleNote}`] : [],
 					untested: [{
 						type: "check",
 						check: "page-audit",
@@ -404,7 +415,7 @@ async function auditPages(
 					audited: false,
 					title,
 					findings: [],
-					notes: settleNote ? [settleNote] : [],
+					notes: settleNote ? [`${discoveredPage.file}: ${settleNote}`] : [],
 					untested: [{
 						type: "check",
 						check: "page-audit",
@@ -439,7 +450,7 @@ async function auditPages(
 						findings: stateResult.findings.map((item) => ({ ...item, state: scenario.id })),
 						needsReview: (stateResult.needsReview ?? []).map((item) => ({ ...item, state: scenario.id })),
 						notes: [
-							...(settleNote ? [`state ${scenario.id}: ${settleNote}`] : []),
+							...(settleNote ? [`${discoveredPage.file}, state ${scenario.id}: ${settleNote}`] : []),
 							...stateResult.notes.map((note) => `state ${scenario.id}: ${note}`),
 						],
 						evaluations: (stateResult.evaluations ?? []).map((evaluation) => ({ ...evaluation, state: scenario.id })),
@@ -450,7 +461,7 @@ async function auditPages(
 					const reason = error instanceof Error ? error.message : String(error);
 					stateResults.push({
 						findings: [],
-						notes: [`state ${scenario.id} did not run on ${discoveredPage.file}: ${reason} — treat as unchecked, not as clean`],
+						notes: [`state ${scenario.id} did not run on ${discoveredPage.file}: ${reason}. Treat it as not run, not as passed.`],
 						untested: [{
 							type: "check",
 							check: `scenario:${scenario.id}`,
@@ -479,7 +490,7 @@ async function auditPages(
 				title,
 				findings: combined.findings,
 				needsReview: combined.needsReview,
-				notes: settleNote ? [settleNote, ...combined.notes] : combined.notes,
+				notes: settleNote ? [`${discoveredPage.file}: ${settleNote}`, ...combined.notes] : combined.notes,
 				evaluations: combined.evaluations,
 				rules: combined.rules,
 				untested: combined.untested,
@@ -511,7 +522,7 @@ async function main(args: string[]): Promise<number> {
 			? parseBaseline(JSON.parse(await readFile(options.baselineFile, "utf8")) as unknown)
 			: undefined;
 		if (options.command === "screen-reader") {
-			console.error("praxity-check: starting an acknowledged disruptive session; VoiceOver and Safari will take keyboard and screen focus");
+			console.error("praxity-check: starting VoiceOver and Safari. They control the keyboard and screen until the test ends.");
 		}
 		const selection = options.command === "screen-reader" ? undefined : validateHtmlSelection(options.command, options);
 		const revisionBound = Boolean(options.command === "prepare-review" && options.output || options.command === "check" && options.reviewFiles.length);
@@ -533,8 +544,8 @@ async function main(args: string[]): Promise<number> {
 			report.contentSha256 = snapshot!.contentSha256;
 			report.inferenceReviews = reviews;
 			report.feedback = htmlFeedback(report);
-			console.log(`Imported ${reviews.length} HTML accessibility ${reviews.length === 1 ? "review" : "reviews"}. Deterministic checks were not selected.
-${report.feedback.findings.length} model observations, ${report.feedback.questions.length} questions, ${report.feedback.suggestions.length} suggestions. These do not affect the deterministic failure exit code.`);
+			console.log(`Imported ${reviews.length} model ${reviews.length === 1 ? "review" : "reviews"}. Automated checks did not run because --tier inference was selected.
+The model reported ${[["issue", report.feedback.findings.length], ["question", report.feedback.questions.length], ["suggestion", report.feedback.suggestions.length]].map(([noun, n]) => `${n} ${noun}${n === 1 ? "" : "s"}`).join(", ").replace(/, ([^,]*)$/, " and $1")}. Model results never change the exit code.`);
 			console.log(inferenceSummary(report));
 			if (options.json) await writeReport(options.json, report, protectedPaths);
 			return 0;
@@ -573,7 +584,7 @@ ${report.feedback.findings.length} model observations, ${report.feedback.questio
 					const { evidence } = await readHtmlReviewBundle(join(result.directory, "review.json"), snapshot.contentSha256, discovery);
 					await runPreparedReview(result.directory, options, { kind: "html", sourceSha256: result.manifest.evidenceSha256, items: evidence.candidates.map(candidate => ({ id: candidate.id, text: candidate.dom.html })) }, path => importHtmlReview(path, snapshot.contentSha256, discovery));
 				}
-				console.error(`HTML review bundle: ${result.directory}. ${options.reviewer === "codex" ? "Validated review.json is ready for check --review." : "Read review-prompt.md and save review.json beside manifest.json and evidence.json."}`);
+				console.error(`Review bundle saved to ${result.directory}. ${options.reviewer === "codex" ? "Its review.json is ready to import with check --review." : "Follow review-prompt.md, then save the result as review.json in the same folder."}`);
 			}
 			return packet.auditedPages > 0 ? 0 : 2;
 		}
@@ -599,10 +610,10 @@ ${report.feedback.findings.length} model observations, ${report.feedback.questio
 		if (snapshot) report.contentSha256 = snapshot.contentSha256;
 		if (reviews.length) {
 			report.inferenceReviews = reviews;
-			report.notes.push("The tier was omitted. Deterministic checks ran alongside imported model observations; only deterministic findings affect the failure exit code.");
+			report.notes.push("Ran automated checks and imported model reviews. Only automated check results change the exit code.");
 		}
 		report.feedback = htmlFeedback(report);
-		console.log(humanSummary(report, options.minConfidence));
+		console.log(humanSummary(report, options.minConfidence, options.json));
 		if (reviews.length) console.log(inferenceSummary(report));
 		if (options.json) await writeReport(options.json, report, protectedPaths);
 		if (pages.length === 0 || pages.every((page) => !page.triage.ok)) return 2;

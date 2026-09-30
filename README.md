@@ -41,16 +41,16 @@ the confidence level you choose. It runs:
   scaling when a page opts in.
 - contrast and focus visibility in declared dark colour schemes.
 - long automatic motion and audio autoplay.
-- narrow checks for image alternatives and ambiguous link names, plus review
-  questions when multiple pages reuse one title.
+- narrow checks for image alternatives and ambiguous link names, plus a possible
+  issue to review when several pages share one title.
 
 The pages run locally. During `check` and `prepare-review`, ordinary web requests
 outside the local check server, including WebSocket connections, are blocked by
 default. Only run it on packages you trust; Praxity Check is not designed to contain
 deliberately malicious HTML.
 
-The terminal summary is brief; an optional JSON report contains every finding,
-question for review, and coverage note. The `--min-confidence` option controls
+The terminal summary is brief. Add `--json report.json` to save every issue,
+every possible issue to review, and coverage notes, each with evidence. The `--min-confidence` option controls
 which findings are shown and which make the command exit with an error.
 
 HTML, SCORM and PDF reports share a feedback format for findings, review
@@ -78,10 +78,10 @@ documents the JSON format. Run `node src/cli.ts --help` to see every option.
 Reports and evidence files can contain course content, local paths, requested
 URLs, and VoiceOver speech. Review them before sharing.
 
-The command exits with `0` when it finds no problems at the selected confidence
-level, `1` when it finds problems, and `2` when the check cannot run. Questions
-that need human judgement appear under `needsReview` in the JSON report. They
-do not change the exit code.
+The command exits with `0` when it finds no issues at the selected confidence
+level, `1` when it finds issues, and `2` when the check cannot run. Possible
+issues that need a person to decide appear under `needsReview` in the JSON
+report. They do not change the exit code.
 
 ## Select checks and evidence
 

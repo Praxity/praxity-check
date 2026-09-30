@@ -20,22 +20,22 @@ export function evaluatePdfPrint(facts: {
 	const imagePages = new Set(facts.images?.filter((image) => image.type === "image").map((image) => image.page));
 	for (const rule of ["text.extractable", ...(policy.includeSparse === false ? [] : ["page.sparse-content"])]) {
 		if (rule === "page.sparse-content" && policy.maxSparseWords === undefined) {
-			evaluations.push({ rule, outcome: "untested", reason: "No sparse-page word threshold requested." });
+			evaluations.push({ rule, outcome: "untested", reason: "Add --max-sparse-words to check this." });
 			continue;
 		}
 		if (!facts.pages?.length || facts.words === undefined || facts.images === undefined) {
-			evaluations.push({ rule, outcome: "untested", reason: "Page, text and image inventories are required." });
+			evaluations.push({ rule, outcome: "untested", reason: "Could not list the pages, text and images this check needs." });
 			continue;
 		}
 		for (const page of facts.pages) {
 			const words = wordsByPage.get(page.page) ?? [], hasRasterImages = imagePages.has(page.page);
 			if (rule === "text.extractable" && !words.length) needsReview.push({ rule, location: { page: page.page },
-				message: hasRasterImages ? "Page has raster images and no extracted words; inspect whether meaningful text is image-only." : "Page has no extracted words; it may contain vector artwork, outlined text or intentional whitespace.",
-				remedy: "Inspect the page. If it contains meaningful text, export real text or supply a verified OCR layer.",
+				message: hasRasterImages ? "This page has images but no text Check could extract. Look for important text that exists only as an image." : "This page has no text Check could extract. It may hold vector artwork, text converted to outlines, or deliberate white space.",
+				remedy: "If the page contains meaningful text, export it as real text or add a checked OCR text layer.",
 				evidence: { wordCount: 0, hasRasterImages, vectorArtworkMeasured: false } });
 			if (rule === "page.sparse-content" && words.length > 0 && words.length <= policy.maxSparseWords! && !hasRasterImages) needsReview.push({ rule, location: { page: page.page },
-				message: `Page has at most ${policy.maxSparseWords} extracted words and no raster images; inspect whether its pagination is intentional.`,
-				remedy: "Keep intentional covers, writing areas and vector illustrations. Adjust source pagination if this is an accidental extra page.",
+				message: `This page has ${policy.maxSparseWords} or fewer words and no images. Check that the page is meant to be there.`,
+				remedy: "Keep it if it is a cover, a writing area or an illustration. If it is an accidental extra page, remove it in the source.",
 				evidence: { wordCount: words.length, maxSparseWords: policy.maxSparseWords, text: words.join(" "), vectorArtworkMeasured: false } });
 		}
 		evaluations.push({ rule, outcome: needsReview.some((item) => item.rule === rule) ? "cantTell" : "inapplicable",
