@@ -99,8 +99,8 @@ test("real PDF renders privately, imports without changing machine verdict and c
 	assert.match(report.inferenceReviews[0].findings[0].id, /^[a-f0-9]{64}$/);
 	assert.equal(report.inferenceReviews[0].findings[0].remedy, review.findings[0]!.action);
 	assert.equal(report.evaluations.find((e: { rule: string }) => e.rule === "pdfua.conformance").outcome, "untested");
-	assert.match(result.stdout, /Inferred visual review/);
-	assert.match(result.stdout, /0 concerns. Pages reviewed: 1 of 2. Other pages were not reviewed in this batch/);
+	assert.match(result.stdout, /Model review \(visual/);
+	assert.match(result.stdout, /0 concerns on page 1 of 2\. The model did not review the other pages/);
 	const reviewBytes = await readFile(imported);
 	const overwrite = spawnSync(process.execPath, [resolve("src/cli.ts"), "check", path, "--pdfua", "off", "--review", imported, "--json", imported], { encoding: "utf8" });
 	assert.equal(overwrite.status, 2);
@@ -159,7 +159,7 @@ test("bound PDF imports verify retained artifacts, context, selection and partia
 	const report = JSON.parse(await readFile(output, "utf8"));
 	assert.equal(report.feedback.coverage.find((item: { method: string }) => item.method === "inference").status, "partial");
 	assert.equal(report.inferenceReviews[0].evidenceBinding, "bundle");
-	assert.match(result.stdout, /do not prove/);
+	assert.match(result.stdout, /does not prove/);
 	for (const file of [manifestPath, join(dir, "bundle", "page-1.json")]) {
 		const bytes = await readFile(file);
 		assert.match(run("--review-bundle", manifestPath, "--json", file).stderr, /must not overwrite review bundle evidence/);

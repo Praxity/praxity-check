@@ -101,7 +101,7 @@ test("PDF domain and tier selection changes executed checks and keeps inference 
 	await writeFile(imported, JSON.stringify({ ...modern, documentSha256: design.document.sha256 }));
 	const result = spawnSync(process.execPath, [cli, "check", path, "--checks", "design", "--tier", "inference", "--review", imported, "--json", output, "--verapdf", join(dir, "missing-validator")], { encoding: "utf8" });
 	assert.equal(result.status, 0, result.stderr);
-	assert.match(result.stdout, /Supporting evidence extracted; deterministic checks were not selected/);
+	assert.match(result.stdout, /Automated checks did not run because --tier inference was selected/);
 	const wrongDefault = spawnSync(process.execPath, [cli, "check", path, "--tier", "inference", "--review", imported], { encoding: "utf8" });
 	assert.equal(wrongDefault.status, 2);
 	assert.match(wrongDefault.stderr, /unselected check domain/);
