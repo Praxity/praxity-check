@@ -44,7 +44,7 @@ control.
 When a page opts into `<meta name="text-scale" content="scale">`, Praxity Check tests
 the 320-pixel presentation at 200% operating-system text scale. It also reruns
 visual checks when the document declares a dark colour scheme. Repeated titles
-across audited pages are questions for review, not automatic failures.
+across audited pages are possible issues to review, not failures.
 
 Exit codes: `0` nothing at or above the threshold, `1` findings present, `2`
 could not run.

@@ -217,7 +217,7 @@ export async function settle(page: Page, maxMs = 8000): Promise<string | undefin
 		}
 		await page.waitForTimeout(250);
 	}
-	return `rendering did not keep stable text and element counts for 1s before the ${maxMs}ms settle deadline — result may be partial`;
+	return `still changing ${maxMs / 1000}s after loading, so results may be incomplete`;
 }
 
 const SCOPE_CONTROLS = `${FOCUSABLE}, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="slider"]`;
@@ -357,7 +357,7 @@ export async function triage(page: Page, status: number | null, blockedRequests 
 	if (shape.dominantFrame) {
 		return {
 			ok: false,
-			reason: "a full-size iframe holds the course; this page is a launcher — audit the framed document directly",
+			reason: "only opens the course in a full-size frame; check the framed page on its own",
 		};
 	}
 
@@ -368,7 +368,7 @@ export async function triage(page: Page, status: number | null, blockedRequests 
 	if (blockedRequests > 0 && shape.text < 200) {
 		return {
 			ok: false,
-			reason: `content is loaded from a remote origin and ${blockedRequests} request(s) were blocked; rerun with --allow-network if you trust this package`,
+			reason: `loads its content from the internet, and Check blocked ${blockedRequests} ${blockedRequests === 1 ? "request" : "requests"}. If you trust this course, rerun with --allow-network`,
 		};
 	}
 
@@ -379,8 +379,8 @@ export async function triage(page: Page, status: number | null, blockedRequests 
 			ok: false,
 			reason:
 				shape.frames > 0
-					? `no content of its own; ${shape.frames} iframe(s) hold it — audit the framed document directly`
-					: "page rendered empty",
+					? `has no content of its own, only ${shape.frames === 1 ? "a frame" : `${shape.frames} frames`}; check the framed page on its own`
+					: "page was empty after loading",
 		};
 	}
 	return { ok: true };
@@ -513,7 +513,7 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 				const evidence = `${(node.failureSummary ?? rule.description).replace(/\s+/g, " ").trim()}${selectorByTarget.has(target) ? "" : `; axe target ${JSON.stringify(target)} could not be resolved to one light-DOM element`}`;
 				if (!confidence) {
 					needsReview.push({
-						what: `${rule.help} could not be determined automatically.`,
+						what: `Review by hand: ${rule.help}.`,
 						page: pageId,
 						selector: selectorByTarget.get(target),
 						evidence,
@@ -752,13 +752,13 @@ export async function localResources(page: Page, pageId: string): Promise<CheckR
 			}
 		} catch (error) {
 			notes.push(
-				`local resource ${JSON.stringify(reference.path)} could not be verified: ${error instanceof Error ? error.message : String(error)} — treat as unchecked`,
+				`could not check local file ${JSON.stringify(reference.path)}: ${error instanceof Error ? error.message : String(error)}. Treat it as not checked.`,
 			);
 		}
 	}
 	if (collected.total > MAX_LOCAL_RESOURCES) {
 		notes.push(
-			`local resource check covered ${MAX_LOCAL_RESOURCES} of ${collected.total} distinct references — result is partial`,
+			`checked ${MAX_LOCAL_RESOURCES} of ${collected.total} local files; the rest were not checked`,
 		);
 	}
 
@@ -1189,11 +1189,11 @@ export async function audioAutoplay(page: Page, pageId: string): Promise<CheckRe
 	for (const audio of before) {
 		if (audio.muted || audio.volume === 0 || audio.controls || audio.external) continue;
 		if (!audio.loop && !(audio.duration > 3)) {
-			if (!Number.isFinite(audio.duration)) notes.push(`audio autoplay duration could not be measured for ${audio.selector || `audio ${audio.index + 1}`} on ${pageId}${audio.error ? `: ${audio.error}` : ""}`);
+			if (!Number.isFinite(audio.duration)) notes.push(`could not measure how long autoplaying ${audio.selector || `audio ${audio.index + 1}`} plays on ${pageId}${audio.error ? `: ${audio.error}` : ""}`);
 			continue;
 		}
 		if (audio.paused) {
-			if (audio.autoplay) notes.push(`audio ${audio.selector || audio.index + 1} declares autoplay but Chromium blocked playback on ${pageId} — 1.4.2 was not observed`);
+			if (audio.autoplay) notes.push(`audio ${audio.selector || audio.index + 1} on ${pageId} is set to autoplay, but Chromium blocked playback, so WCAG 1.4.2 was not tested`);
 			continue;
 		}
 		const final = after[audio.index];
@@ -1290,7 +1290,7 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 			// downstream of it became invisible.
 			trapped.add(at.id);
 			if (trapped.size >= MAX_TRAPS) {
-				notes.push(`tab walk stopped on ${pageId} after ${MAX_TRAPS} traps`);
+				notes.push(`stopped the Tab key test on ${pageId} after ${MAX_TRAPS} focus traps`);
 				break;
 			}
 			const resumed = await page.evaluate(
@@ -1304,7 +1304,7 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 				[MARK_ATTR, [...trapped, ...order]] as const,
 			);
 			if (!resumed) {
-				notes.push(`tab walk stopped on ${pageId}: no reachable control past the trap`);
+				notes.push(`stopped the Tab key test on ${pageId}: Tab cannot reach any control past the focus trap`);
 				break;
 			}
 			order.push(at.id);
@@ -1355,7 +1355,7 @@ export async function keyboardScrollableRegions(page: Page, pageId: string): Pro
 	const findings: Finding[] = [];
 	const notes: string[] = [];
 	const limit = Math.min(candidates.length, 30);
-	if (candidates.length > limit) notes.push(`keyboard-scroll check covered ${limit} of ${candidates.length} regions on ${pageId}`);
+	if (candidates.length > limit) notes.push(`tested keyboard scrolling on ${limit} of ${candidates.length} scrollable regions on ${pageId}`);
 	const pageScroll = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
 
 	for (const candidate of candidates.slice(0, limit)) {
@@ -1458,7 +1458,7 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 
 	const total = await markFocusables(page);
 	const limit = Math.min(total, MAX_FOCUS_CHECKS);
-	if (total > limit) notes.push(`focus-indicator check covered ${limit} of ${total} controls on ${pageId}`);
+	if (total > limit) notes.push(`tested focus indicators on ${limit} of ${total} controls on ${pageId}`);
 
 	const results = await page.evaluate(
 		([attr, count, locate]) => {
@@ -1591,7 +1591,7 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 	// difference is reported rather than inferred.
 	if (limit > 0 && results.length === 0) {
 		notes.push(
-			`focus-indicator check sampled 0 of ${limit} controls on ${pageId} — treat as not run, not as clean`,
+			`the focus indicator test measured none of ${limit} controls on ${pageId}. Treat it as not run, not as passed.`,
 		);
 	}
 	return { findings, notes };
@@ -1750,7 +1750,7 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 				if (!reviewed.has(key)) {
 					reviewed.add(key);
 					needsReview.push({
-						what: `This control's ${state} contrast could not be determined automatically.`,
+						what: `Measure this control's ${state} contrast by hand. Check could not measure it automatically.`,
 						page: pageId,
 						selector: selector || undefined,
 						evidence: `${state}; image, gradient, or opacity-backed colour compositing requires review`,
@@ -2015,8 +2015,8 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 		})),
 		needsReview: measured.manual.map((item) => ({
 			what: item.kind === "component"
-				? "This control's non-text contrast could not be determined automatically."
-				: "This graphic's non-text contrast could not be determined automatically.",
+				? "Measure the contrast of this control's boundary by hand. Check could not measure it automatically."
+				: "Measure the contrast of this graphic's shapes by hand. Check could not measure it automatically.",
 			page: pageId,
 			selector: item.selector || undefined,
 			evidence: item.reason,
@@ -2609,7 +2609,7 @@ export async function darkSchemeVisuals(page: Page, pageId: string): Promise<Che
 					reason,
 				});
 				notes.push(
-					`dark colour scheme: ${check.name} did not run on ${pageId}: ${reason} — treat as unchecked, not as clean`,
+					`dark colour scheme: ${check.name} did not run on ${pageId}: ${reason}. Treat it as not run, not as passed.`,
 				);
 			}
 		}

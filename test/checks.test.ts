@@ -811,7 +811,7 @@ describe("automated checks fire on known defects", () => {
 		const changing = await open("settle-changing.html");
 		const changingNote = await settle(changing, 600);
 		await changing.close();
-		assert.ok(changingNote?.includes("settle deadline") && changingNote.includes("partial"), "deadline did not produce a partial-result note");
+		assert.ok(changingNote?.includes("still changing") && changingNote.includes("incomplete"), "deadline did not produce a partial-result note");
 	});
 
 	test("altTextQuality separates template variables from filenames", async () => {

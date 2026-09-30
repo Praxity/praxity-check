@@ -122,7 +122,7 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 				if (evidence.exitCode !== 0) throw new Error(evidence.error ?? evidence.stderr);
 				const facts = parse(evidence.stdout);
 				evaluate(rule, "passed", "Extraction completed; this is not a quality or conformance verdict.");
-				if (evidence.stderr.trim()) issue(rule, "Poppler emitted diagnostics; inspect the raw evidence.", "Review the diagnostic and regenerate from source if needed.", evidence.stderr, undefined, true);
+				if (evidence.stderr.trim()) issue(rule, "Poppler reported warnings while reading the PDF. See the evidence.", "Review the diagnostic and regenerate from source if needed.", evidence.stderr, undefined, true);
 				return facts;
 			} catch (error) {
 				report.machineStatus = "incomplete";
@@ -163,7 +163,7 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 				const images = report.facts.images.filter((i) => i.type === "image");
 				for (const image of images.filter((i) => Math.min(i.xPpi, i.yPpi) < policy.minImagePpi!)) issue("image.resolution", `Image is ${image.xPpi} × ${image.yPpi} PPI, below the requested ${policy.minImagePpi} PPI.`, "Inspect labels and image purpose at intended print size; replace the source image if needed.", image, image.page, true);
 				evaluate("image.resolution", !images.length ? "inapplicable" : report.needsReview.some((i) => i.rule === "image.resolution") ? "cantTell" : "passed", "Explicit PPI threshold; masks excluded. PPI does not establish visual quality.");
-			} else evaluate("image.resolution", "untested", policy.minImagePpi === undefined ? "No image PPI threshold requested." : "Image inventory unavailable.");
+			} else evaluate("image.resolution", "untested", policy.minImagePpi === undefined ? "Add --min-image-ppi to check this." : "Could not list the images.");
 			if (extracted("page.facts") && policy.paperSize) {
 				const expected = policy.paperSize === "A4" ? [595.276, 841.89] : [612, 792];
 				for (const page of report.facts.pages) {
@@ -172,7 +172,7 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 					if (actual.some((n, i) => Math.abs(n - expected[i]!) > 1)) issue("page.geometry", `Page MediaBox differs from ${policy.paperSize}.`, "Set the intended paper size in the source and export again.", { actual, expected, tolerancePoints: 1 }, page.page);
 				}
 				evaluate("page.geometry", report.findings.some((i) => i.rule === "page.geometry") ? "failed" : "passed", "MediaBox dimensions in default user space, either orientation, 1 point tolerance; UserUnit scaling is not validated.");
-			} else evaluate("page.geometry", "untested", policy.paperSize ? "Page geometry unavailable." : "No expected paper size requested.");
+			} else evaluate("page.geometry", "untested", policy.paperSize ? "Could not read the page sizes." : "Add --paper-size to check this.");
 		}
 		if (design || accessibility) {
 			const print = evaluatePdfPrint({
@@ -192,8 +192,8 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 			for (const finding of validation.findings) issue(finding.rule, finding.message, finding.remedy, finding.evidence, finding.location.page);
 			for (const finding of validation.needsReview) issue(finding.rule, finding.message, finding.remedy, finding.evidence, finding.location.page, true);
 		} else if (accessibility) evaluate("pdfua.machine", "untested", "PDF/UA machine validation was explicitly disabled.");
-		for (const rule of [...(selection.checks.includes("accessibility") ? ["pdfua.conformance", "assistive.technology"] : []), ...(selection.checks.includes("design") ? ["visual.review", "physical.print"] : [])]) evaluate(rule, "untested", "Human review was not performed. Machine profile validation alone does not establish this result.");
-		if (selection.tier === "inference") evaluate("deterministic.checks", "untested", "Only supporting facts were extracted; deterministic quality and conformance checks were not selected.");
+		for (const rule of [...(selection.checks.includes("accessibility") ? ["pdfua.conformance", "assistive.technology"] : []), ...(selection.checks.includes("design") ? ["visual.review", "physical.print"] : [])]) evaluate(rule, "untested", "Needs a person to review. Machine validation alone cannot confirm this.");
+		if (selection.tier === "inference") evaluate("deterministic.checks", "untested", "Automated checks did not run because --tier inference was selected.");
 		return report;
 	} finally { await rm(dir, { recursive: true, force: true }); }
 }
@@ -202,8 +202,8 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 export function pdfHumanSummary(report: Pick<Awaited<ReturnType<typeof checkPdf>>, "document" | "machineStatus" | "findings" | "needsReview" | "evaluations"> & { selection?: ReturnType<typeof selectChecks> }, jsonPath?: string): string {
 	const lines = [
 		`PDF: ${report.document.path}`,
-		report.selection?.tier === "inference" ? (report.machineStatus === "complete" ? "Supporting evidence extracted; deterministic checks were not selected." : "Some supporting evidence could not be extracted; deterministic checks were not selected.") : report.machineStatus === "complete" ? "Automated checks completed." : "Some automated checks could not complete. See the unchecked items below.",
-		`${report.findings.length} ${report.findings.length === 1 ? "finding" : "findings"} to fix; ${report.needsReview.length} ${report.needsReview.length === 1 ? "item" : "items"} to review.`,
+		report.selection?.tier === "inference" ? `${report.machineStatus === "complete" ? "Extracted the facts for the model review." : "Could not extract some facts for the model review."} Automated checks did not run because --tier inference was selected.` : report.machineStatus === "complete" ? "Automated checks completed." : "Some automated checks could not finish. See \"Not checked\" below.",
+		`${report.findings.length} ${report.findings.length === 1 ? "issue" : "issues"} found.${report.needsReview.length ? ` ${report.needsReview.length} possible ${report.needsReview.length === 1 ? "issue" : "issues"} to review.` : ""}`,
 	];
 	for (const [label, issues] of [["Fix", report.findings], ["Review", report.needsReview]] as const) {
 		const groups = new Map<string, Issue[]>();
@@ -215,8 +215,8 @@ export function pdfHumanSummary(report: Pick<Awaited<ReturnType<typeof checkPdf>
 		}
 		for (const group of groups.values()) {
 			const item = group[0]!;
-			const where = item.location.page ? `page ${item.location.page}` : "document level";
-			lines.push("", `${label}: ${item.message}`, `  ${group.length > 1 ? "First location" : "Location"}: ${where}${group.length > 1 ? `. ${group.length} occurrences.` : "."}`, `  Next step: ${item.remedy}`, `  Rule: ${item.rule}`);
+			const where = item.location.page ? `page ${item.location.page}` : "whole document";
+			lines.push("", `${label}: ${item.message}`, `  ${group.length > 1 ? `Found ${group.length} times. First location` : "Location"}: ${where}`, `  Next step: ${item.remedy}`, `  Rule: ${item.rule}`);
 		}
 	}
 	const unchecked = report.evaluations.filter((e) => e.outcome === "untested");
@@ -230,9 +230,9 @@ export function pdfHumanSummary(report: Pick<Awaited<ReturnType<typeof checkPdf>
 		}
 		for (const [reason, rules] of reasons) lines.push(`  ${rules.join(", ")}: ${reason}`);
 	}
-	if (report.findings.length || report.needsReview.length) lines.push("", "After changing the source, regenerate the PDF and rerun Check. Review remaining questions against that new PDF.");
+	if (report.findings.length || report.needsReview.length) lines.push("", "After you fix the source, export the PDF again and rerun Check. Review any remaining possible issues in the new PDF.");
 	lines.push(`PDF SHA-256: ${report.document.sha256}`);
-	if (jsonPath) lines.push(`Full findings, locations and evidence: ${jsonPath}`);
+	if (jsonPath) lines.push(`Details and evidence: ${jsonPath}`);
 	return lines.join("\n");
 }
 
@@ -300,9 +300,9 @@ export async function pdfCli(args: string[]): Promise<number> {
 	}
 	console.log(pdfHumanSummary(report, json));
 	for (const review of report.inferenceReviews) {
-		console.log(`\nInferred ${"focus" in review ? review.focus : review.tier} review by ${review.reviewer.model}: ${review.findings.length} concerns. Pages reviewed: ${review.pagesReviewed.join(", ")} of ${report.facts.pages.length}. ${review.pagesReviewed.length < report.facts.pages.length ? "Other pages were not reviewed in this batch. " : ""}This is not a conformance result.`);
-		console.log(review.evidenceBinding === "bundle" ? "Bundle hashes verified. They do not prove that the reviewer inspected the images." : "Legacy import: bound to PDF bytes only; prepared evidence and context are not bound to this review.");
-		for (const item of review.findings) console.log(`Page ${item.location.page} [${item.category}]: ${item.message}\n  Consequence: ${item.consequence}\n  Next step: ${item.remedy}\n  Origin: ${item.provenance.method}, ${item.provenance.tier}, ${item.provenance.model}\n  Verify: ${item.verification}\n  Evidence: ${item.evidence.observation}\n  Confidence: ${item.confidence}`);
+		console.log(`\nModel review (${"focus" in review ? review.focus : review.tier}, ${review.reviewer.model}): ${review.findings.length} ${review.findings.length === 1 ? "concern" : "concerns"} on ${review.pagesReviewed.length === 1 ? "page" : "pages"} ${review.pagesReviewed.join(", ")} of ${report.facts.pages.length}. ${review.pagesReviewed.length < report.facts.pages.length ? "The model did not review the other pages. " : ""}A model review cannot confirm conformance.`);
+		console.log(review.evidenceBinding === "bundle" ? "The review matches its evidence bundle. That does not prove the model looked at the images." : "Older review format: it matches this PDF, but Check cannot confirm which evidence and context the model saw.");
+		for (const item of review.findings) console.log(`${item.category === "observed-defect" ? "Issue" : item.category === "needs-context" ? "Question" : item.category === "suggestion" ? "Suggestion" : "Concern"} on page ${item.location.page}: ${item.message}\n  Consequence: ${item.consequence}\n  Next step: ${item.remedy}\n  Origin: ${item.provenance.method}, ${item.provenance.tier}, ${item.provenance.model}\n  Verify: ${item.verification}\n  Evidence: ${item.evidence.observation}\n  Confidence: ${item.confidence}`);
 	}
 	return report.machineStatus === "incomplete" ? 2 : report.findings.length ? 1 : 0;
 }

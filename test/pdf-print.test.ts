@@ -47,7 +47,7 @@ test("real PDF sparse and empty candidates retain intentional artwork and cover 
 test("unavailable facts cannot masquerade as blank pages; raster pages and policy boundaries", () => {
 	assert.ok(evaluatePdfPrint({ pages: [{ page: 1 }] }, { maxSparseWords: 3 }).evaluations.every((e) => e.outcome === "untested"));
 	const raster = evaluatePdfPrint({ pages: [{ page: 1 }], words: [], images: [{ page: 1, type: "image" }] }, { maxSparseWords: 3 });
-	assert.match(raster.needsReview[0]!.message, /raster images/);
+	assert.match(raster.needsReview[0]!.message, /has images but no text/);
 	assert.equal(raster.needsReview.length, 1);
 	const labelledImage = evaluatePdfPrint({ pages: [{ page: 1 }], words: [{ page: 1, text: "Diagram" }], images: [{ page: 1, type: "image" }] }, { maxSparseWords: 3 });
 	assert.deepEqual(labelledImage.needsReview, []);
