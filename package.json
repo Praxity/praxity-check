@@ -2,6 +2,7 @@
 	"name": "praxity-check",
 	"version": "0.4.0",
 	"private": true,
+	"license": "SEE LICENSE IN LICENSE",
 	"type": "module",
 	"description": "Accessibility checker for learning packages",
 	"bin": {

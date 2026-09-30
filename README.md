@@ -222,16 +222,7 @@ for the additional tools and options.
 
 ## Licence
 
-Praxity Check is community source. Personal, educational, nonprofit,
-governmental, and internal organizational use is permitted. This includes using
-it internally to check paid work. Qualifying free public forks and services must
-display the required credit, publish their Praxity Check source and changes under the
-same terms, and preserve attribution in reports. Paid access or reports,
-substantially Praxity Check-powered paid services, paid hosting, repackaging, and
-white-labelling require separate written permission.
-
-See [`LICENSE`](LICENSE) for the terms and [`LICENSING.md`](LICENSING.md) for
-plain-language examples.
+Praxity Check by Ariel Harlap. Source-available under the PolyForm Perimeter License 1.0.1: free at home and at work, including paid client work. See [LICENSING.md](LICENSING.md).
 
 ## Build a local distributable
 
