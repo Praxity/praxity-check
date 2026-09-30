@@ -43,7 +43,8 @@ Reviewed dispositions require:
 
 Disposition does not change the evaluation outcome. An accepted finding remains
 `failed`, stays in `findings`, and continues to affect the existing CLI exit
-threshold. `resolved` is a change between runs, not a disposition. Without a
+threshold. `resolved` means the occurrence is absent from the current run; it
+does not prove a fix. It is a change between runs, not a disposition. Without a
 baseline, `comparison`, `baseline`, and `changes` are absent.
 
 ## Rules and evaluations

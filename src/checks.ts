@@ -144,6 +144,18 @@ export const UNIQUE_SELECTOR = `(el) => {
 const FOCUSABLE =
 	'a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]:not([tabindex="-1"])';
 
+/** Nearby paint can represent a hidden control, including a label elsewhere in the page. */
+const FOCUS_INDICATOR_NODES = `((el) => {
+	const nodes = [];
+	for (let up = el, depth = 0; up && depth < 4; depth++, up = up.parentElement) nodes.push(up);
+	for (const sibling of el.parentElement?.children || []) {
+		if (sibling !== el && sibling instanceof HTMLElement) nodes.push(sibling);
+	}
+	nodes.push(...Array.from(el.querySelectorAll("*")).slice(0, 8));
+	nodes.push(...Array.from(el.labels || []));
+	return [...new Set(nodes)];
+})`;
+
 /** Shared browser-side colour math. Canvas normalises every CSS colour syntax Chromium accepts. */
 const COLOR_HELPERS = `(() => {
 	const canvas = document.createElement("canvas");
@@ -325,7 +337,12 @@ export async function scopeCoverage(page: Page, pageId: string): Promise<CheckRe
 	if (untested.length === 0) return { findings: [], notes: [] };
 	return {
 		findings: [],
-		notes: [`some DOM scope was not covered on ${pageId}; see structured untested evaluations`],
+		notes: [
+			...scope.unavailableFrames.map((frame) => `The embedded frame "${frame.title}"${frame.provider === "inline" ? "" : ` from ${frame.provider}`} could not be checked on ${pageId}.`),
+			...(scope.framesWithControls > 0 ? [`Keyboard and visual behaviour inside ${scope.framesWithControls} embedded ${scope.framesWithControls === 1 ? "frame" : "frames"} was not tested on ${pageId}.`] : []),
+			...(scope.shadowsWithControls > 0 ? [`Keyboard and visual behaviour inside ${scope.shadowsWithControls} custom ${scope.shadowsWithControls === 1 ? "component" : "components"} was not tested on ${pageId}.`] : []),
+			...(scope.closedShadowRoots > 0 ? [`The contents of ${scope.closedShadowRoots} custom ${scope.closedShadowRoots === 1 ? "component" : "components"} could not be checked on ${pageId}.`] : []),
+		],
 		untested,
 	};
 }
@@ -338,9 +355,7 @@ export async function triage(page: Page, status: number | null, blockedRequests 
 	if (status !== null && status >= 400) return { ok: false, reason: `server returned ${status}` };
 
 	const shape = await page.evaluate(() => {
-		// A frame covering most of the viewport means the course is in there and
-		// this page is a launcher. Rustici's SCORM Driver is the common case, and
-		// auditing it reports Rustici's shell defects as the course's.
+		// Frame size alone also matches support pages with embedded forms.
 		const area = window.innerWidth * window.innerHeight;
 		const dominantFrame = Array.from(document.querySelectorAll("iframe")).some((frame) => {
 			const rect = frame.getBoundingClientRect();
@@ -354,7 +369,7 @@ export async function triage(page: Page, status: number | null, blockedRequests 
 		};
 	});
 
-	if (shape.dominantFrame) {
+	if (shape.dominantFrame && shape.text < 40 && shape.landmarks === 0) {
 		return {
 			ok: false,
 			reason: "only opens the course in a full-size frame; check the framed page on its own",
@@ -423,6 +438,11 @@ const UA_SIZED_CONTROLS = `(() => {
 	}
 	return out;
 })()`;
+
+const AXE_REVIEW_MESSAGES: Record<string, string> = {
+	"color-contrast": "Check the contrast of this text by hand: it needs 4.5:1, or 3:1 for large text.",
+	"video-caption": "Check that this video has captions.",
+};
 
 export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 	await page.addStyleTag({ content: NO_MOTION });
@@ -513,7 +533,7 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 				const evidence = `${(node.failureSummary ?? rule.description).replace(/\s+/g, " ").trim()}${selectorByTarget.has(target) ? "" : `; axe target ${JSON.stringify(target)} could not be resolved to one light-DOM element`}`;
 				if (!confidence) {
 					needsReview.push({
-						what: `Review by hand: ${rule.help}.`,
+						what: AXE_REVIEW_MESSAGES[rule.id] ?? `Review by hand: ${rule.help}.`,
 						page: pageId,
 						selector: selectorByTarget.get(target),
 						evidence,
@@ -1458,10 +1478,11 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 
 	const total = await markFocusables(page);
 	const limit = Math.min(total, MAX_FOCUS_CHECKS);
-	if (total > limit) notes.push(`tested focus indicators on ${limit} of ${total} controls on ${pageId}`);
+	if (total > limit) notes.push(`Tested focus indicators on ${limit} of ${total} controls on ${pageId}; the rest were not tested.`);
 
 	const results = await page.evaluate(
-		([attr, count, locate]) => {
+		([attr, count, locate, indicatorNodes]) => {
+			const sampleNodes = (0, eval)(indicatorNodes) as (el: HTMLElement) => HTMLElement[];
 			const paintedColor = (value: string): string => {
 				const channels = value.match(/[\d.]+/g)?.map(Number) ?? [];
 				return channels.length > 3 && channels[3] === 0 ? "transparent" : value;
@@ -1496,15 +1517,7 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 				// indicator on a sibling. Sampling the element and its ancestors alone
 				// reported no visible focus indicator for a control that is plainly focused, which
 				// would have accused every page using that very common pattern.
-				const nodes: HTMLElement[] = [];
-				let up: HTMLElement | null = el;
-				for (let depth = 0; up && depth < 4; depth++, up = up.parentElement) nodes.push(up);
-				for (const sib of Array.from(el.parentElement?.children ?? [])) {
-					if (sib !== el && sib instanceof HTMLElement) nodes.push(sib);
-				}
-				for (const kid of Array.from(el.querySelectorAll<HTMLElement>("*")).slice(0, 8)) nodes.push(kid);
-
-				for (const node of nodes) {
+				for (const node of sampleNodes(el)) {
 					for (const pseudo of [null, "::before", "::after"]) {
 						const style = getComputedStyle(node, pseudo);
 						// A non-generated pseudo-element has computed styles but paints
@@ -1568,7 +1581,7 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 			}
 			return out;
 		},
-		[MARK_ATTR, limit, UNIQUE_SELECTOR] as const,
+		[MARK_ATTR, limit, UNIQUE_SELECTOR, FOCUS_INDICATOR_NODES] as const,
 	);
 
 	for (const result of results) {
@@ -1601,17 +1614,19 @@ interface StateContrastSnapshot {
 	selector: string;
 	label: string;
 	text?: { ratio: number; threshold: number; foreground: string; background: string };
-	cues: Array<{ name: string; ratio: number; signature: string }>;
+	cues: Array<{ name: string; ratio: number; signature: string; target?: string }>;
 	cueSignature: string;
 	manual: boolean;
+	hidden?: boolean;
 }
 
-const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate) => {
+const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true, pseudo = null) => {
 	const { parse, paint, contrast, background, colors } = (0, eval)(colorHelpers);
 	const selector = (0, eval)(locate);
-	const style = getComputedStyle(el);
+	const style = getComputedStyle(el, pseudo);
 	const rect = el.getBoundingClientRect();
-	if (rect.width === 0 || rect.height === 0 || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return null;
+	if ((!pseudo && (rect.width === 0 || rect.height === 0)) || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return null;
+	if (pseudo && (style.content === "none" || style.content === "normal")) return null;
 	let manual = false;
 	// Chromium marks its unmodified browser focus ring with outline style auto.
 	// WCAG 1.4.11 exempts component appearance that the author did not modify.
@@ -1620,10 +1635,10 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate) => {
 	const authoredOutline = style.outlineStyle !== "auto" && style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0;
 	const rgb = (value) => "rgb(" + value.map((channel) => Math.round(channel)).join(" ") + ")";
 
-	const textNodes = [el, ...el.querySelectorAll("*")].filter((node) => {
+	const textNodes = includeText ? [el, ...el.querySelectorAll("*")].filter((node) => {
 		const ownText = Array.from(node.childNodes).some((child) => child.nodeType === Node.TEXT_NODE && (child.textContent || "").trim());
 		return ownText || (node === el && node.matches("input:not([type=checkbox]):not([type=radio])") && (node.value || node.placeholder));
-	});
+	}) : [];
 	const text = textNodes.flatMap((node) => {
 		const nodeStyle = getComputedStyle(node);
 		const under = background(node);
@@ -1636,7 +1651,7 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate) => {
 		return [{ ratio: contrast(foreground, under), threshold, foreground: rgb(foreground), background: rgb(under) }];
 	}).sort((a, b) => a.ratio / a.threshold - b.ratio / b.threshold)[0];
 
-	const outer = background(el.parentElement);
+	const outer = background(pseudo ? el : el.parentElement);
 	const cues = [];
 	if (!outer || style.backgroundImage !== "none") manual = true;
 	else {
@@ -1690,8 +1705,23 @@ async function stateContrastSnapshots(
 	focus: boolean,
 ): Promise<Array<StateContrastSnapshot | null>> {
 	return page.evaluate(
-		([attr, limit, shouldFocus, probe, colorHelpers, locate]) => {
-			const snapshot = (0, eval)(probe) as (el: HTMLElement, colors: string, selector: string) => StateContrastSnapshot | null;
+		([attr, limit, shouldFocus, probe, colorHelpers, locate, indicatorNodes]) => {
+			const snapshot = (0, eval)(probe) as (el: HTMLElement, colors: string, selector: string, text?: boolean, pseudo?: string | null) => StateContrastSnapshot | null;
+			const sampleNodes = (0, eval)(indicatorNodes) as (el: HTMLElement) => HTMLElement[];
+			const selector = (0, eval)(locate) as (el: HTMLElement) => string;
+			const hidden = (el: HTMLElement, includeBox = true): boolean => {
+				const rect = el.getBoundingClientRect();
+				if (includeBox && (rect.width <= 1 || rect.height <= 1)) return true;
+				for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+					const style = getComputedStyle(node);
+					const clip = style.clip.match(/-?[\d.]+/g)?.map(Number) ?? [];
+					if (style.opacity === "0" || style.display === "none" ||
+						(clip.length === 4 && (clip[1]! - clip[3]! <= 1 || clip[2]! - clip[0]! <= 1)) ||
+						/^inset\(50%\)/.test(style.clipPath)) return true;
+				}
+				return false;
+			};
+			(document.activeElement as HTMLElement | null)?.blur();
 			const out: Array<StateContrastSnapshot | null> = [];
 			for (let i = 0; i < limit; i++) {
 				const el = document.querySelector<HTMLElement>(`[${attr}="${i}"]`);
@@ -1701,11 +1731,26 @@ async function stateContrastSnapshots(
 					el.focus({ preventScroll: true });
 					if (document.activeElement !== el) { out.push(null); continue; }
 				}
-				out.push(snapshot(el, colorHelpers, locate));
+				const own = snapshot(el, colorHelpers, locate);
+				if (!hidden(el)) { out.push(own); continue; }
+				// Compare the same visible representatives before and after focus.
+				// Static decoration must not count as a focus change.
+				const representatives = sampleNodes(el).filter((node) => node !== el)
+					.flatMap((node) => [null, "::before", "::after"].flatMap((pseudo) => {
+						if (hidden(node, !pseudo)) return [];
+						const paint = snapshot(node, colorHelpers, locate, false, pseudo);
+						return paint ? [{ ...paint, target: selector(node) + (pseudo ?? "") }] : [];
+					}));
+				out.push({
+					selector: selector(el), label: own?.label ?? el.tagName, hidden: true,
+					cues: representatives.flatMap((paint) => paint.cues.map((cue) => ({ ...cue, target: paint.target }))),
+					cueSignature: representatives.map((paint) => paint.target + paint.cueSignature).join("|"),
+					manual: representatives.some((paint) => paint.manual),
+				});
 			}
 			return out;
 		},
-		[MARK_ATTR, count, focus, STATE_CONTRAST_SNAPSHOT, COLOR_HELPERS, UNIQUE_SELECTOR] as const,
+		[MARK_ATTR, count, focus, STATE_CONTRAST_SNAPSHOT, COLOR_HELPERS, UNIQUE_SELECTOR, FOCUS_INDICATOR_NODES] as const,
 	);
 }
 
@@ -1714,7 +1759,7 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 	await page.addStyleTag({ content: NO_MOTION });
 	const total = await markFocusables(page);
 	const limit = Math.min(total, MAX_FOCUS_CHECKS);
-	const notes = total > limit ? [`state-contrast check covered ${limit} of ${total} controls on ${pageId}`] : [];
+	const notes = total > limit ? [`Tested hover and focus contrast on ${limit} of ${total} controls on ${pageId}; the rest were not tested.`] : [];
 	if (limit === 0) return { findings: [], notes };
 
 	const original = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
@@ -1779,10 +1824,10 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 			// by itself, information required to identify the component or its state;
 			// treating every subtle hover fill as 1.4.11 produced 160 false defects
 			// on one real export.
-			if (state === "hover" || before.cueSignature === after.cueSignature) continue;
-			const beforeCues = new Map(before.cues.map((cue) => [cue.name, cue.signature]));
+			if (state === "hover" || (!after.hidden && before.cueSignature === after.cueSignature)) continue;
+			const beforeCues = new Map(before.cues.map((cue) => [`${cue.target ?? ""}|${cue.name}`, cue.signature]));
 			const changed = after.cues
-				.filter((cue) => beforeCues.get(cue.name) !== cue.signature)
+				.filter((cue) => beforeCues.get(`${cue.target ?? ""}|${cue.name}`) !== cue.signature)
 				.sort((a, b) => b.ratio - a.ratio)[0];
 			if (changed && changed.ratio >= 3) continue;
 			findings.push({
@@ -1791,7 +1836,9 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 				selector: after.selector || undefined,
 				evidence: changed
 					? `${state}; strongest changed cue is ${changed.name} at ${changed.ratio.toFixed(2)}:1 (required: 3:1)`
-					: `${state}; authored paint changed but no contrasting boundary, outline, background edge, or shadow was measurable`,
+					: after.hidden
+						? `${state}; hidden control has no measurable contrasting focus change on its visible label or nearby elements`
+						: `${state}; authored paint changed but no contrasting boundary, outline, background edge, or shadow was measurable`,
 				fix: `Give the ${state} state a boundary, outline, background edge, or shadow with at least 3:1 contrast against adjacent colors.`,
 				lens: "a11y", confidence: "medium",
 				basis: "WCAG 1.4.11 Non-text Contrast (AA)",
@@ -2096,7 +2143,7 @@ export async function focusNotObscured(page: Page, pageId: string): Promise<Chec
 			basis: "WCAG 2.4.11 Focus Not Obscured (Minimum) (AA)",
 			rule: "focus-not-obscured",
 		})),
-		notes: total > limit ? [`focus-obscuring check covered ${limit} of ${total} controls on ${pageId}`] : [],
+		notes: total > limit ? [`Tested whether focus stays visible on ${limit} of ${total} controls on ${pageId}; the rest were not tested.`] : [],
 	};
 }
 
