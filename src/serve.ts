@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { extname, join, resolve, sep } from "node:path";
 
@@ -81,6 +81,36 @@ export async function resolveWithinRoot(root: string, urlPath: string): Promise<
 	}
 }
 
+function byteRange(value: string, size: number): { start: number; end: number } | null {
+	const match = /^bytes=(\d*)-(\d*)$/i.exec(value.trim());
+	if (!match || size === 0) return null;
+	const first = match[1] ?? "";
+	const last = match[2] ?? "";
+	if (first === "" && last === "") return null;
+
+	// Range numerals have no fixed limit. Clamp before converting to numbers.
+	const length = BigInt(size);
+	if (first === "") {
+		const suffix = BigInt(last);
+		if (suffix === 0n) return null;
+		return { start: suffix >= length ? 0 : Number(length - suffix), end: size - 1 };
+	}
+	const start = BigInt(first);
+	const end = last === "" ? length - 1n : BigInt(last);
+	if (start >= length || end < start) return null;
+	return { start: Number(start), end: Number(end >= length ? length - 1n : end) };
+}
+
+function failResponse(res: ServerResponse, error: unknown): void {
+	if (res.headersSent) {
+		res.destroy(error instanceof Error ? error : new Error(String(error)));
+		return;
+	}
+	res.removeHeader("content-range");
+	res.writeHead(500, { "content-type": "text/plain; charset=utf-8", "content-length": "0" });
+	res.end();
+}
+
 export async function serve(root: string): Promise<StaticServer> {
 	const server: Server = createServer((req, res) => {
 		void (async () => {
@@ -91,12 +121,34 @@ export async function serve(root: string): Promise<StaticServer> {
 				res.end("not found");
 				return;
 			}
-			res.writeHead(200, {
-				"content-type": TYPES[extname(file).toLowerCase()] ?? "application/octet-stream",
-				"cache-control": "no-store",
-			});
-			createReadStream(file).pipe(res);
-		})();
+			const { size } = await stat(file);
+			res.setHeader("content-type", TYPES[extname(file).toLowerCase()] ?? "application/octet-stream");
+			res.setHeader("cache-control", "no-store");
+			res.setHeader("accept-ranges", "bytes");
+			res.setHeader("content-length", size);
+
+			// Range only applies to GET. HEAD describes the complete representation.
+			const requestedRange = req.method === "GET" ? req.headers.range : undefined;
+			const range = requestedRange === undefined ? undefined : byteRange(requestedRange, size);
+			if (range === null) {
+				res.writeHead(416, { "content-range": `bytes */${size}`, "content-length": "0" });
+				res.end();
+				return;
+			}
+			if (range) {
+				res.statusCode = 206;
+				res.setHeader("content-range", `bytes ${range.start}-${range.end}/${size}`);
+				res.setHeader("content-length", range.end - range.start + 1);
+			}
+			if (req.method === "HEAD" || size === 0) {
+				res.end();
+				return;
+			}
+			const stream = createReadStream(file, range);
+			stream.once("error", (error) => failResponse(res, error));
+			res.once("close", () => stream.destroy());
+			stream.pipe(res);
+		})().catch((error: unknown) => failResponse(res, error));
 	});
 
 	await new Promise<void>((ok, fail) => {

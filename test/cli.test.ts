@@ -4,13 +4,15 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { parseArgs } from "../src/html-cli.ts";
 
 const exec = promisify(execFile);
-const CLI = new URL("../src/cli.ts", import.meta.url);
+const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 test("--help prints usage and exits successfully", async () => {
-	const { stdout, stderr } = await exec(process.execPath, [CLI.pathname, "--help"]);
+	const { stdout, stderr } = await exec(process.execPath, [CLI, "--help"]);
 	assert.match(stdout, /^Usage:\n  praxity-check check <folder\|zip\|pdf>/);
 	assert.match(stdout, /--min-image-ppi <number>/);
 	assert.match(stdout, /--paper-size A4\|Letter/);
@@ -22,7 +24,7 @@ test("--help prints usage and exits successfully", async () => {
 
 test("screen-reader requires explicit permission before taking screen control", async () => {
 	await assert.rejects(
-		exec(process.execPath, [CLI.pathname, "screen-reader", "."]),
+		exec(process.execPath, [CLI, "screen-reader", "."]),
 		(error: unknown) => {
 			assert.ok(error && typeof error === "object" && "stderr" in error);
 			assert.match(String(error.stderr), /launches VoiceOver, opens Safari, moves focus, and sends keyboard input/);
@@ -31,14 +33,10 @@ test("screen-reader requires explicit permission before taking screen control", 
 	);
 });
 
-test("screen-reader warns about the existing Safari profile and network", async () => {
-	await assert.rejects(
-		exec(process.execPath, [CLI.pathname, "screen-reader", ".", "--take-screen-control"]),
-		(error: unknown) => {
-			assert.ok(error && typeof error === "object" && "stderr" in error);
-			assert.match(String(error.stderr), /existing Safari profile and network connection/);
-			return true;
-		},
+test("screen-reader warns about the existing Safari profile and network", () => {
+	assert.throws(
+		() => parseArgs(["screen-reader", ".", "--take-screen-control"]),
+		/existing Safari profile and network connection/,
 	);
 });
 
@@ -70,7 +68,7 @@ test("check scans a declared rendered state and records its actions", async () =
 			],
 		}));
 		const output = join(root, "report.json");
-		await exec(process.execPath, [CLI.pathname, "check", root, "--scenarios", scenarioFile, "--json", output])
+		await exec(process.execPath, [CLI, "check", root, "--scenarios", scenarioFile, "--json", output])
 			.catch((error: { code?: number }) => {
 				if (error.code !== 1) throw error;
 			});
@@ -149,7 +147,7 @@ test("each rendered state isolates storage while preserving it across navigation
 			],
 		}));
 		const output = join(root, "report.json");
-		await exec(process.execPath, [CLI.pathname, "check", root, "--scenarios", scenarioFile, "--json", output])
+		await exec(process.execPath, [CLI, "check", root, "--scenarios", scenarioFile, "--json", output])
 			.catch((error: { code?: number }) => {
 				if (error.code !== 1) throw error;
 			});
@@ -180,7 +178,7 @@ test("PDF-looking folder names and PDF-first ZIPs retain HTML coverage", async (
 	await copyFile(archive, renamedArchive);
 	for (const input of [folder, archive, renamedArchive]) {
 		const output = join(root, "report.json");
-		await exec(process.execPath, [CLI.pathname, "check", input, "--json", output]).catch((error: { code?: number }) => { if (error.code !== 1) throw error; });
+		await exec(process.execPath, [CLI, "check", input, "--json", output]).catch((error: { code?: number }) => { if (error.code !== 1) throw error; });
 		const report = JSON.parse(await readFile(output, "utf8"));
 		assert.equal(report.schemaVersion, 4);
 		assert.equal(report.target.wasZip, input !== folder);

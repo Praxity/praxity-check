@@ -2,6 +2,7 @@
 
 import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
 import {
 	altTextQuality,
@@ -124,7 +125,7 @@ interface ScreenReaderOptions extends CommonOptions {
 
 type Options = CheckOptions | ReviewOptions | ScreenReaderOptions;
 
-function parseArgs(args: string[]): Options {
+export function parseArgs(args: string[]): Options {
 	const command = args[0];
 	if ((command !== "check" && command !== "prepare-review" && command !== "screen-reader") || !args[1]) {
 		throw new Error(USAGE);
@@ -508,7 +509,7 @@ async function auditPages(
  * 1 — ran, high-confidence findings present
  * 2 — could not run (bad input, unsafe archive, browser launch failure, or every page failed triage)
  */
-async function main(args: string[]): Promise<number> {
+export async function htmlCli(args: string[]): Promise<number> {
 	if ([args[0], args[1]].some((arg) => arg === "--help" || arg === "-h") || args[0] === "help") {
 		console.log(USAGE);
 		return 0;
@@ -628,4 +629,6 @@ The model reported ${[["issue", report.feedback.findings.length], ["question", r
 	}
 }
 
-process.exitCode = await main(process.argv.slice(2));
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+	process.exitCode = await htmlCli(process.argv.slice(2));
+}

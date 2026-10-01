@@ -119,9 +119,34 @@ test("partial evidence still rejects invalid retained checks and duplicate or mi
 test("CLI retains partial findings and structured coverage with unchecked diagnostics and exit 2", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pdf-capped-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
-	const executable = join(dir, "verapdf"), input = join(dir, "synthetic.pdf"), output = join(dir, "report.json");
+	const executable = join(dir, process.platform === "win32" ? "verapdf.exe" : "verapdf"), input = join(dir, "synthetic.pdf"), output = join(dir, "report.json");
 	const data = cappedPayload();
-	await writeFile(executable, `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify(data))}); process.exitCode = 1;\n`, { mode: 0o700 });
+	if (process.platform === "win32") {
+		// execFile cannot run shebang scripts or .cmd files on Windows. Compile a
+		// fixture executable with the compiler included in Windows' .NET Framework.
+		const fixture = join(dir, "Validator.cs");
+		await writeFile(fixture, `using System;
+using System.IO;
+class Validator {
+ static int Main() {
+  string directory = AppDomain.CurrentDomain.BaseDirectory;
+  Console.Write(File.ReadAllText(Path.Combine(directory, "validation.json")));
+  return int.Parse(File.ReadAllText(Path.Combine(directory, "exit-code.txt")));
+ }
+}`);
+		const compiler = join(process.env.SystemRoot ?? "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
+		const compiled = spawnSync(compiler, ["/nologo", `/out:${executable}`, fixture], { encoding: "utf8" });
+		assert.equal(compiled.status, 0, compiled.error?.message ?? compiled.stdout + compiled.stderr);
+	}
+	const validatorExit = async (exitCode: number) => {
+		if (process.platform === "win32") {
+			await writeFile(join(dir, "validation.json"), JSON.stringify(data));
+			await writeFile(join(dir, "exit-code.txt"), String(exitCode));
+		} else {
+			await writeFile(executable, `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify(data))}); process.exitCode = ${exitCode};\n`, { mode: 0o700 });
+		}
+	};
+	await validatorExit(1);
 	const validation = await checkPdfAccessibility(input, { profile: "ua1", executable });
 	assert.equal(validation.machineStatus, "incomplete");
 	assert.equal(validation.validator.machineCompliant, false);
@@ -140,7 +165,7 @@ test("CLI retains partial findings and structured coverage with unchecked diagno
 	assert.match(cli.stdout, /Not checked:/);
 	assert.match(cli.stdout, /retained 1 of 5 failed checks; 4 checks have no retained evidence/);
 	assert.match(cli.stdout, /Retained 0 of 2 failed checks; 2 checks have no retained evidence or locations/);
-	await writeFile(executable, `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify(data))});\n`, { mode: 0o700 });
+	await validatorExit(0);
 	const contradictory = await checkPdfAccessibility(input, { profile: "ua1", executable });
 	assert.equal(contradictory.machineStatus, "incomplete");
 	assert.deepEqual(contradictory.findings, []);
