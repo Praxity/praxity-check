@@ -26,7 +26,8 @@ try {
 		const { pdfCli } = await import("./pdf.ts");
 		process.exitCode = await pdfCli(args);
 	} else {
-		await import("./html-cli.ts");
+		const { htmlCli } = await import("./html-cli.ts");
+		process.exitCode = await htmlCli(args);
 	}
 } catch (error) {
 	console.error(`praxity-check: ${error instanceof Error ? error.message : String(error)}`);

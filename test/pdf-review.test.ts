@@ -72,7 +72,13 @@ test("real PDF renders privately, imports without changing machine verdict and c
 	const path = join(dir, "test.pdf"), output = join(dir, "bundle"), imported = join(dir, "review.json");
 	await writeFile(path, pdf());
 	const bundle = await preparePdfReview(path, { tier: "visual", output });
-	assert.equal((await stat(output)).mode & 0o777, 0o700);
+	const directory = await stat(output);
+	assert.ok(directory.isDirectory());
+	assert.equal(directory.mode & 0o600, 0o600);
+	// Windows stat exposes DOS attributes, not owner-only ACL permissions or
+	// Unix directory traversal bits. Path isolation and cleanup are checked below.
+	if (process.platform === "win32") assert.equal(directory.mode & 0o111, 0);
+	else assert.equal(directory.mode & 0o777, 0o700);
 	assert.equal(bundle.manifest.artifacts[0]?.renderPixels.height, 1600);
 	assert.equal(bundle.manifest.artifacts[0]?.geometry?.height, 600);
 	assert.match(await readFile(join(output, "page-1.json"), "utf8"), /Review/);

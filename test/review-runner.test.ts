@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
 import { classifyReview, parseReviewExecutionOption, runPreparedReview, validateReviewExecutionOptions, type ReviewExecutionOptions } from "../src/review-runner.ts";
 
@@ -82,14 +82,12 @@ test("CLI runs an authenticated reviewer command for HTML and PDF, validates bin
 	await mkdir(bin); await mkdir(source);
 	await writeFile(join(source, "index.html"), '<!doctype html><html lang="en"><title>Review fixture</title><h1>Details</h1><details><summary>Details</summary><p>More information</p></details></html>');
 	await writeFile(document, pdf());
-	const executable = join(bin, "codex");
-	await writeFile(executable, `#!${process.execPath}
+	const executable = join(bin, process.platform === "win32" ? "codex.exe" : "codex");
+	const fixture = join(bin, "reviewer.cjs");
+	const reviewer = `
 const fs = require('node:fs');
-const args = process.argv.slice(2);
-let prompt = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => prompt += chunk);
-process.stdin.on('end', () => {
+const args = process.argv.slice(process.platform === 'win32' ? 1 : 2);
+const prompt = fs.readFileSync(0, 'utf8');
  const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
  const schema = JSON.parse(fs.readFileSync('review.schema.json', 'utf8'));
  const html = manifest.schemaVersion.startsWith('html');
@@ -101,10 +99,19 @@ process.stdin.on('end', () => {
  if (process.env.MOCK_WRONG_MODEL) review.reviewer.model = 'GPT-5';
  fs.writeFileSync(args[args.indexOf('-o') + 1], JSON.stringify(review));
  console.log(JSON.stringify({ args, prompt, jevKey: process.env.JEV_API_KEY ?? null }));
-});
-`);
-	await chmod(executable, 0o700);
-	const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, JEV_API_KEY: "do-not-forward-to-reviewer" };
+ process.exit(0);
+`;
+	if (process.platform === "win32") {
+		// A real .exe keeps shell:false and subprocess isolation. The preload runs
+		// only in this copied Node executable, before Node treats "exec" as a file.
+		await copyFile(process.execPath, executable);
+		await writeFile(fixture, `if (process.execPath === ${JSON.stringify(executable)}) {${reviewer}}`);
+	} else {
+		await writeFile(executable, `#!${process.execPath}\n${reviewer}`);
+		await chmod(executable, 0o700);
+	}
+	const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, JEV_API_KEY: "do-not-forward-to-reviewer" };
+	if (process.platform === "win32") env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(fixture)}`;
 	const run = (target: string, bundle: string, extra: string[] = [], environment = env) => spawnSync(process.execPath, [cli, "prepare-review", target, "--tier", "inference", "--output", bundle, ...extra], { encoding: "utf8", env: environment });
 	const legacy = spawnSync(process.execPath, [cli, "prepare-review", document, "--tier", "visual", "--reviewer", "codex"], { encoding: "utf8", env });
 	assert.equal(legacy.status, 2);
@@ -137,7 +144,11 @@ process.stdin.on('end', () => {
 		assert.match(log.prompt, /untrusted source material/);
 		assert.match(log.prompt, /set reviewer.model to exactly "preferred-model"/);
 		if (kind === "pdf") assert.ok(log.args.includes(join(bundle, "page-1.png")), "rendered page is explicitly attached");
-		assert.equal((await stat(join(bundle, "review.json"))).mode & 0o777, 0o600);
+		const mode = (await stat(join(bundle, "review.json"))).mode;
+		assert.equal(mode & 0o111, 0);
+		assert.equal(mode & 0o600, 0o600);
+		// Windows reports DOS read/write attributes, not Unix owner-only permissions.
+		if (process.platform !== "win32") assert.equal(mode & 0o777, 0o600);
 		const failed = join(dir, `${kind}-failed`);
 		const invalid = run(target!, failed, [], { ...env, MOCK_BAD_REVIEW: "1" });
 		assert.equal(invalid.status, 2, invalid.stderr);
