@@ -1,0 +1,4 @@
+overrides:
+  # glob 7 (via @guidepup/guidepup > shelljs) pins minimatch 3, which pulls brace-expansion 1.1.18.
+  # 1.1.21 fixes the 2026 denial-of-service advisories; drop this once Guidepup stops depending on shelljs 0.8.
+  "brace-expansion@1": 1.1.21
