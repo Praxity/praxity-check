@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { parseImages, parsePages, parseText } from "../src/pdf.ts";
+import { extractPdfFacts } from "../src/pdf-facts.ts";
 import { evaluatePdfPrint } from "../src/pdf-print.ts";
 
 function pdf(streams: string[]) {
@@ -29,12 +29,9 @@ test("real PDF sparse and empty candidates retain intentional artwork and cover 
 		"0 0 0 RG 50 50 450 600 re S",
 		"BT /F1 24 Tf 50 600 Td (Intentional cover) Tj ET",
 	]));
-	const extract = (tool: string, args: string[]) => execFileSync(tool, args, { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } });
-	const facts = {
-		pages: parsePages(extract("pdfinfo", ["-box", "-f", "1", "-l", "5", path]), 5),
-		words: parseText(extract("pdftotext", ["-tsv", path, "-"])),
-		images: parseImages(extract("pdfimages", ["-list", path])),
-	};
+	const extraction = await extractPdfFacts(path);
+	assert.equal(extraction.machineStatus, "complete");
+	const facts = extraction.facts;
 	const result = evaluatePdfPrint(facts, { maxSparseWords: 3 });
 	assert.deepEqual(result.findings, []);
 	assert.deepEqual(result.needsReview.filter((i) => i.rule === "page.sparse-content").map((i) => i.location.page), [2, 5]);

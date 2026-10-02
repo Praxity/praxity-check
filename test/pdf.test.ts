@@ -62,6 +62,7 @@ test("missing tools remain untested, with JSON and exit 2 and no browser import"
 	await writeFile(path, fixture());
 	await copyFile(resolve("src/cli.ts"), join(dir, "cli.ts"));
 	await copyFile(resolve("src/pdf.ts"), join(dir, "pdf.ts"));
+	await copyFile(resolve("src/pdf-facts.ts"), join(dir, "pdf-facts.ts"));
 	await copyFile(resolve("src/feedback.ts"), join(dir, "feedback.ts"));
 	await copyFile(resolve("src/pdf-accessibility.ts"), join(dir, "pdf-accessibility.ts"));
 	await copyFile(resolve("src/pdf-print.ts"), join(dir, "pdf-print.ts"));

@@ -1,0 +1,2 @@
+# PDF xref offsets and the fixture hash require exact bytes on checkout.
+test/fixtures/pdf-facts.pdf binary
