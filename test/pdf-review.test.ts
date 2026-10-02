@@ -218,6 +218,19 @@ test("real PDF renders privately, imports without changing machine verdict and c
 	assert.ok(await stat(join(output, "manifest.json")));
 });
 
+test("PDF review preparation rejects incomplete extraction with the existing diagnostic and cleans its snapshot", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pdf-review-incomplete-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const path = join(dir, "broken.pdf"), output = join(dir, "bundle");
+	const bytes = "%PDF-1.7\nmalformed";
+	await writeFile(path, bytes);
+	await assert.rejects(preparePdfReview(path, { tier: "inference", checks: "design", output }), {
+		message: "PDF facts could not be extracted; run check for diagnostics",
+	});
+	await assert.rejects(stat(output), { code: "ENOENT" });
+	assert.equal(await readFile(path, "utf8"), bytes);
+});
+
 
 test("bound PDF imports retain normalized findings, partial coverage and overwrite protection", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pdf-bound-review-test-"));
