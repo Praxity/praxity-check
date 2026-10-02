@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { parseChecks, parseTier, selectChecks, validateHtmlSelection } from "../src/selection.ts";
 import { checkPdf } from "../src/pdf.ts";
-import { normalizePdfReview, preparePdfReview, validatePdfReview, validateReviewSelection } from "../src/pdf-review.ts";
+import { acceptPdfReview, preparePdfReview } from "../src/pdf-review.ts";
 import { comparePdfReports, validateComparisonReport } from "../src/pdf-compare.ts";
 
 const cli = resolve("src/cli.ts");
@@ -30,25 +30,24 @@ test("shared axes validate selection and reject unsupported HTML paths before la
 const hash = "a".repeat(64);
 const modern = { schemaVersion: "pdf-review-3", documentSha256: hash, tier: "inference", focus: "visual", checks: ["design"], pagesReviewed: [1], reviewer: { model: "synthetic-test" }, findings: [{ page: 1, check: "design", category: "observed-defect", confidence: "high", message: "Visible instruction is clipped.", action: "Increase the source box height.", consequence: "The reader misses a required step.", origin: "Model inference from the page image.", verification: "Inspect the regenerated page.", evidence: { observation: "The last instruction line crosses the bottom boundary." } }] };
 
-test("v3 domain coverage is enforced while legacy review schemas remain compatible", () => {
-	const review = validatePdfReview(modern, hash, 1);
-	validateReviewSelection(review, "design");
-	assert.throws(() => validateReviewSelection(review, "accessibility"), /unselected/);
-	assert.throws(() => validatePdfReview({ ...modern, findings: [{ ...modern.findings[0], check: "accessibility" }] }, hash, 1), /outside selected/);
-	assert.throws(() => validatePdfReview({ ...modern, checks: [] }, hash, 1));
+test("v3 domain coverage is enforced while legacy review schemas remain compatible", async () => {
+	const accepted = await acceptPdfReview(modern, hash, 1, { checks: "design" });
+	await assert.rejects(acceptPdfReview(modern, hash, 1, { checks: "accessibility" }), { message: "Imported PDF review includes an unselected check domain." });
+	await assert.rejects(acceptPdfReview({ ...modern, findings: [{ ...modern.findings[0], check: "accessibility" }] }, hash, 1), { message: "PDF review finding is outside selected checks" });
+	await assert.rejects(acceptPdfReview({ ...modern, checks: [] }, hash, 1));
 	for (const checks of [["accessibility,design"], ["design,accessibility"], ["design", "design"], [""], []]) {
 		for (const findings of [[], [{ ...modern.findings[0], check: checks[0] }]]) {
-			assert.throws(() => validatePdfReview({ ...modern, checks, findings }, hash, 1));
-			const normalized = normalizePdfReview(validatePdfReview(modern, hash, 1));
+			await assert.rejects(acceptPdfReview({ ...modern, checks, findings }, hash, 1));
+			const normalized = accepted.normalized;
 			const malformedReview = { ...normalized, checks, findings: findings.length ? normalized.findings.map((finding) => ({ ...finding, check: checks[0] })) : [] };
 			assert.throws(() => validateComparisonReport({ schemaVersion: "pdf-1", document: { sha256: hash }, machineStatus: "complete", policy: {}, facts: { pages: [{ page: 1 }] }, evaluations: [], evidence: [], findings: [], needsReview: [], inferenceReviews: [malformedReview] }));
 		}
 	}
 	const { focus, checks, ...legacy } = modern;
-	const old = validatePdfReview({ ...legacy, schemaVersion: "pdf-review-2", tier: "visual", findings: modern.findings.map(({ check, ...finding }) => finding) }, hash, 1);
-	validateReviewSelection(old);
-	assert.throws(() => validateReviewSelection(old, "design"), /Legacy PDF reviews/);
-	const normalized = normalizePdfReview(review);
+	const old = { ...legacy, schemaVersion: "pdf-review-2", tier: "visual", findings: modern.findings.map(({ check, ...finding }) => finding) };
+	assert.equal((await acceptPdfReview(old, hash, 1)).normalized.evidenceBinding, "document-only");
+	await assert.rejects(acceptPdfReview(old, hash, 1, { checks: "design" }), { message: "Legacy PDF reviews do not declare check domains; omit --checks for a legacy combined report or prepare a new review." });
+	const normalized = accepted.normalized;
 	assert.equal(normalized.findings[0]?.provenance.tier, "inference");
 	assert.equal(normalized.findings[0]?.rule, "pdf.visual.inference");
 	assert.equal(normalized.findings[0]?.check, "design");

@@ -17,7 +17,7 @@ import { isAuditServerUrl } from "./serve.ts";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
-import { audioDuckingSetting, evaluateStep, logEvents, narrationIntervals, parseNvdaLog, renderJourneyMarkdown, runJourney, settingDifferences, verifyAddressDestination, withJourneySignals, type BrowserEvent, type BrowserObservation, type Corroboration, type FocusedNode, type Journey, type JourneyBrowser, type JourneyEnvironment, type JourneyRun, type NvdaDriver, type OrientationSnapshot } from "./nvda-journey.ts";
+import { audioDuckingSetting, evaluateJourney, narrationIntervals, renderJourneyMarkdown, runJourney, settingDifferences, verifyAddressDestination, withJourneySignals, type BrowserEvent, type BrowserObservation, type Corroboration, type FocusedNode, type Journey, type JourneyBrowser, type JourneyEnvironment, type JourneyOutcome, type JourneyRun, type NvdaDriver, type OrientationSnapshot } from "./nvda-journey.ts";
 
 const run = promisify(execFile);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,6 +50,34 @@ export function foregroundGuardDecision(reading: ForegroundReading, browserPid: 
 	if (reading.held.length) return { outcome: settling ? "retry" : "stop", detail: `keys still held down: ${reading.held.join(", ")}; the probe cannot identify their source` };
 	if (reading.pid !== browserPid) return { outcome: "acquire", detail: reading.title };
 	return { outcome: "ready", detail: reading.title };
+}
+
+/**
+ * NVDA logs its exit before its process ends, so a check made right after Guidepup's stop
+ * can still see nvda.exe. Wait a bounded time for the processes to go before failing.
+ */
+export async function waitForNvdaExit(
+	list: () => Promise<string[]> = runningNvdaProcesses,
+	{ timeoutMs = 5_000, pollMs = 200, now = Date.now, sleep = delay }: { timeoutMs?: number; pollMs?: number; now?: () => number; sleep?: (ms: number) => Promise<unknown> } = {},
+): Promise<void> {
+	const deadline = now() + timeoutMs;
+	let remaining = await list();
+	while (remaining.length && now() < deadline) {
+		await sleep(pollMs);
+		remaining = await list();
+	}
+	if (remaining.length) throw new Error(`NVDA did not stop: ${remaining.join(", ")}`);
+}
+
+/** Cleanup failures arrive as an AggregateError; keep each inner error so the evidence says what failed. */
+export function describeJourneyError(error: unknown): string {
+	const lines = [error instanceof Error ? error.stack ?? error.message : String(error)];
+	if (error instanceof AggregateError) {
+		for (const [index, inner] of error.errors.entries()) {
+			lines.push(`  [${index + 1}] ${(inner instanceof Error ? inner.stack ?? inner.message : String(inner)).replace(/\n/g, "\n      ")}`);
+		}
+	}
+	return lines.join("\n");
 }
 
 export async function runningNvdaProcesses(): Promise<string[]> {
@@ -800,6 +828,8 @@ export async function runNvdaJourney(target: string, journey: Journey, output: s
 		await mkdir(lock).catch((cause: unknown) => { throw new Error(`Another NVDA journey owns ${lock}. Remove a stale lock only after checking that NVDA and the runner have stopped.`, { cause }); });
 		let probe: ForegroundProbe | undefined;
 		let result: { exitCode: 0 | 1 | 2; jsonPath: string; markdownPath: string };
+		let evidence: JourneyOutcome & { version: 1; journey: Journey; environment: JourneyEnvironment; run: JourneyRun };
+		let rawLogForEvidence: string | null = null;
 		try {
 			signal.throwIfAborted();
 			const running = await runningNvdaProcesses();
@@ -838,8 +868,7 @@ export async function runNvdaJourney(target: string, journey: Journey, output: s
 				stop: async () => {
 					try { rawLog = await readLog(); }
 					finally { await nvda.stop(); }
-					const remaining = await runningNvdaProcesses();
-					if (remaining.length) throw new Error(`NVDA did not stop: ${remaining.join(", ")}`);
+					await waitForNvdaExit();
 				},
 				press: (key, options) => nvda.press(key, options),
 				type: (text, options) => nvda.type(text, options),
@@ -860,7 +889,7 @@ export async function runNvdaJourney(target: string, journey: Journey, output: s
 				run = await runJourney({ journey: { ...journey, start: target }, origin: new URL(target).origin, nvda: driver, browser, nvdaSettings: settings, readNvdaLog: readLog, signal,
 					onProgress: (message) => console.error(`NVDA: ${message}`) });
 			} catch (error) {
-				const message = error instanceof Error ? error.stack ?? error.message : String(error);
+				const message = describeJourneyError(error);
 				await writeFile(join(output, "error.txt"), message);
 				const retained = error instanceof AggregateError && "run" in error ? error.run as JourneyRun : undefined;
 				run = { ...(retained ?? { startedAt, endedAt: Date.now(), records: [], effectiveSettings: null }), stopped: message };
@@ -869,24 +898,23 @@ export async function runNvdaJourney(target: string, journey: Journey, output: s
 			environment.settingsNotDefault = settingDifferences(effective);
 			environment.audioDucking = audioDuckingSetting(effective);
 			await writeFile(join(output, "settings.json"), JSON.stringify(effective, null, 2));
-			const events = rawLog === null ? null : logEvents(parseNvdaLog(rawLog));
-			const results = journey.steps.map((step) => {
-				const result = evaluateStep(step, run.records.find((record) => record.id === step.id), events);
-				if (events === null || !events.length) {
-					result.classification = "inconclusive-automation";
-					result.reasons.push("NVDA input/output log is missing or empty; the journey cannot pass without delivery and speech evidence.");
-				}
-				return { ...result, status: result.classification === "expected" ? "pass" : ["inconclusive-automation", "not-run"].includes(result.classification) ? "inconclusive" : "fail" };
-			});
-			const exitCode = signal.aborted || run.stopped || results.some((result) => result.status === "inconclusive") ? 2 : results.some((result) => result.status === "fail") ? 1 : 0;
+			rawLogForEvidence = rawLog;
+			const { results, exitCode } = evaluateJourney(journey, run, rawLog, signal.aborted);
 			const jsonPath = join(output, "journey.json"), markdownPath = join(output, "transcript.md");
-			await writeFile(jsonPath, JSON.stringify({ version: 1, journey, environment, run, results, exitCode }, null, 2));
+			evidence = { version: 1, journey, environment, run, results, exitCode };
+			await writeFile(jsonPath, JSON.stringify(evidence, null, 2));
 			await writeFile(markdownPath, renderJourneyMarkdown(journey, run, results, environment));
 			result = { exitCode, jsonPath, markdownPath };
 		} finally {
 			try { await probe?.restore(); }
 			finally { probe?.close(); await rm(lock, { recursive: true }); }
 		}
-		return { ...result, exitCode: signal.aborted ? 2 : result.exitCode };
+		if (signal.aborted && evidence.exitCode !== 2) {
+			// An interruption during restore arrived after the evidence was written; re-evaluate so
+			// journey.json and the returned exit code agree.
+			evidence = { ...evidence, ...evaluateJourney(journey, evidence.run, rawLogForEvidence, true) };
+			await writeFile(result.jsonPath, JSON.stringify(evidence, null, 2));
+		}
+		return { ...result, exitCode: evidence.exitCode };
 	});
 }

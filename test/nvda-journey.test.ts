@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import {
 	evaluateStep,
+	evaluateJourney,
 	escapeSendKeysText,
 	withJourneySignals,
 	audioDuckingSetting,
@@ -32,6 +33,7 @@ import {
 	timeOfDayMs,
 	type Corroboration,
 	type JourneyBrowser,
+	type JourneyRun,
 	type NvdaDriver,
 	type StepRecord,
 	type BrowserEvent,
@@ -467,6 +469,97 @@ test("without an NVDA log the relay speech is used and delivery is unverified", 
 	assert.equal(result.classification, "inconclusive-automation");
 	assert.equal(result.speech.source, "guidepup-relay");
 	assert.match(result.reasons.join(" "), /unverified/);
+});
+
+test("journey evaluation overrides every step when the NVDA log is missing or has no events", () => {
+	const parsed = journey([
+		{ id: "find-radio", intent: "Find", keys: ["r"] },
+		{ id: "later", intent: "Continue", keys: ["Tab"] },
+	]);
+	const run: JourneyRun = { startedAt: at("14:00:00"), endedAt: at("14:00:04"), records: [record()], effectiveSettings: null };
+	for (const rawLog of [null, "", "unparseable log", "INFO - __main__ (14:00:00.000) - MainThread (1):\nStarting NVDA version 2026.2"]) {
+		const outcome = evaluateJourney(parsed, run, rawLog, false);
+		assert.deepEqual(outcome.results.map((result) => result.classification), ["inconclusive-automation", "inconclusive-automation"]);
+		assert.deepEqual(outcome.results.map((result) => result.status), ["inconclusive", "inconclusive"]);
+		assert.deepEqual(outcome.results.map((result) => result.reasons.at(-1)), [
+			"NVDA input/output log is missing or empty; the journey cannot pass without delivery and speech evidence.",
+			"NVDA input/output log is missing or empty; the journey cannot pass without delivery and speech evidence.",
+		]);
+		assert.equal(outcome.results[1]!.reasons[0], "An earlier step stopped the run.");
+		assert.equal(outcome.exitCode, 2);
+	}
+});
+
+test("journey evaluation classifies a step normally when only its own log window is empty", () => {
+	const parsed = journey([
+		{ id: "find-radio", intent: "Find", keys: ["r"] },
+		{ id: "listen", intent: "Listen" },
+		{ id: "later", intent: "Continue" },
+	]);
+	const run: JourneyRun = { startedAt: at("14:00:00"), endedAt: at("14:00:07"), records: [
+		record(), record({ id: "listen", startedAt: at("14:00:06"), endedAt: at("14:00:07"), keys: [] }),
+	], effectiveSettings: null };
+	const outcome = evaluateJourney(parsed, run, LOG, false);
+	assert.deepEqual(outcome.results.map((result) => result.classification), ["expected", "expected", "not-run"]);
+	assert.deepEqual(outcome.results.map((result) => result.status), ["pass", "pass", "inconclusive"]);
+	assert.deepEqual(outcome.results[1]!.speech.phrases, []);
+	assert.deepEqual(outcome.results[1]!.reasons, []);
+	assert.deepEqual(outcome.results[2]!.reasons, ["An earlier step stopped the run."]);
+});
+
+test("journey evaluation maps every classification to a status", () => {
+	const parsed = journey([
+		{ id: "expected", intent: "Find", keys: ["r"], expect: { spoken: ["not checked"] } },
+		{ id: "defect", intent: "Navigate", keys: ["r"], expect: { path: "next.html" } },
+		{ id: "compatibility", intent: "Hear feedback", keys: ["r"], expect: { spoken: [{ text: "Feedback: Incorrect", via: "live" }] } },
+		{ id: "review", intent: "Read", keys: ["r"], expect: { spoken: [{ text: "Attempt 1 of 2", via: "reading" }] } },
+		{ id: "automation", intent: "Submit", keys: ["Enter"] },
+		{ id: "not-run", intent: "Continue", keys: ["Tab"] },
+	]);
+	const run: JourneyRun = { startedAt: at("14:00:00"), endedAt: at("14:00:04"), records: [
+		record({ id: "review" }), record({ id: "expected" }), record({ id: "defect" }),
+		record({ id: "compatibility", corroboration: corroboration({ liveRegions: ["Feedback: Incorrect. Try again."] }) }),
+		record({ id: "automation" }),
+	], effectiveSettings: null };
+	const outcome = evaluateJourney(parsed, run, LOG, false);
+	assert.deepEqual(outcome.results.map((result) => [result.step.id, result.classification, result.status]), [
+		["expected", "expected", "pass"],
+		["defect", "application-defect-candidate", "fail"],
+		["compatibility", "compatibility-candidate", "fail"],
+		["review", "needs-review", "fail"],
+		["automation", "inconclusive-automation", "inconclusive"],
+		["not-run", "not-run", "inconclusive"],
+	]);
+});
+
+test("journey exit codes give interruption, stopping and inconclusive steps precedence over failures", () => {
+	const parsed = journey([
+		{ id: "find-radio", intent: "Find", keys: ["r"], expect: { spoken: ["not checked"] } },
+		{ id: "defect", intent: "Navigate", keys: ["r"], expect: { path: "next.html" } },
+		{ id: "automation", intent: "Submit", keys: ["Enter"] },
+	]);
+	const passing = { ...parsed, steps: [parsed.steps[0]!] };
+	const failing = { ...parsed, steps: parsed.steps.slice(0, 2) };
+	const run: JourneyRun = { startedAt: at("14:00:00"), endedAt: at("14:00:04"), records: [
+		record(), record({ id: "defect" }), record({ id: "automation" }),
+	], effectiveSettings: null };
+	assert.equal(evaluateJourney(passing, run, LOG, true).exitCode, 2);
+	assert.equal(evaluateJourney(passing, { ...run, stopped: "Window guard stopped the run." }, LOG, false).exitCode, 2);
+	assert.equal(evaluateJourney(parsed, run, LOG, false).exitCode, 2);
+	assert.equal(evaluateJourney({ ...parsed, steps: [...failing.steps, { ...parsed.steps[2]!, id: "absent" }] }, run, LOG, false).exitCode, 2);
+	assert.equal(evaluateJourney(failing, run, LOG, false).exitCode, 1);
+	assert.equal(evaluateJourney(passing, run, LOG, false).exitCode, 0);
+});
+
+test("a late interruption re-evaluates to exit 2 without changing step results", () => {
+	// The runner re-evaluates after cleanup when an interruption arrives late, then rewrites journey.json,
+	// so the saved and returned exit codes come from this one rule.
+	const parsed = journey([{ id: "find-radio", intent: "Find", keys: ["r"], expect: { spoken: ["not checked"] } }]);
+	const run: JourneyRun = { startedAt: at("14:00:00"), endedAt: at("14:00:04"), records: [record()], effectiveSettings: null };
+	const evaluated = evaluateJourney(parsed, run, LOG, false);
+	const late = evaluateJourney(parsed, run, LOG, true);
+	assert.deepEqual([evaluated.exitCode, late.exitCode], [0, 2]);
+	assert.deepEqual(late.results.map((result) => [result.classification, result.status]), [["expected", "pass"]]);
 });
 
 test("setting differences name what departs from NVDA defaults", () => {

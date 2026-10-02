@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import { createSocket } from "node:dgram";
 import { chromium } from "playwright";
 
-import { ChromiumJourneyBrowser, foregroundGuardDecision, type ChromiumOptions, type ForegroundReading } from "../src/nvda-windows.ts";
+import { ChromiumJourneyBrowser, describeJourneyError, waitForNvdaExit, foregroundGuardDecision, type ChromiumOptions, type ForegroundReading } from "../src/nvda-windows.ts";
 
 // Ubuntu 24.04 blocks Chrome's user-namespace sandbox for unprivileged users, as on CI runners.
 // Playwright passes --no-sandbox by default for the same reason. The Windows driver keeps the sandbox.
@@ -501,4 +501,23 @@ test("headless setup accepts a declared canonical redirect, keeps iframe focus e
 		assert.ok(resolve(dir).startsWith(resolve(tmpdir()) + sep));
 		await rm(dir, { recursive: true, force: true });
 	}
+});
+
+test("NVDA exit allows a short lag after Guidepup's stop, then fails with the remaining processes", async () => {
+	let clock = 0, lists = 0;
+	const timing = { timeoutMs: 1000, pollMs: 200, now: () => clock, sleep: async (ms: number) => { clock += ms; } };
+	// NVDA logs its exit before nvda.exe ends; two late samples still pass.
+	await waitForNvdaExit(async () => (++lists <= 2 ? ["nvda.exe"] : []), timing);
+	assert.equal(lists, 3);
+	clock = 0;
+	await assert.rejects(waitForNvdaExit(async () => ["nvda.exe", "nvda_slave.exe"], timing), /NVDA did not stop: nvda\.exe, nvda_slave\.exe/);
+	assert.equal(clock, 1000, "gives up at the deadline, not before");
+});
+
+test("journey error evidence keeps every cleanup failure inside an AggregateError", () => {
+	const text = describeJourneyError(new AggregateError([new Error("NVDA did not stop: nvda.exe"), new Error("journey browser did not exit")], "NVDA journey cleanup failed"));
+	assert.match(text, /NVDA journey cleanup failed/);
+	assert.match(text, /\[1\] Error: NVDA did not stop: nvda\.exe/);
+	assert.match(text, /\[2\] Error: journey browser did not exit/);
+	assert.equal(describeJourneyError("plain"), "plain");
 });
