@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validatePdfReview, validatePdfReviewBundle, validatePdfReviewBundleSelection, readPdfEvidence as readFile } from '../../src/pdf-review.ts';
+import { acceptPdfReview, validatePdfReviewBundle, readPdfEvidence as readFile } from '../../src/pdf-review.ts';
 
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 function object(value: unknown, required: string[], optional: string[] = []): asserts value is Record<string, unknown> {
@@ -46,10 +46,9 @@ export async function scoreRun(runPath: string) {
     const bundle = await validatePdfReviewBundle(resolve(base, entry.manifestPath), pdfSha256);
     const { pages, artifacts } = bundle;
     const reviewBytes = await file(entry.reviewPath);
-    const review = validatePdfReview(JSON.parse(reviewBytes.toString()), pdfSha256, bundle.pageCount);
-    if (review.reviewer.model !== run.model.id || review.tier !== bundle.tier) throw new Error('Review model or tier mismatch');
-    validatePdfReviewBundleSelection(review, bundle);
-    if (JSON.stringify([...review.pagesReviewed].sort((a,b) => a-b)) !== JSON.stringify(pages)) throw new Error('Review must cover exactly the bundle selected pages');
+    const { review } = await acceptPdfReview(JSON.parse(reviewBytes.toString()), pdfSha256, bundle.pageCount, {
+      bundle, expectedReviewer: { model: run.model.id as string, tier: bundle.tier }, exactPageCoverage: true,
+    });
     array(entry.expectedDefects);
     const defects = new Map<string, { category: string; page: number }>();
     for (const defect of entry.expectedDefects) {

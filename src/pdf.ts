@@ -270,8 +270,8 @@ export async function pdfCli(args: string[]): Promise<number> {
 			if (json === reviewPath || (output && output.dev === review.dev && output.ino === review.ino)) throw new Error("JSON output must not overwrite an imported review.");
 		}
 	}
-	const report = { ...await checkPdf(target, options), inferenceReviews: [] as ReturnType<typeof import("./pdf-review.ts").normalizePdfReview>[] };
-	const { validatePdfReview, normalizePdfReview, validateReviewSelection, validatePdfReviewBundle, validatePdfReviewBundleSelection } = await import("./pdf-review.ts");
+	const report = { ...await checkPdf(target, options), inferenceReviews: [] as import("./pdf-review.ts").AcceptedPdfReview["normalized"][] };
+	const { acceptPdfReview, validatePdfReviewBundle } = await import("./pdf-review.ts");
 	const bundle = reviewBundle ? await validatePdfReviewBundle(reviewBundle, report.document.sha256, report.facts.pages.length) : undefined;
 	if (json && bundle) {
 		const output = await stat(json).catch((e: NodeJS.ErrnoException) => { if (e.code !== "ENOENT") throw e; return undefined; });
@@ -282,11 +282,10 @@ export async function pdfCli(args: string[]): Promise<number> {
 	}
 	for (const reviewPath of reviewPaths) {
 		if ((await stat(reviewPath)).size > 4 * 1024 * 1024) throw new Error("PDF review exceeds 4 MiB");
-		const review = validatePdfReview(JSON.parse(await readFile(reviewPath, "utf8")), report.document.sha256, report.facts.pages.length);
-		if (review.schemaVersion === "pdf-review-4" && !bundle) throw new Error("PDF review v4 requires --review-bundle manifest.json");
-		if (bundle) validatePdfReviewBundleSelection(review, bundle);
-		validateReviewSelection(review, options.checks ?? (options.tier !== undefined ? report.selection.checks.join(",") : undefined));
-		report.inferenceReviews.push(normalizePdfReview(review));
+		const accepted = await acceptPdfReview(JSON.parse(await readFile(reviewPath, "utf8")), report.document.sha256, report.facts.pages.length, {
+			bundle, checks: options.checks ?? (options.tier !== undefined ? report.selection.checks.join(",") : undefined),
+		});
+		report.inferenceReviews.push(accepted.normalized);
 	}
 	report.feedback = pdfFeedback(report);
 	if (json) {

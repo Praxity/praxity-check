@@ -46,7 +46,7 @@ function record(value: unknown, keys: string[]): asserts value is Record<string,
 	if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) throw new Error(`Invalid PDF review object; expected exactly ${keys.join(", ")}`);
 }
 function text(value: unknown) { if (typeof value !== "string" || !value.trim() || value.length > 4000) throw new Error("PDF review text must contain 1–4000 characters"); }
-export function validatePdfReview(value: unknown, documentSha256: string, pageCount: number): PdfReview {
+function validatePdfReview(value: unknown, documentSha256: string, pageCount: number): PdfReview {
 	const v4 = !!value && typeof value === "object" && "schemaVersion" in value && value.schemaVersion === "pdf-review-4";
 	const v3 = v4 || !!value && typeof value === "object" && "schemaVersion" in value && value.schemaVersion === "pdf-review-3";
 	record(value, ["schemaVersion", "documentSha256", "tier", "pagesReviewed", "reviewer", "findings", ...(v3 ? ["focus", "checks"] : []), ...(v4 ? ["bundleSha256"] : [])]);
@@ -72,16 +72,16 @@ export function validatePdfReview(value: unknown, documentSha256: string, pageCo
 	return value as PdfReview;
 }
 
-export function validateReviewSelection(review: PdfReview, checks?: string) {
+function validateReviewSelection(review: PdfReview, checks?: string) {
 	if (checks === undefined) return;
 	const selected = parseChecks(checks);
 	if (!("checks" in review)) throw new Error("Legacy PDF reviews do not declare check domains; omit --checks for a legacy combined report or prepare a new review.");
 	if (review.checks.some((check) => !selected.includes(check))) throw new Error("Imported PDF review includes an unselected check domain.");
 }
 
-export function normalizePdfReview(review: PdfReview) {
+function normalizePdfReview(review: PdfReview, evidenceBinding: "bundle" | "document-only") {
 	const focus = "focus" in review ? review.focus : review.tier;
-	return { ...review, evidenceBinding: review.schemaVersion === "pdf-review-4" ? "bundle" as const : "document-only" as const, findings: review.findings.map((finding) => ({
+	return { ...review, evidenceBinding, findings: review.findings.map((finding) => ({
 		id: createHash("sha256").update(JSON.stringify([review.documentSha256, review.tier, finding.page, finding.evidence, ...("check" in finding ? [finding.check, focus] : [])])).digest("hex"),
 		category: "category" in finding ? finding.category : "needs-context" as const,
 		...("check" in finding ? { check: finding.check } : {}),
@@ -112,6 +112,7 @@ export async function readPdfEvidence(path: string): Promise<Buffer> {
 	} finally { await handle.close(); }
 }
 const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const verifiedBundle = Symbol("verifiedPdfReviewBundle");
 function bundleObject(value: unknown): asserts value is Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid bundle object");
 }
@@ -159,14 +160,44 @@ export async function validatePdfReviewBundle(manifestPath: string, documentSha2
 			if (await fingerprint(artifact.path) !== artifact.sha256) throw new Error("Design artifact hash mismatch");
 		}
 	}
-	return { schemaVersion: bundle.schemaVersion, manifestSha256: hash(bytes), pageCount: bundle.pageCount, pages, tier: bundle.tier, focus: bundle.focus, checks, artifacts, paths };
+	return { [verifiedBundle]: true as const, documentSha256, schemaVersion: bundle.schemaVersion, manifestSha256: hash(bytes), pageCount: bundle.pageCount, pages, tier: bundle.tier, focus: bundle.focus, checks, artifacts, paths };
 }
 
-export function validatePdfReviewBundleSelection(review: PdfReview, bundle: Awaited<ReturnType<typeof validatePdfReviewBundle>>) {
+export type VerifiedPdfReviewBundle = Awaited<ReturnType<typeof validatePdfReviewBundle>>;
+export type AcceptedPdfReview = { review: PdfReview; normalized: ReturnType<typeof normalizePdfReview> };
+
+function validatePdfReviewBundleSelection(review: PdfReview, bundle: VerifiedPdfReviewBundle) {
 	if (review.schemaVersion === "pdf-review-4" && (bundle.schemaVersion !== "pdf-review-bundle-2" || review.bundleSha256 !== bundle.manifestSha256)) throw new Error("PDF review bundle SHA-256 does not match; prepare a new review after changing evidence or context");
 	if (review.tier !== bundle.tier) throw new Error("Review tier mismatch");
 	if ("checks" in review && (review.focus !== bundle.focus || JSON.stringify([...review.checks].sort()) !== JSON.stringify([...(bundle.checks ?? [])].sort()))) throw new Error("Review focus or check domains mismatch");
 	if (review.pagesReviewed.some(page => !bundle.pages.includes(page))) throw new Error("Review includes a page outside the bundle selected pages");
+}
+
+// This module keeps acceptance ordering at one seam for caller leverage and rule locality.
+// A manifest path defers evidence reads until after the automated version rule; a verified
+// bundle adds depth by allowing several imports to share the same evidence verification.
+export async function acceptPdfReview(value: unknown, documentSha256: string, pageCount: number, options: {
+	bundle?: VerifiedPdfReviewBundle | string;
+	requireBoundReview?: boolean;
+	checks?: string;
+	expectedReviewer?: { model: string; tier: PdfReview["tier"] };
+	exactPageCoverage?: boolean;
+} = {}): Promise<AcceptedPdfReview> {
+	const review = validatePdfReview(value, documentSha256, pageCount);
+	if (options.requireBoundReview && review.schemaVersion !== "pdf-review-4") throw new Error("Automated PDF review requires pdf-review-4 with exact bundle SHA-256 binding");
+	if (review.schemaVersion === "pdf-review-4" && options.bundle === undefined) throw new Error("PDF review v4 requires --review-bundle manifest.json");
+	if (options.expectedReviewer && (review.reviewer.model !== options.expectedReviewer.model || review.tier !== options.expectedReviewer.tier)) throw new Error("Review model or tier mismatch");
+	const bundle = typeof options.bundle === "string" ? await validatePdfReviewBundle(options.bundle, documentSha256, pageCount) : options.bundle;
+	let evidenceBinding: "bundle" | "document-only" = "document-only";
+	if (bundle) {
+		if (bundle.documentSha256 !== documentSha256) throw new Error("Bundle version or PDF hash mismatch");
+		if (bundle.pageCount !== pageCount) throw new Error("Bundle page count mismatch");
+		validatePdfReviewBundleSelection(review, bundle);
+		if (review.schemaVersion === "pdf-review-4") evidenceBinding = "bundle";
+	}
+	validateReviewSelection(review, options.checks);
+	if (options.exactPageCoverage && (!bundle || JSON.stringify([...review.pagesReviewed].sort((a, b) => a - b)) !== JSON.stringify(bundle.pages))) throw new Error("Review must cover exactly the bundle selected pages");
+	return { review, normalized: normalizePdfReview(review, evidenceBinding) };
 }
 
 export function selectReviewPages(count: number, requested?: number[]): number[] {
@@ -257,10 +288,9 @@ export async function pdfReviewCli(args: string[]): Promise<number> {
 			return { id: String(artifact.page), text: text.slice(0, 10_000), truncated: text.length > 10_000 };
 		}));
 		await runPreparedReview(result.directory, options, { kind: "pdf", sourceSha256: result.bundleSha256, items, images: result.manifest.artifacts.map(artifact => join(result.directory, artifact.image)) }, async path => {
-			const review = validatePdfReview(JSON.parse((await readPdfEvidence(path)).toString()), result.manifest.documentSha256, result.manifest.pageCount);
-			if (result.manifest.schemaVersion === "pdf-review-bundle-2" && review.schemaVersion !== "pdf-review-4") throw new Error("Automated PDF review requires pdf-review-4 with exact bundle SHA-256 binding");
-			const bundle = await validatePdfReviewBundle(join(result.directory, "manifest.json"), result.manifest.documentSha256, result.manifest.pageCount);
-			validatePdfReviewBundleSelection(review, bundle);
+			await acceptPdfReview(JSON.parse((await readPdfEvidence(path)).toString()), result.manifest.documentSha256, result.manifest.pageCount, {
+				bundle: join(result.directory, "manifest.json"), requireBoundReview: result.manifest.schemaVersion === "pdf-review-bundle-2",
+			});
 		});
 	}
 	console.log(`Review bundle saved to ${result.directory}, covering pages ${result.manifest.selectedPages.join(", ")} of ${result.manifest.pageCount}.\n${options.reviewer === "codex" ? "Its review.json is ready to import with check --review." : "Follow review-prompt.md, then import the result with check --review."}`);

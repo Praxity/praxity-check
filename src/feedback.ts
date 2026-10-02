@@ -1,6 +1,6 @@
 import type { AuditReport } from "./report.ts";
 import type { checkPdf } from "./pdf.ts";
-import type { normalizePdfReview } from "./pdf-review.ts";
+import type { AcceptedPdfReview } from "./pdf-review.ts";
 import type { CheckDomain, CheckTier } from "./selection.ts";
 
 export type FeedbackLocation =
@@ -105,7 +105,7 @@ export function htmlFeedback(report: AuditReport): Feedback {
 	return feedback;
 }
 
-type PdfSource = Omit<Awaited<ReturnType<typeof checkPdf>>, "feedback"> & { inferenceReviews?: ReturnType<typeof normalizePdfReview>[] };
+type PdfSource = Omit<Awaited<ReturnType<typeof checkPdf>>, "feedback"> & { inferenceReviews?: AcceptedPdfReview["normalized"][] };
 const HUMAN_RULES = new Set(["pdfua.conformance", "assistive.technology", "visual.review", "physical.print"]);
 function pdfDomains(rule: string, selected: CheckDomain[]): CheckDomain[] {
 	if (rule.startsWith("pdfua") || rule === "assistive.technology") return ["accessibility"];
