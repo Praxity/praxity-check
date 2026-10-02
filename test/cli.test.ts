@@ -110,3 +110,40 @@ test("PDF-looking folder names and PDF-first ZIPs retain HTML coverage", async (
 		assert.ok(report.pages.some((page: { file?: string; page?: string }) => JSON.stringify(page).includes("index.html")));
 	}
 });
+
+for (const expectedCode of [0, 1, 2]) {
+	test(`check reports unaudited pages and states while retaining exit code ${expectedCode}`, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "praxity-check-partial-cli-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		await writeFile(join(root, "failed.html"), `<!doctype html><html lang="en"><title>Failed</title><body><main><h1>Failed page</h1>
+		<script>Object.defineProperty(document.body, 'innerText', { get() { throw new Error('settling fixture failed'); } });</script>
+		</main></body></html>`);
+		const args = [CLI, "check", root, "--json", join(root, "report.json")];
+		if (expectedCode !== 2) {
+			await writeFile(join(root, "audited.html"), `<!doctype html><html lang="en"><title>Audited</title><body><main><h1>Audited page</h1>
+			${expectedCode === 1 ? '<img src="missing.png">' : '<p>Readable course content.</p>'}</main></body></html>`);
+			const scenarios = join(root, "scenarios.json");
+			await writeFile(scenarios, JSON.stringify({ scenarios: [
+				{ id: "broken-state", page: "audited.html", actions: [{ action: "click", selector: "[" }] },
+			] }));
+			args.push("--scenarios", scenarios);
+		}
+		const result = await exec(process.execPath, args).then(
+			({ stdout, stderr }) => ({ code: 0, stdout, stderr }),
+			(error: { code: number; stdout: string; stderr: string }) => error,
+		);
+		assert.equal(result.code, expectedCode);
+		assert.equal(result.stderr, "");
+		assert.match(result.stdout, /Pages not checked: 1 page\./);
+		assert.match(result.stdout, /failed\.html: settling failed: .*settling fixture failed/);
+		if (expectedCode !== 2) {
+			assert.match(result.stdout, /Checked 1 page\./);
+			assert.match(result.stdout, /States not checked: 1 state\./);
+			assert.match(result.stdout, /audited\.html, state broken-state: .*Unexpected token/);
+		}
+		const report = JSON.parse(await readFile(join(root, "report.json"), "utf8"));
+		assert.equal(report.pages.filter((page: { audited: boolean }) => page.audited).length, expectedCode === 2 ? 0 : 1);
+		assert.ok(report.evaluations.some((evaluation: { check: string; outcome: string }) =>
+			evaluation.check === "page-audit" && evaluation.outcome === "untested"));
+	});
+}
