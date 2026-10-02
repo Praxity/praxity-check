@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { popplerExecutable } from "./poppler.ts";
 
 const exec = promisify(execFile);
 const maxXmlBytes = 4 * 1024 * 1024;
@@ -123,7 +124,7 @@ export async function preparePdfDesignEvidence(path: string, outputDirectory: st
 	if (!pages.length || pages.length > 24 || new Set(pages.map((p) => p.page)).size !== pages.length || pages.some((p) => !Number.isSafeInteger(p.page) || p.page < 1)) throw new Error("Select 1–24 unique pages for design evidence");
 	const input = resolve(path), directory = resolve(outputDirectory);
 	const run = async (tool: string, args: string[]) => {
-		const result = await exec(tool, args, { encoding: "utf8", timeout: 30_000, maxBuffer: maxXmlBytes, env: { ...process.env, LC_ALL: "C" } });
+		const result = await exec(popplerExecutable(tool), args, { encoding: "utf8", timeout: 30_000, maxBuffer: maxXmlBytes, env: { ...process.env, LC_ALL: "C" } });
 		return { tool, args, ...result };
 	};
 	const documentSha256 = hash(await readFile(input));

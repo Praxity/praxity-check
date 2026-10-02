@@ -1,11 +1,11 @@
 ﻿import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { packageArtifact } from "./package.mjs";
 import { syntheticPdfUa } from "./package-pdf-fixture.mjs";
@@ -165,6 +165,9 @@ async function proveArtifact(staged, root, html) {
 	assert.equal(manifest.arch, process.arch);
 	const launcher = join(artifact, windows ? "bin/praxity-check.cmd" : "bin/praxity-check");
 	assert.equal(manifest.entryPoint, windows ? "bin/praxity-check.cmd" : "bin/praxity-check");
+	const launcherText = await readFile(launcher, "utf8");
+	assert.ok(launcherText.includes(windows ? 'set "CHECK_POPPLER_BIN=%CHECK_DIR%\\dependencies\\bin"' : 'export CHECK_POPPLER_BIN="$CHECK_DIR/dependencies/bin"'));
+	assert.doesNotMatch(launcherText, /(?:set "|export )PATH=/);
 	const help = run(launcher, ["--help"], root);
 	assert.equal(help.status, 0, help.stderr || String(help.error));
 	assert.match(help.stdout, /compare-pdf/);
@@ -211,6 +214,27 @@ async function proveArtifact(staged, root, html) {
 		assert.equal(report.machineStatus, "incomplete");
 		assert.ok(report.evidence.some(item => item.tool === "pdfinfo" && /ENOENT/.test(item.error)));
 		assert.ok(report.evaluations.some(item => item.rule === "pdf.open" && item.outcome === "untested"));
+		const decoy = join(root, "PATH decoy");
+		await mkdir(decoy);
+		const executable = join(decoy, windows ? "pdfinfo.exe" : "pdfinfo");
+		await cp(process.execPath, executable);
+		await chmod(executable, 0o700);
+		const marker = join(root, "PATH decoy ran.txt"), adapter = join(root, "decoy.mjs");
+		// The import hook acts only in the native decoy, leaving the packaged Node invocation intact.
+		await writeFile(adapter, `import { writeFileSync } from "node:fs";
+import { basename } from "node:path";
+if (/^pdfinfo(?:\\.exe)?$/.test(basename(process.execPath))) {
+  writeFileSync(${JSON.stringify(marker)}, "unexpected PATH fallback");
+  console.log("Pages: 1\\nEncrypted: no");
+  process.exit(0);
+}
+`);
+		const refused = run(launcher, ["check", input, "--json", output], root, { PATH: decoy, CHECK_POPPLER_BIN: decoy, NODE_OPTIONS: `--import=${pathToFileURL(adapter).href}` });
+		assert.equal(refused.status, 2, refused.stderr || String(refused.error));
+		const refusedReport = JSON.parse(await readFile(output, "utf8"));
+		assert.deepEqual(refusedReport.facts.metadata, {});
+		assert.ok(refusedReport.evidence.some(item => item.tool === "pdfinfo" && item.exitCode === null && item.error?.includes(join(artifact, "dependencies", "bin", windows ? "pdfinfo.exe" : "pdfinfo")) && item.error.includes("ENOENT")));
+		await assert.rejects(access(marker), { code: "ENOENT" });
 	}
 	if (windows && manifest.payloads.poppler && manifest.payloads.java && manifest.payloads.veraPDF) {
 		for (const name of ["BuildTools-ThirdPartyNotices.txt", "Redist.txt", "sdk_license.rtf", "sdk_third_party_notices.rtf"]) assert.ok(manifest.legalFiles.includes(`dependencies/notices/toolchain/${name}`), `Missing toolchain legal path: ${name}`);
@@ -274,6 +298,8 @@ test("macOS target layout and inventory can be packaged without a Mac", async t 
 	await assert.rejects(lstat(join(output, "runtime/node.exe")), /ENOENT/);
 	const launcher = await readFile(join(output, "bin/praxity-check"), "utf8");
 	assert.match(launcher, /^#!\/bin\/sh/);
+	assert.match(launcher, /export CHECK_POPPLER_BIN="\$CHECK_DIR\/dependencies\/bin"/);
+	assert.doesNotMatch(launcher, /export PATH=/);
 	assert.match(launcher, /exec "\$CHECK_DIR\/runtime\/node" "\$CHECK_DIR\/lib\/cli.js" "\$@"/);
 	assert.doesNotMatch(launcher, /dirname|node.exe/);
 });

@@ -3,6 +3,11 @@ export const popplerData = { version: "0.4.12", url: "https://poppler.freedeskto
 export const popplerTools = ["pdfinfo", "pdffonts", "pdfimages", "pdftotext", "pdftoppm", "pdftohtml"];
 export const windowsPoppler = {
 	baseline: "9e593bb18ea69cc5095e012465dcd675a822ed0d", triplet: "check-x64-windows-static",
+	tool: {
+		releaseTag: "2026-07-27",
+		// GitHub's published vcpkg.exe asset digest at https://api.github.com/repos/microsoft/vcpkg-tool/releases/tags/2026-07-27
+		sha256: "13b8175e99a884c5ad34249218754b45541a1a63f216e92603aee57a285ac741",
+	},
 	dependencies: [{ name: "freetype", "default-features": false }, "fontconfig", "libjpeg-turbo", "libpng", "tiff", "openjpeg", "lcms", "zlib"],
 	// Transitive runtime packages at this registry revision; host tools are not shipped.
 	packages: ["dirent", "expat", "fontconfig", "freetype", "lcms", "libjpeg-turbo", "liblzma", "libpng", "openjpeg", "tiff", "zlib"],

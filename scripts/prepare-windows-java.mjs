@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { javaEnvironment, veraPdfJavaArgs, veraPdfMainClass } from "../src/verapdf-runtime.ts";
 import { validateWindowsPayload } from "./windows-pe.mjs";
+import { downloadVerified } from "./download-verified.mjs";
 
 export const windowsJavaPins = Object.freeze({
 	java: {
@@ -26,20 +26,6 @@ export const windowsJavaPins = Object.freeze({
 		{ name: "LICENSE.MPL", url: "https://raw.githubusercontent.com/veraPDF/veraPDF-apps/7d9b5c3f709846ab83f86ca1a538b24eac2d3f72/LICENSE.MPL", sha256: "af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e" },
 	],
 });
-
-export async function downloadVerified(input, path, { fetchFile = fetch } = {}) {
-	let bytes;
-	try { bytes = await readFile(path); } catch (error) {
-		if (error.code !== "ENOENT") throw error;
-		const response = await fetchFile(input.url);
-		if (!response.ok) throw new Error(`Download failed (${response.status}): ${input.url}`);
-		bytes = Buffer.from(await response.arrayBuffer());
-		if (createHash("sha256").update(bytes).digest("hex") !== input.sha256) throw new Error(`SHA-256 mismatch: ${input.url}`);
-		await writeFile(path, bytes, { flag: "wx" });
-	}
-	if (createHash("sha256").update(bytes).digest("hex") !== input.sha256) throw new Error(`SHA-256 mismatch: ${path}`);
-	return path;
-}
 
 const run = (file, args) => execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: javaEnvironment(process.env, "win32"), timeout: 120_000 }).trim();
 const powershellLiteral = value => "'" + value.replaceAll("'", "''") + "'";
@@ -112,7 +98,7 @@ export async function prepareWindowsJava({ work: workValue, output: outputValue 
 	for (const [directory, pin] of [[java, windowsJavaPins.java], [verapdf, windowsJavaPins.veraPDF]]) {
 		await mkdir(join(directory, "notices"));
 		await writeFile(join(directory, "notices/provenance.json"), JSON.stringify({ ...pin, platform: "win32", arch: "x64", ...(directory === verapdf ? { licenses: windowsJavaPins.licenses, mainClass: veraPdfMainClass } : {}) }, null, 2) + "\n");
-		for (const [source, target] of [[import.meta.url, "scripts/prepare-windows-java.mjs"], [new URL("./windows-pe.mjs", import.meta.url), "scripts/windows-pe.mjs"], [new URL("../src/verapdf-runtime.ts", import.meta.url), "src/verapdf-runtime.ts"]]) {
+		for (const [source, target] of [[import.meta.url, "scripts/prepare-windows-java.mjs"], [new URL("./download-verified.mjs", import.meta.url), "scripts/download-verified.mjs"], [new URL("./windows-pe.mjs", import.meta.url), "scripts/windows-pe.mjs"], [new URL("../src/verapdf-runtime.ts", import.meta.url), "src/verapdf-runtime.ts"]]) {
 			const path = join(directory, "notices/recipe", target);
 			await mkdir(join(path, ".."), { recursive: true });
 			await copyFile(fileURLToPath(source), path);

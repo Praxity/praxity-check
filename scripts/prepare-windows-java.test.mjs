@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { downloadVerified, prepareWindowsJava, validateWindowsJava, windowsJavaPins } from "./prepare-windows-java.mjs";
+import { prepareWindowsJava, validateWindowsJava, windowsJavaPins } from "./prepare-windows-java.mjs";
+import { downloadVerified } from "./download-verified.mjs";
 
 test("official downloads require the pinned SHA-256 before saving or reusing bytes", async t => {
 	const root = await mkdtemp(join(tmpdir(), "java downloads "));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const bytes = Buffer.from("Synthetic official archive"), path = join(root, "payload.zip");
-	const pin = { url: "https://official.example/payload.zip", sha256: createHash("sha256").update(bytes).digest("hex") };
+	const pin = { url: "https://official.example/payload.zip", sha256: "e92c343da0eb439f6014bec5c00f840772e33b5399c0ec0d9b84ae62399286f1" };
 	const fetched = [];
 	assert.equal(await downloadVerified(pin, path, { fetchFile: async url => { fetched.push(url); return new Response(bytes); } }), path);
 	assert.deepEqual(fetched, [pin.url]);
