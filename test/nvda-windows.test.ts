@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -10,7 +11,7 @@ import { createServer } from "node:http";
 import { createSocket } from "node:dgram";
 import { chromium } from "playwright";
 
-import { ChromiumJourneyBrowser, describeJourneyError, waitForNvdaExit, foregroundGuardDecision, type ChromiumOptions, type ForegroundReading } from "../src/nvda-windows.ts";
+import { ChromiumJourneyBrowser, keepChromeOsPasswordCheck, seedChromeOsPasswordCheck, describeJourneyError, waitForNvdaExit, foregroundGuardDecision, type ChromiumOptions, type ForegroundReading } from "../src/nvda-windows.ts";
 
 // Ubuntu 24.04 blocks Chrome's user-namespace sandbox for unprivileged users, as on CI runners.
 // Playwright passes --no-sandbox by default for the same reason. The Windows driver keeps the sandbox.
@@ -622,4 +623,43 @@ test("journey error evidence keeps every cleanup failure inside an AggregateErro
 	assert.match(text, /\[1\] Error: NVDA did not stop: nvda\.exe/);
 	assert.match(text, /\[2\] Error: journey browser did not exit/);
 	assert.equal(describeJourneyError("plain"), "plain");
+});
+
+test("Chrome's Windows-password check moves between throwaway profiles and nothing else does", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "praxity-os-password-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const cache = join(dir, "cache", "chrome-os-password.json");
+	const used = join(dir, "used"), fresh = join(dir, "fresh");
+	await mkdir(used); await mkdir(fresh);
+	// Without a cache, a fresh profile is left alone and Chrome checks once.
+	assert.equal(await seedChromeOsPasswordCheck(fresh, cache), false);
+	await writeFile(join(used, "Local State"), JSON.stringify({ browser: { enabled_labs_experiments: ["x"] }, password_manager: { is_biometric_avaliable: false, os_password_blank: false, os_password_last_changed: "13435253506973688" } }));
+	assert.equal(await keepChromeOsPasswordCheck(used, cache), true);
+	assert.equal(await seedChromeOsPasswordCheck(fresh, cache), true);
+	assert.deepEqual(JSON.parse(await readFile(join(fresh, "Local State"), "utf8")), { password_manager: { os_password_blank: false, os_password_last_changed: "13435253506973688" } });
+	// A profile without the check, or a garbled cache, changes nothing.
+	assert.equal(await keepChromeOsPasswordCheck(fresh + "-missing", cache), false);
+	await writeFile(cache, "{ half");
+	assert.equal(await seedChromeOsPasswordCheck(join(dir, "used"), cache), false);
+	await writeFile(cache, JSON.stringify({ os_password_blank: "no", os_password_last_changed: "x" }));
+	assert.equal(await seedChromeOsPasswordCheck(join(dir, "used"), cache), false);
+});
+
+test("the journey browser seeds the cached check before Chrome starts", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "praxity-os-password-launch-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const cache = join(dir, "chrome-os-password.json");
+	await writeFile(cache, JSON.stringify({ os_password_blank: false, os_password_last_changed: "13435253506973688" }));
+	await writeFile(join(dir, "browser.exe"), "");
+	let seeded: unknown;
+	const browser = new ChromiumJourneyBrowser({
+		executable: join(dir, "browser.exe"), screenshots: dir, osPasswordCache: cache,
+		launch: (_executable, args) => {
+			const profile = args.find((arg) => arg.startsWith("--user-data-dir="))!.slice("--user-data-dir=".length);
+			seeded = JSON.parse(readFileSync(join(profile, "Local State"), "utf8"));
+			return spawn(join(dir, "missing.exe"), args, { stdio: "ignore" });
+		},
+	});
+	await assert.rejects(browser.open("http://127.0.0.1:9/index.html"));
+	assert.deepEqual(seeded, { password_manager: { os_password_blank: false, os_password_last_changed: "13435253506973688" } });
 });
