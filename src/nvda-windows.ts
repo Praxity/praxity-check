@@ -52,6 +52,34 @@ export function foregroundGuardDecision(reading: ForegroundReading, browserPid: 
 	return { outcome: "ready", detail: reading.title };
 }
 
+/**
+ * NVDA logs its exit before its process ends, so a check made right after Guidepup's stop
+ * can still see nvda.exe. Wait a bounded time for the processes to go before failing.
+ */
+export async function waitForNvdaExit(
+	list: () => Promise<string[]> = runningNvdaProcesses,
+	{ timeoutMs = 5_000, pollMs = 200, now = Date.now, sleep = delay }: { timeoutMs?: number; pollMs?: number; now?: () => number; sleep?: (ms: number) => Promise<unknown> } = {},
+): Promise<void> {
+	const deadline = now() + timeoutMs;
+	let remaining = await list();
+	while (remaining.length && now() < deadline) {
+		await sleep(pollMs);
+		remaining = await list();
+	}
+	if (remaining.length) throw new Error(`NVDA did not stop: ${remaining.join(", ")}`);
+}
+
+/** Cleanup failures arrive as an AggregateError; keep each inner error so the evidence says what failed. */
+export function describeJourneyError(error: unknown): string {
+	const lines = [error instanceof Error ? error.stack ?? error.message : String(error)];
+	if (error instanceof AggregateError) {
+		for (const [index, inner] of error.errors.entries()) {
+			lines.push(`  [${index + 1}] ${(inner instanceof Error ? inner.stack ?? inner.message : String(inner)).replace(/\n/g, "\n      ")}`);
+		}
+	}
+	return lines.join("\n");
+}
+
 export async function runningNvdaProcesses(): Promise<string[]> {
 	const { stdout } = await run("tasklist", ["/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
 	return stdout.split(/\r?\n/)
@@ -840,8 +868,7 @@ export async function runNvdaJourney(target: string, journey: Journey, output: s
 				stop: async () => {
 					try { rawLog = await readLog(); }
 					finally { await nvda.stop(); }
-					const remaining = await runningNvdaProcesses();
-					if (remaining.length) throw new Error(`NVDA did not stop: ${remaining.join(", ")}`);
+					await waitForNvdaExit();
 				},
 				press: (key, options) => nvda.press(key, options),
 				type: (text, options) => nvda.type(text, options),
@@ -862,7 +889,7 @@ export async function runNvdaJourney(target: string, journey: Journey, output: s
 				run = await runJourney({ journey: { ...journey, start: target }, origin: new URL(target).origin, nvda: driver, browser, nvdaSettings: settings, readNvdaLog: readLog, signal,
 					onProgress: (message) => console.error(`NVDA: ${message}`) });
 			} catch (error) {
-				const message = error instanceof Error ? error.stack ?? error.message : String(error);
+				const message = describeJourneyError(error);
 				await writeFile(join(output, "error.txt"), message);
 				const retained = error instanceof AggregateError && "run" in error ? error.run as JourneyRun : undefined;
 				run = { ...(retained ?? { startedAt, endedAt: Date.now(), records: [], effectiveSettings: null }), stopped: message };
