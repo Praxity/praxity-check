@@ -1,14 +1,98 @@
 import { execFile, spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { once } from "node:events";
 import { platform } from "node:os";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { DiscoveredPage } from "./discover.ts";
+import { assertOutputOutside, openInput, type Input } from "./input.ts";
+import { parseJourney, type Journey } from "./nvda-journey.ts";
 import { PROJECT_URL, TOOL_NAME } from "./report.ts";
+import { resolveWithinRoot, serve, type StaticServer } from "./serve.ts";
 
 const run = promisify(execFile);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const GUIDEPUP_VERSION = "0.24.1";
+/** The Guidepup that drives VoiceOver, read from the alias package so the evidence names what ran. */
+export function voiceOverGuidepupVersion(): string {
+	return (createRequire(import.meta.url)("@guidepup/guidepup-voiceover/package.json") as { version: string }).version;
+}
+
+export interface ScreenReaderJourneyOptions {
+	target: string;
+	journey: unknown;
+	output: string;
+	takeScreenControl: boolean;
+	allowNetwork: boolean;
+}
+
+export interface ScreenReaderJourneyResult {
+	exitCode: 0 | 1 | 2;
+	jsonPath: string;
+	markdownPath: string;
+}
+
+export interface ScreenReaderJourneyDependencies {
+	platform: () => string;
+	runNvdaJourney: (target: string, journey: Journey, output: string, allowNetwork: boolean) => Promise<ScreenReaderJourneyResult>;
+}
+
+export function validateJourneySessionOptions(options: {
+	target: string;
+	output?: string;
+	takeScreenControl: boolean;
+	allowNetwork: boolean;
+}): void {
+	if (!options.takeScreenControl) throw new Error("screen-reader journey launches NVDA and a browser, moves focus, and sends keyboard input. Rerun with --take-screen-control only when interruption is safe.");
+	if (!options.output?.trim()) throw new Error("screen-reader --journey requires --output <new-directory>");
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(options.target)) {
+		const target = new URL(options.target);
+		if (!["http:", "https:"].includes(target.protocol)) throw new Error("screen-reader journey URL must use HTTP or HTTPS");
+		if (!options.allowNetwork) throw new Error("screen-reader journey URL requires --allow-network");
+	}
+}
+
+/** Prepare the course before the Windows adapter takes keyboard control. */
+export async function runScreenReaderJourney(
+	options: ScreenReaderJourneyOptions,
+	dependencies?: ScreenReaderJourneyDependencies,
+): Promise<ScreenReaderJourneyResult> {
+	validateJourneySessionOptions(options);
+	const journey = parseJourney(options.journey);
+	if ((dependencies?.platform ?? platform)() !== "win32") throw new Error("screen-reader journeys currently require Windows and NVDA");
+	const runner = dependencies?.runNvdaJourney ?? (await import("./nvda-windows.ts")).runNvdaJourney;
+	let input: Input | undefined;
+	let server: StaticServer | undefined;
+	let result: ScreenReaderJourneyResult | undefined;
+	let failure: unknown;
+	try {
+		const remote = /^https?:\/\//i.test(options.target);
+		let base: string;
+		if (remote) base = new URL(options.target).href;
+		else {
+			await assertOutputOutside(options.output, [options.target]);
+			input = await openInput(options.target);
+			await assertOutputOutside(options.output, [input.root]);
+			server = await serve(input.root);
+			base = `${server.origin}/`;
+		}
+		const start = new URL(journey.start, base);
+		if (start.origin !== new URL(base).origin || !["http:", "https:"].includes(start.protocol)) throw new Error("journey start must stay inside the target origin");
+		if (input) {
+			const file = await resolveWithinRoot(input.root, start.pathname);
+			if (!file || !/\.x?html?$/i.test(file)) throw new Error(`journey start did not match an HTML file in the package: ${journey.start}`);
+		}
+		result = await runner(start.href, { ...journey, start: start.href }, resolve(options.output), options.allowNetwork);
+	} catch (error) {
+		failure = error;
+	} finally {
+		const cleanup = await Promise.allSettled([server?.close(), input?.cleanup()]);
+		const errors = cleanup.flatMap((entry) => entry.status === "rejected" ? [entry.reason] : []);
+		if (errors.length) failure = new AggregateError([...(failure === undefined ? [] : [failure]), ...errors], "screen-reader journey cleanup failed");
+	}
+	if (failure !== undefined) throw failure;
+	return result!;
+}
 
 async function appleScript(source: string, args: string[] = []): Promise<string> {
 	const { stdout } = await run("osascript", ["-e", source, ...args], {
@@ -250,8 +334,22 @@ async function captureSpeech(
 	}
 }
 
-async function loadVoiceOver() {
-	return (await import("@guidepup/guidepup")).voiceOver;
+/** Guidepup wraps the step that failed in `cause`; the CLI prints only the message, so carry the chain in it. */
+export function withCauses(error: unknown): Error {
+	const messages: string[] = [];
+	for (let current: unknown = error, depth = 0; current !== undefined && depth < 5; depth++) {
+		const message = (current instanceof Error ? current.message : String(current)).split("\n")[0]!.trim();
+		if (message && !messages.includes(message)) messages.push(message);
+		current = current instanceof Error ? current.cause : undefined;
+	}
+	return new Error(messages.join(": "), { cause: error });
+}
+
+// VoiceOver stays on Guidepup 0.24.1, which this workflow was validated with. 0.34.0 rewrites
+// VoiceOver's preferences before every start and fails when VoiceOver's portable `.scrd.vou`
+// is a directory (it removes the path without recursion). NVDA needs 0.34.0, so both are installed.
+async function loadVoiceOver(): Promise<typeof import("@guidepup/guidepup-voiceover")["voiceOver"]> {
+	return (await import("@guidepup/guidepup-voiceover")).voiceOver;
 }
 
 export interface ScreenReaderRunOptions {
@@ -279,7 +377,7 @@ export async function runScreenReader(options: ScreenReaderRunOptions): Promise<
 	process.once("SIGTERM", interrupt);
 
 	try {
-		await voiceOver.start({ capture: "initial" });
+		await voiceOver.start({ capture: "initial" }).catch((error: unknown) => { throw withCauses(error); });
 		voiceOverStarted = true;
 		await delay(5_000);
 		const calibration = await captureSpeech(async () => { await appleScript(OUTPUT_TEXT, [options.expected]); }, 3_000, assertActive);
@@ -341,7 +439,7 @@ export async function runScreenReader(options: ScreenReaderRunOptions): Promise<
 			`- VoiceOver item after capture: ${JSON.stringify(afterItem)}`,
 			`- Page title before/after: ${JSON.stringify(beforeState.title)} → ${JSON.stringify(afterState.title)}`,
 			`- Page guard: ${JSON.stringify(pageGuard)}`,
-			`- Pairing: VoiceOver + Safari ${safari}; macOS ${macOS}; Guidepup ${GUIDEPUP_VERSION}`,
+			`- Pairing: VoiceOver + Safari ${safari}; macOS ${macOS}; Guidepup ${voiceOverGuidepupVersion()}`,
 			"",
 			"Phrase changes after the action:",
 			...phraseLines,

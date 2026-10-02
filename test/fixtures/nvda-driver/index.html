@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>NVDA shared driver pilot</title>
+<main>
+  <h1>NVDA shared driver pilot</h1>
+  <p>Use the button to announce the result.</p>
+  <h2>Result controls</h2>
+  <button type="button" id="result">Show result</button>
+  <p role="status" id="status"></p>
+</main>
+<script>
+  document.querySelector('#result').addEventListener('click', () => {
+    document.querySelector('#status').textContent = 'Ready to continue';
+  });
+</script>
+</html>

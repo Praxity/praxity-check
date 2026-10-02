@@ -196,6 +196,10 @@ for setup and limits, including [private Jev key setup](docs/using-it.md#store-a
 
 ## VoiceOver evidence
 
+Windows NVDA journeys capture real keyboard delivery and speech for a sequence
+of named steps against an exported folder, ZIP, or URL. Other repos call this
+shared driver through `screen-reader --journey`. See [NVDA setup and integration](docs/nvda-driver.md).
+
 A macOS-only command can capture what VoiceOver says after one named action in
 Safari. With a clean comparison, the evidence can also help identify the same
 phrase being announced twice. It runs locally without recording or transcribing

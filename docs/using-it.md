@@ -360,6 +360,11 @@ To stop using Jev, omit `--classifier jev` (or set `--classifier none`) and omit
 
 ## VoiceOver evidence
 
+For Windows NVDA journeys against a folder, ZIP, or URL, use
+`screen-reader --journey <file.json> --output <new-directory> --take-screen-control`.
+See [the shared NVDA driver guide](nvda-driver.md) for the JSON format, exit codes,
+desktop setup, evidence paths, and the opt-in live test.
+
 Use screen-reader evidence for one named action whose open question is what was
 announced. Record the exact pairing and versions, such as VoiceOver + Safari or
 NVDA + Chromium.
@@ -390,6 +395,9 @@ itself must still be an HTML file inside the audited folder or zip.
 
 Guidepup requires one-time macOS permissions before it can control VoiceOver.
 Follow its [manual VoiceOver setup](https://www.guidepup.dev/docs/guides/manual-voiceover-setup).
+The VoiceOver command uses Guidepup 0.24.1, the version this workflow was tested
+with. Guidepup 0.34 (used for NVDA) rewrites VoiceOver's preferences before each
+start and fails on Macs where VoiceOver keeps a portable `.scrd.vou` folder.
 The command produces evidence, not a finding, and never changes the automated
 check exit code.
 
