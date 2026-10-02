@@ -1,12 +1,22 @@
 import { access, cp, mkdir, open, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { javaEnvironment } from "../src/verapdf-runtime.ts";
+import { validateWindowsJava, windowsJavaPins } from "./prepare-windows-java.mjs";
+import { validateWindowsPoppler } from "./prepare-poppler-windows.mjs";
+import { popplerTools } from "./poppler-inputs.mjs";
 
-const run = (file, args) => execFileSync(file, args, { encoding: "utf8" }).trim();
+const run = (file, args, options = {}) => {
+	if (process.platform !== "win32") return execFileSync(file, args, { encoding: "utf8", ...options }).trim();
+	const result = spawnSync(file, args, { encoding: "utf8", timeout: 120_000, ...options });
+	if (result.error) throw result.error;
+	if (result.status !== 0) throw new Error(`${file} exited ${result.status}: ${result.stderr}`);
+	return (result.stdout + result.stderr).trim();
+};
 
 function browserTarget(platform, arch) {
 	if (platform === "darwin" && arch === "arm64") return { directory: "chrome-headless-shell-mac-arm64", executable: "chrome-headless-shell" };
@@ -116,20 +126,37 @@ async function relocateJava(java, source, output, supplementalNotices) {
 	}
 }
 
-export async function prepareRuntimes(values, { runCommand = run } = {}) {
+export async function prepareRuntimes(values, { runCommand = run, validatePoppler = validateWindowsPoppler } = {}) {
 	const platform = values.platform ?? process.platform;
 	const arch = values.arch ?? process.arch;
 	const target = browserTarget(platform, arch);
 	if (platform !== process.platform || arch !== process.arch) throw new Error(`Runtime target ${platform} ${arch} does not match assembly host ${process.platform} ${process.arch}`);
-	const sourceKeys = platform === "win32" ? ["browsers"] : ["poppler", "verapdf", "java", "browsers"];
+	const fullWindows = platform === "win32" && ["poppler", "verapdf", "java"].some(key => values[key]);
+	if (fullWindows && ["poppler", "verapdf", "java"].some(key => !values[key])) throw new Error("Windows PDF runtime assembly requires --poppler, --verapdf and --java together");
+	const sourceKeys = platform === "win32" && !fullWindows ? ["browsers"] : ["poppler", "verapdf", "java", "browsers"];
 	for (const key of [...sourceKeys, "output"]) if (!values[key]) throw new Error(`Required: --${key} <directory>`);
-	if (platform === "win32" && ["poppler", "verapdf", "java"].some(key => values[key])) throw new Error("Windows runtime assembly accepts browsers only; omit --poppler, --verapdf and --java");
 	const output = resolve(values.output);
 	const sources = Object.fromEntries(await Promise.all(sourceKeys.map(async key => [key, await realpath(values[key])])));
 	const outputParent = await realpath(dirname(output));
 	const actualOutput = join(outputParent, relative(dirname(output), output));
 	for (const source of Object.values(sources)) if (within(actualOutput, source)) throw new Error("Output must be outside source runtime directories");
-	let popplerNotice, release;
+	let popplerNotice, release, windowsVersions;
+	if (fullWindows) {
+		popplerNotice = await readFile(join(sources.poppler, "NOTICE.md"), "utf8");
+		if (!popplerNotice.trim()) throw new Error("Poppler NOTICE.md must not be empty");
+		const { provenance } = await validatePoppler(sources.poppler, { prepared: true });
+		const popplerVersion = provenance.poppler.version;
+		for (const [key, pin] of [["java", windowsJavaPins.java], ["verapdf", windowsJavaPins.veraPDF]]) {
+			const provenance = JSON.parse(await readFile(join(sources[key], "notices/provenance.json"), "utf8"));
+			if (provenance.platform !== platform || provenance.arch !== arch || provenance.version !== pin.version || provenance.sha256 !== pin.sha256 || provenance.url !== pin.url) throw new Error(`${key} provenance does not match its pinned Windows x64 payload`);
+		}
+		windowsVersions = await validateWindowsJava(sources.java, sources.verapdf, { runCommand: (file, args) => runCommand(file, args, { env: javaEnvironment(process.env, "win32") }) });
+		for (const name of popplerTools) {
+			const version = runCommand(join(sources.poppler, "bin", `${name}.exe`), ["-v"]);
+			if (version.match(/\bversion\s+(\S+)/)?.[1] !== popplerVersion) throw new Error(`Poppler ${name} binary version does not match provenance`);
+		}
+		windowsVersions.poppler = popplerVersion;
+	}
 	if (platform === "darwin") {
 		popplerNotice = await readFile(join(sources.poppler, "NOTICE.md"), "utf8");
 		for (const file of ["pdfinfo", "pdffonts", "pdfimages", "pdftotext", "pdftohtml", "pdftoppm"]) await access(join(sources.poppler, "bin", file));
@@ -146,9 +173,16 @@ export async function prepareRuntimes(values, { runCommand = run } = {}) {
 	const browserNotice = `## Browser\n\nPlaywright ${browser.playwright}, Chromium headless shell ${browser.browserVersion}, revision ${browser.revision}. License and credits: browsers/${browser.directory}/${target.directory}/LICENSE.headless_shell and ABOUT. Only headless operation is supplied.\n`;
 	if (platform === "win32") {
 		await mkdir(output);
+		if (fullWindows) {
+			await copyRuntime(sources.poppler, output);
+			await copyRuntime(sources.java, join(output, "java"));
+			await copyRuntime(sources.verapdf, join(output, "verapdf"), { exclude: ["Uninstaller"] });
+		}
 		await copyRuntime(browserSource, join(output, "browsers", browser.directory, target.directory));
-		await writeFile(join(output, "runtime-versions.json"), JSON.stringify({ platform, arch, browser }, null, 2) + "\n");
-		await writeFile(join(output, "NOTICE.md"), `# Windows browser runtime\n\n${browserNotice}`);
+		await writeFile(join(output, "runtime-versions.json"), JSON.stringify({ platform, arch, ...windowsVersions, browser }, null, 2) + "\n");
+		await writeFile(join(output, "NOTICE.md"), fullWindows
+			? `${popplerNotice}\n\n## Java\n\n${windowsVersions.java}\n\nLicense and third-party notices: java/legal and java/NOTICE. Source and binary provenance: java/notices/provenance.json.\n\n## veraPDF\n\n${windowsVersions.veraPDF}\n\nProject licenses: verapdf/LICENSE.GPL and verapdf/LICENSE.MPL. Embedded dependency notices remain in verapdf/bin/*.jar. Source and binary provenance: verapdf/notices/provenance.json. Windows invokes bundled java.exe directly with this jar classpath.\n\n${browserNotice}`
+			: `# Windows browser runtime\n\n${browserNotice}`);
 		return output;
 	}
 	await mkdir(output);

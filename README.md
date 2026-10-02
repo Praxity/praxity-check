@@ -301,3 +301,51 @@ PDF and HTML operations when changing any runtime version.
 These scripts prepare local prototype artifacts. Clean-machine and older-macOS
 compatibility, distribution source obligations, Developer ID signing and notarization
 remain separate release work.
+
+### Prepare Windows x64 PDF runtimes
+
+Use Windows x64 with Visual Studio 2022 C++ build tools and an installed checkout.
+Keep build inputs outside the repository. The Windows builder uses the same pinned
+Poppler source and character maps as macOS. It downloads a fixed vcpkg registry.
+It links fontconfig, the codec libraries and the Visual C++ runtime into the tools.
+Build tools download into the work directory; system settings stay unchanged.
+
+Set `$build` to a new external work directory. Set `$nodeDist` to your Windows x64
+Node distribution and `$browserCache` to Playwright's matching browser cache.
+Each output directory below must be new.
+
+```powershell
+node scripts/build-poppler-windows-runtime.mjs --work "$build/poppler-build"
+node scripts/prepare-poppler-windows.mjs --source-install "$build/poppler-build/poppler-install" --output "$build/poppler-runtime"
+node scripts/test-poppler-data.mjs "$build/poppler-runtime"
+node scripts/prepare-windows-java.mjs --work "$build/java-build" --output "$build/java-verapdf"
+node scripts/prepare-runtimes.mjs --platform win32 --arch x64 --poppler "$build/poppler-runtime" --java "$build/java-verapdf/java" --verapdf "$build/java-verapdf/verapdf" --browsers "$browserCache" --output "$build/dependencies"
+node scripts/package.mjs --platform win32 --arch x64 --node "$nodeDist" --dependencies "$build/dependencies" --output "$build/check"
+$env:CHECK_NODE_DIST = $nodeDist
+$env:CHECK_ARTIFACT = "$build/check"
+$env:CHECK_REQUIRE_PDF = '1'
+$env:CHECK_POPPLER_RUNTIME = "$build/poppler-runtime"
+$env:CHECK_POPPLER_INSTALL = "$build/poppler-build/poppler-install"
+$env:CHECK_WINDOWS_JAVA_RUNTIME = "$build/java-verapdf"
+node --test scripts/package.test.mjs scripts/prepare-poppler.test.mjs scripts/prepare-poppler-windows.test.mjs scripts/prepare-runtimes.test.mjs scripts/prepare-windows-java.test.mjs scripts/windows-pe.test.mjs
+```
+
+The scripts check PE imports, including delay loads. Each DLL outside the runtime
+must be a Windows system DLL. Poppler keeps its source archive, patch and recipe.
+It also keeps library sources, licence texts, SPDX records and hashes.
+Encoding data and font settings must match the build hashes.
+The data proof extracts Japanese CID text with an empty PATH.
+It checks that missing maps fail and that a system font can render the text.
+
+The `.cmd` launcher sets paths for Poppler data, fonts, Java and veraPDF jars.
+Windows runs `java.exe` directly with veraPDF's classpath and main class.
+It removes Java options from the parent process before each run.
+The proof moves Check into a path with spaces. It checks PDF/UA pass and failure
+exit codes, manual review page images and `prepare-review --design-evidence`
+detail crops. To build a browser runtime alone, supply only `--browsers`.
+
+Java and veraPDF downloads are pinned official releases. Their legal files and
+source links remain in the artifact. Source links alone do not fulfil source
+obligations. Java and the libraries in veraPDF's jar need a separate review.
+Review licence terms and source needs before sharing a release.
+Test that release on a clean machine too. Check keeps its PolyForm Perimeter licence.

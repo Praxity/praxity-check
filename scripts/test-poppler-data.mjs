@@ -5,6 +5,12 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const runtime = resolve(process.argv[2] ?? (() => { throw new Error("Required: <relocated Poppler runtime>"); })());
+const windows = process.platform === "win32";
+if (!windows && process.platform !== "darwin") throw new Error("Data proof requires Windows or macOS");
+if (windows) {
+  const { validateWindowsPayload } = await import("./windows-pe.mjs");
+  await validateWindowsPayload(runtime);
+}
 const work = await mkdtemp(join(tmpdir(), "check-cmap-"));
 await mkdir(join(work, "empty"));
 // No ToUnicode or embedded font: this requires packaged Adobe CMaps and OS font substitution.
@@ -27,8 +33,10 @@ const input = join(work, "japanese-cmap.pdf");
 await writeFile(input, pdf);
 const profile = join(work, "no-homebrew.sb");
 await writeFile(profile, '(version 1)\n(allow default)\n(deny file-read* (subpath "/opt/homebrew") (subpath "/usr/local/Cellar"))\n');
-const env = { HOME: work, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8", XDG_CACHE_HOME: join(work, ".cache"), POPPLER_DATADIR: join(runtime, "share/poppler"), FONTCONFIG_FILE: join(runtime, "etc/fonts/fonts.conf"), FONTCONFIG_PATH: join(runtime, "etc/fonts") };
-const run = (tool, args, override = {}) => spawnSync("/usr/bin/sandbox-exec", ["-f", profile, join(runtime, "bin", tool), ...args], { env: { ...env, ...override }, encoding: "utf8" });
+const env = { HOME: work, PATH: windows ? "" : "/usr/bin:/bin", LANG: "en_US.UTF-8", XDG_CACHE_HOME: join(work, ".cache"), POPPLER_DATADIR: join(runtime, "share/poppler"), FONTCONFIG_FILE: join(runtime, "etc/fonts/fonts.conf"), FONTCONFIG_PATH: join(runtime, "etc/fonts"), ...(windows ? { SystemRoot: process.env.SystemRoot, TEMP: work, TMP: work, USERPROFILE: work, LOCALAPPDATA: work } : {}) };
+const run = (tool, args, override = {}) => windows
+  ? spawnSync(join(runtime, "bin", `${tool}.exe`), args, { cwd: work, env: { ...env, ...override }, encoding: "utf8" })
+  : spawnSync("/usr/bin/sandbox-exec", ["-f", profile, join(runtime, "bin", tool), ...args], { env: { ...env, ...override }, encoding: "utf8" });
 const missing = run("pdftotext", [input, "-"], { POPPLER_DATADIR: join(work, "empty") });
 assert.notEqual(missing.stdout?.replace(/\s/g, ""), "日本語", "Fixture must depend on external CMaps");
 const extracted = run("pdftotext", [input, "-"]);
@@ -38,7 +46,7 @@ assert.equal(extracted.stderr, "");
 const substituted = run("pdffonts", ["-subst", input]);
 assert.equal(substituted.status, 0, substituted.stderr);
 assert.equal(substituted.stderr, "");
-assert.match(substituted.stdout, /\/(?:System\/Library|Library)\/Fonts\//, "CID font substitution must resolve to an OS font");
+assert.match(substituted.stdout, windows ? /[\\/]Windows[\\/]Fonts[\\/]/i : /\/(?:System\/Library|Library)\/Fonts\//, "CID font substitution must resolve to an OS font");
 const rendered = run("pdftoppm", ["-r", "36", "-singlefile", input, join(work, "japanese")]);
 assert.equal(rendered.status, 0, rendered.stderr);
 assert.equal(rendered.stderr, "");
@@ -46,4 +54,4 @@ const ppm = await readFile(join(work, "japanese.ppm"));
 const header = ppm.toString("ascii", 0, 100).match(/^P6\s+\d+\s+\d+\s+255\s/);
 assert.ok(header, "Expected rendered RGB PPM");
 assert.ok(ppm.subarray(header[0].length).some(byte => byte < 128), "Rendered Japanese page must contain ink");
-console.log(JSON.stringify({ success: true, text: extracted.stdout.trim(), homebrewDenied: true, missingDataFails: true, fontSubstitution: substituted.stdout.trim(), evidence: work }, null, 2));
+console.log(JSON.stringify({ success: true, text: extracted.stdout.trim(), homebrewDenied: !windows, ...(windows ? { minimalPath: true, peClosureVerified: true } : {}), missingDataFails: true, fontSubstitution: substituted.stdout.trim(), evidence: work }, null, 2));

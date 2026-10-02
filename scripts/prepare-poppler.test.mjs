@@ -6,15 +6,23 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 
-test("relocated Poppler tools process a synthetic PDF with Homebrew reads denied", { skip: process.platform !== "darwin" || !process.env.CHECK_POPPLER_RUNTIME }, async t => {
+test("relocated Poppler tools process a synthetic PDF without development runtimes", { skip: !["darwin", "win32"].includes(process.platform) || !process.env.CHECK_POPPLER_RUNTIME }, async t => {
 	const root = await mkdtemp(join(tmpdir(), "relocated Poppler "));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const runtime = join(root, "runtime with spaces");
 	await cp(process.env.CHECK_POPPLER_RUNTIME, runtime, { recursive: true });
 	const provenance = JSON.parse(await readFile(join(runtime, "notices/provenance.json"), "utf8"));
+	const windows = process.platform === "win32";
 	for (const file of provenance.files) {
-		assert.equal(createHash("sha256").update(await readFile(file.source)).digest("hex"), file.sha256, `Host file changed: ${file.source}`);
-		execFileSync("/usr/bin/codesign", ["--verify", "--strict", join(runtime, file.target)]);
+		if (windows) assert.equal(createHash("sha256").update(await readFile(join(runtime, file.path))).digest("hex"), file.sha256, file.path);
+		else {
+			assert.equal(createHash("sha256").update(await readFile(file.source)).digest("hex"), file.sha256, `Host file changed: ${file.source}`);
+			execFileSync("/usr/bin/codesign", ["--verify", "--strict", join(runtime, file.target)]);
+		}
+	}
+	if (windows) {
+		const { validateWindowsPayload } = await import("./windows-pe.mjs");
+		assert.equal((await validateWindowsPayload(runtime)).length, provenance.files.length);
 	}
 	const stream = "BT /F1 12 Tf 40 100 Td (Synthetic Poppler test) Tj ET\n";
 	const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}endstream`];
@@ -25,14 +33,16 @@ test("relocated Poppler tools process a synthetic PDF with Homebrew reads denied
 	const input = join(root, "synthetic.pdf");
 	await writeFile(input, pdf);
 	const profile = `(version 1)(allow default)(deny file-read* (subpath ${JSON.stringify(provenance.prefix)}))`;
-	const env = { PATH: "/usr/bin:/bin", HOME: root };
+	const env = { PATH: windows ? "" : "/usr/bin:/bin", HOME: root, ...(windows ? { SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root, USERPROFILE: root, LOCALAPPDATA: root } : {}) };
 	for (const [name, path] of Object.entries({ POPPLER_DATADIR: "share/poppler", FONTCONFIG_FILE: "etc/fonts/fonts.conf", FONTCONFIG_PATH: "etc/fonts" })) {
 		try {
 			await access(join(runtime, path));
 			env[name] = join(runtime, path);
 		} catch (error) { if (error.code !== "ENOENT") throw error; }
 	}
-	const run = (tool, args) => execFileSync("/usr/bin/sandbox-exec", ["-p", profile, join(runtime, "bin", tool), ...args], { cwd: root, env, encoding: "utf8" });
+	const run = (tool, args) => windows
+		? execFileSync(join(runtime, "bin", `${tool}.exe`), args, { cwd: root, env, encoding: "utf8" })
+		: execFileSync("/usr/bin/sandbox-exec", ["-p", profile, join(runtime, "bin", tool), ...args], { cwd: root, env, encoding: "utf8" });
 	assert.match(run("pdfinfo", [input]), /Pages:\s+1/);
 	assert.match(run("pdffonts", [input]), /Helvetica/);
 	assert.match(run("pdftotext", [input, "-"]), /Synthetic Poppler test/);

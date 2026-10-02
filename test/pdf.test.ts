@@ -65,6 +65,7 @@ test("missing tools remain untested, with JSON and exit 2 and no browser import"
 	await copyFile(resolve("src/pdf-facts.ts"), join(dir, "pdf-facts.ts"));
 	await copyFile(resolve("src/feedback.ts"), join(dir, "feedback.ts"));
 	await copyFile(resolve("src/pdf-accessibility.ts"), join(dir, "pdf-accessibility.ts"));
+	await copyFile(resolve("src/verapdf-runtime.ts"), join(dir, "verapdf-runtime.ts"));
 	await copyFile(resolve("src/pdf-print.ts"), join(dir, "pdf-print.ts"));
 	await copyFile(resolve("src/pdf-review.ts"), join(dir, "pdf-review.ts"));
 	await copyFile(resolve("src/review-runner.ts"), join(dir, "review-runner.ts"));

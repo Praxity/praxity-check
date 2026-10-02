@@ -101,15 +101,15 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 		schemaVersion: 1, tool: pkg.name, version: pkg.version, sourceRevision: revision, dirty,
 		platform, arch, node: version, nodeRequirement: pkg.engines.node,
 		entryPoint: platform === "win32" ? "bin/praxity-check.cmd" : "bin/praxity-check",
-		legalFiles: payload.filter(file => /(?:^|\/)(?:.*\.)?(?:licen[cs]e[^/]*|copying[^/]*|copyright[^/]*|notice[^/]*|third[- ]?party[^/]*|about)$/i.test(file.path) || file.path === "LICENSING.md" || file.path.includes("/legal/")).map(file => file.path),
+		legalFiles: payload.filter(file => /(?:^|\/)(?:.*\.)?(?:licen[cs]e[^/]*|copying[^/]*|copyright[^/]*|notice[^/]*|third[- ]?party[^/]*|about)$/i.test(file.path) || file.path === "LICENSING.md" || file.path.includes("/legal/") || file.path.startsWith("dependencies/notices/toolchain/") && !file.path.endsWith(".cmake")).map(file => file.path),
 		files: payload,
 		inventoryExcludes: ["capabilities.json"], // A manifest cannot hash its own bytes.
 		dependenciesSupplied: Boolean(values.dependencies),
-		payloads: { chromiumHeadlessShell: Boolean(runtime?.browser), poppler: payload.some(file => file.path === "dependencies/bin/pdfinfo" || file.path === "dependencies/bin/pdfinfo.exe"), java: payload.some(file => file.path === "dependencies/java/bin/java" || file.path === "dependencies/java/bin/java.exe"), veraPDF: payload.some(file => file.path === "dependencies/bin/verapdf" || file.path === "dependencies/bin/verapdf.cmd") },
+		payloads: { chromiumHeadlessShell: Boolean(runtime?.browser), poppler: payload.some(file => file.path === "dependencies/bin/pdfinfo" || file.path === "dependencies/bin/pdfinfo.exe"), java: payload.some(file => file.path === "dependencies/java/bin/java" || file.path === "dependencies/java/bin/java.exe"), veraPDF: payload.some(file => file.path === "dependencies/bin/verapdf" || platform === "win32" && /^dependencies\/verapdf\/bin\/cli-.+\.jar$/.test(file.path)) },
 		requirements: {
 			pdf: ["pdfinfo", "pdffonts", "pdfimages", "pdftotext"],
 			pdfDesignAndReview: ["pdftohtml", "pdftoppm"],
-			pdfUa: ["veraPDF executable (dependencies/bin/verapdf, VERAPDF or --verapdf)", "compatible Java runtime"],
+			pdfUa: [platform === "win32" ? "veraPDF jars with VERAPDF_JAVA and VERAPDF_CLASSPATH, or VERAPDF/--verapdf executable" : "veraPDF executable (dependencies/bin/verapdf, VERAPDF or --verapdf)", "compatible Java runtime"],
 			html: ["Playwright-matched Chromium in dependencies/browsers (including headless shell)"],
 		},
 		note: "Requirements are not capability claims. Native tools, shared libraries, Java and browsers are supplied only by --dependencies; each operation reports missing or failed tools. Artifacts must match this platform and architecture and retain their notices."
@@ -128,10 +128,15 @@ if exist "%CHECK_DIR%\\dependencies\\etc\\fonts\\fonts.conf" (\r
   set "FONTCONFIG_FILE=%CHECK_DIR%\\dependencies\\etc\\fonts\\fonts.conf"\r
   set "FONTCONFIG_PATH=%CHECK_DIR%\\dependencies\\etc\\fonts"\r
 )\r
-if exist "%CHECK_DIR%\\dependencies\\bin\\verapdf.cmd" set "VERAPDF=%CHECK_DIR%\\dependencies\\bin\\verapdf.cmd"\r
 if exist "%CHECK_DIR%\\dependencies\\java\\bin\\java.exe" (\r
   set "JAVA_HOME=%CHECK_DIR%\\dependencies\\java"\r
+  set "JAVACMD=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
   set "PATH=%CHECK_DIR%\\dependencies\\java\\bin;%PATH%"\r
+  if exist "%CHECK_DIR%\\dependencies\\verapdf\\bin\\*.jar" (\r
+    set "VERAPDF=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
+    set "VERAPDF_JAVA=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
+    set "VERAPDF_CLASSPATH=%CHECK_DIR%\\dependencies\\verapdf\\bin\\*"\r
+  )\r
 )\r
 "%CHECK_DIR%\\runtime\\node.exe" "%CHECK_DIR%\\lib\\cli.js" %*\r
 exit /b %errorlevel%\r
