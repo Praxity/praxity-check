@@ -1,4 +1,4 @@
-// Experimental NVDA journey evidence. See docs/experiments/nvda-journey-pilot-2026-09-30.
+// Experimental NVDA journey evidence. See docs/nvda-driver.md.
 //
 // A journey is a short sequence of keyboard steps that a screen-reader user
 // would take. NVDA itself receives every learner keystroke; the browser is read

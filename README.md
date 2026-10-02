@@ -213,7 +213,7 @@ VoiceOver session that is already running. VoiceOver testing uses your existing
 Safari profile and network connection. Run it only on exports you trust.
 
 See the [`VoiceOver instructions`](docs/using-it.md#voiceover-evidence)
-and [`test results`](docs/experiments/live-region-capture-2026-08-11/README.md).
+and [`test results`](docs/evidence/live-region-capture-2026-08-11/README.md).
 
 ## What it works with
 

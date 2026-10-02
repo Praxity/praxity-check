@@ -410,7 +410,7 @@ duplicate run across three pairs. It records no audio and uses no transcription.
 Keep the clean comparison. A speech start does not contain the phrase itself and
 can come from unrelated VoiceOver output, so an unbounded count or the presence
 of two possible announcement channels is not enough. See the
-[`live-region experiment`](experiments/live-region-capture-2026-08-11/README.md)
+[`live-region experiment`](evidence/live-region-capture-2026-08-11/README.md)
 for the method, controls, and recorded results.
 
 Run the same command against a clean version that announces the expected phrase
