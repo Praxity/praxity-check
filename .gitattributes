@@ -1,2 +1,2 @@
-# PDF xref offsets and the fixture hash require exact bytes on checkout.
-test/fixtures/pdf-facts.pdf binary
+# Check text out with LF on every OS, so Windows checkouts, hashes and formatting match macOS and Linux.
+* text=auto eol=lf
