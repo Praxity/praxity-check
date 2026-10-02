@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { packageArtifact } from "./package.mjs";
+import { syntheticPdfUa } from "./package-pdf-fixture.mjs";
 
 const windows = process.platform === "win32";
 const repository = fileURLToPath(new URL("../", import.meta.url));
@@ -58,16 +59,102 @@ async function verifyInventory(artifact) {
 	return manifest;
 }
 
-function run(launcher, args, root) {
+function run(launcher, args, root, inherited = {}) {
 	const env = windows
 		? { PATH: join(root, "empty PATH"), SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root, USERPROFILE: root }
 		: { PATH: join(root, "empty PATH"), HOME: root, TMPDIR: root };
+	Object.assign(env, inherited);
 	if (windows) {
 		// Node cannot execFile a .cmd. The absolute system shell is the only external launcher tool.
 		const command = `"${launcher}" ${args.map(arg => `"${arg}"`).join(" ")}`;
 		return spawnSync(join(process.env.SystemRoot, "System32", "cmd.exe"), ["/d", "/s", "/c", `"${command}"`], { cwd: root, env, encoding: "utf8", windowsVerbatimArguments: true });
 	}
 	return spawnSync(launcher, args, { cwd: root, env, encoding: "utf8" });
+}
+
+async function verifyPng(path, expectedSha256) {
+	const bytes = await readFile(path);
+	assert.deepEqual(bytes.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+	assert.ok(bytes.readUInt32BE(16) > 0 && bytes.readUInt32BE(20) > 0);
+	assert.equal(createHash("sha256").update(bytes).digest("hex"), expectedSha256);
+	return bytes;
+}
+
+async function proveWindowsPdf(launcher, root) {
+	const input = join(root, "synthetic accessible letter.pdf");
+	const source = syntheticPdfUa();
+	await writeFile(input, source);
+	const output = join(root, "PDF UA passing report.json");
+	const passing = run(launcher, ["check", input, "--tier", "deterministic", "--checks", "accessibility", "--json", output], root, {
+		VERAPDF: join(root, "external veraPDF.bat"), JAVA_TOOL_OPTIONS: "-javaagent:missing.jar", JDK_JAVA_OPTIONS: "--invalid-option",
+		_JAVA_OPTIONS: "-invalid-option", JAVA_OPTS: "-invalid-option", CLASSPATH_PREFIX: join(root, "external classpath"),
+	});
+	assert.equal(passing.status, 0, passing.stderr || passing.stdout || String(passing.error));
+	const report = JSON.parse(await readFile(output, "utf8"));
+	assert.equal(report.machineStatus, "complete");
+	assert.equal(report.pdfuaValidation.profile, "ua1");
+	assert.equal(report.pdfuaValidation.machineCompliant, true);
+	assert.equal(report.pdfuaValidation.coverage.status, "complete");
+	assert.equal(report.findings.length, 0);
+	assert.ok(report.evaluations.some(item => item.rule === "pdfua.machine" && item.outcome === "passed"));
+	assert.equal(report.facts.pages.length, 1);
+	assert.deepEqual(report.facts.words.map(word => word.text), ["A"]);
+	for (const tool of ["pdfinfo", "pdffonts", "pdfimages", "pdftotext"]) {
+		assert.ok(report.evidence.some(item => item.tool === tool && item.exitCode === 0 && !item.args.includes("-v")), `${tool} must extract facts`);
+	}
+
+	// Changing this one PDF/UA requirement checks both the finding and launcher exit code.
+	const failingInput = join(root, "synthetic title display failure.pdf");
+	await writeFile(failingInput, syntheticPdfUa({ displayTitle: false }));
+	const failingOutput = join(root, "PDF UA failing report.json");
+	const failing = run(launcher, ["check", failingInput, "--tier", "deterministic", "--checks", "accessibility", "--json", failingOutput], root);
+	assert.equal(failing.status, 1, failing.stderr || failing.stdout || String(failing.error));
+	const failedReport = JSON.parse(await readFile(failingOutput, "utf8"));
+	assert.equal(failedReport.machineStatus, "complete");
+	assert.equal(failedReport.pdfuaValidation.profile, "ua1");
+	assert.equal(failedReport.pdfuaValidation.machineCompliant, false);
+	assert.equal(failedReport.pdfuaValidation.coverage.status, "complete");
+	assert.ok(failedReport.findings.some(item => item.rule === "pdfua:ISO 14289-1:2014:7.1:10" && item.message === "The PDF is not set to display its document title."));
+	assert.ok(failedReport.evaluations.some(item => item.rule === "pdfua.machine" && item.outcome === "failed"));
+
+	const reviewDirectory = join(root, "PDF accessibility manual review");
+	const review = run(launcher, ["prepare-review", input, "--tier", "inference", "--checks", "accessibility", "--reviewer", "manual", "--output", reviewDirectory], root);
+	assert.equal(review.status, 0, review.stderr || review.stdout || String(review.error));
+	const bundle = JSON.parse(await readFile(join(reviewDirectory, "manifest.json"), "utf8"));
+	assert.equal(bundle.schemaVersion, "pdf-review-bundle-2");
+	assert.equal(bundle.documentSha256, createHash("sha256").update(source).digest("hex"));
+	assert.deepEqual(bundle.checks, ["accessibility"]);
+	assert.deepEqual(bundle.selectedPages, [1]);
+	assert.equal(bundle.artifacts.length, 1);
+	await verifyPng(join(reviewDirectory, bundle.artifacts[0].image), bundle.artifacts[0].imageSha256);
+	const facts = JSON.parse(await readFile(join(reviewDirectory, bundle.artifacts[0].facts), "utf8"));
+	assert.deepEqual(facts.words.map(word => word.text), ["A"]);
+
+	// Design evidence belongs to prepare-review. It exercises pdftohtml and cropped pdftoppm renders.
+	const designDirectory = join(root, "PDF design evidence manual review");
+	const design = run(launcher, ["prepare-review", input, "--tier", "inference", "--checks", "design", "--reviewer", "manual", "--design-evidence", "--output", designDirectory], root);
+	assert.equal(design.status, 0, design.stderr || design.stdout || String(design.error));
+	const designBundle = JSON.parse(await readFile(join(designDirectory, "manifest.json"), "utf8"));
+	const evidence = JSON.parse(await readFile(join(designDirectory, "design-evidence.json"), "utf8"));
+	assert.equal(evidence.schemaVersion, "pdf-design-evidence-1");
+	assert.equal(evidence.documentSha256, bundle.documentSha256);
+	assert.deepEqual(designBundle.checks, ["design"]);
+	assert.ok(evidence.tools.some(tool => tool.tool === "pdftohtml" && /pdftohtml version/.test(tool.version)));
+	assert.equal(evidence.pages.length, 1);
+	const page = evidence.pages[0];
+	assert.equal(page.mappingSupported, true);
+	assert.equal(page.extraction.tool, "pdftohtml");
+	assert.deepEqual(page.spans.map(span => span.text), ["A"]);
+	assert.ok(page.crops.length > 0, "Design evidence must retain an actual detail crop");
+	const xml = await readFile(join(designDirectory, page.xml));
+	assert.equal(createHash("sha256").update(xml).digest("hex"), page.xmlSha256);
+	for (const crop of page.crops) {
+		assert.equal(crop.render.tool, "pdftoppm");
+		const png = await verifyPng(join(designDirectory, crop.image), crop.imageSha256);
+		assert.equal(png.readUInt32BE(16), crop.pixels.width);
+		assert.equal(png.readUInt32BE(20), crop.pixels.height);
+		assert.ok(designBundle.designEvidence.artifacts.some(item => item.path === crop.image && item.sha256 === crop.imageSha256));
+	}
 }
 
 async function proveArtifact(staged, root, html) {
@@ -125,6 +212,10 @@ async function proveArtifact(staged, root, html) {
 		assert.ok(report.evidence.some(item => item.tool === "pdfinfo" && /ENOENT/.test(item.error)));
 		assert.ok(report.evaluations.some(item => item.rule === "pdf.open" && item.outcome === "untested"));
 	}
+	if (windows && manifest.payloads.poppler && manifest.payloads.java && manifest.payloads.veraPDF) {
+		for (const name of ["BuildTools-ThirdPartyNotices.txt", "Redist.txt", "sdk_license.rtf", "sdk_third_party_notices.rtf"]) assert.ok(manifest.legalFiles.includes(`dependencies/notices/toolchain/${name}`), `Missing toolchain legal path: ${name}`);
+		await proveWindowsPdf(launcher, root);
+	}
 }
 
 test("standalone Check relocates and reports missing PDF tools with an empty PATH", async t => {
@@ -140,11 +231,32 @@ test("standalone Check relocates and reports missing PDF tools with an empty PAT
 	await proveArtifact(staged, root, false);
 });
 
-test("supplied browser artifact checks HTML after relocation with an empty PATH", { skip: !process.env.CHECK_ARTIFACT && "Set CHECK_ARTIFACT to prove a built browser artifact" }, async t => {
+test("supplied runtime artifact checks HTML and bundled Windows PDF tools after relocation with an empty PATH", { skip: !process.env.CHECK_ARTIFACT && "Set CHECK_ARTIFACT to prove a built runtime artifact" }, async t => {
+	if (process.env.CHECK_REQUIRE_PDF === "1") {
+		const manifest = JSON.parse(await readFile(join(process.env.CHECK_ARTIFACT, "capabilities.json"), "utf8"));
+		for (const payload of ["poppler", "java", "veraPDF"]) {
+			assert.equal(manifest.payloads?.[payload], true, `CHECK_REQUIRE_PDF=1 requires bundled ${payload}`);
+		}
+	}
 	const root = await scratch(t);
 	const staged = join(root, "staged");
 	await cp(process.env.CHECK_ARTIFACT, staged, { recursive: true });
 	await proveArtifact(staged, root, true);
+});
+
+test("CHECK_REQUIRE_PDF rejects a supplied artifact missing any PDF runtime", async t => {
+	const artifact = await scratch(t);
+	const env = { ...process.env, CHECK_ARTIFACT: artifact, CHECK_REQUIRE_PDF: "1" };
+	// Start a separate test runner rather than inherit this runner's child context.
+	delete env.NODE_TEST_CONTEXT;
+	for (const missing of ["poppler", "java", "veraPDF"]) {
+		await writeFile(join(artifact, "capabilities.json"), JSON.stringify({ payloads: { poppler: true, java: true, veraPDF: true, [missing]: false } }));
+		const result = spawnSync(process.execPath, ["--test", "--test-name-pattern", "^supplied runtime artifact", fileURLToPath(import.meta.url)], {
+			env, encoding: "utf8",
+		});
+		assert.equal(result.status, 1, result.stderr || result.stdout || String(result.error));
+		assert.ok(result.stdout.includes(`CHECK_REQUIRE_PDF=1 requires bundled ${missing}`), result.stdout);
+	}
 });
 
 test("macOS target layout and inventory can be packaged without a Mac", async t => {

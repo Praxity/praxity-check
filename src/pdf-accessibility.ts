@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { javaEnvironment, veraPdfJavaArgs } from "./verapdf-runtime.ts";
 
 const exec = promisify(execFile);
 type Profile = "ua1" | "ua2";
@@ -99,7 +100,8 @@ export function parseVeraPdf(raw: string, profile: Profile) {
 
 async function run(tool: string, args: string[]): Promise<Evidence> {
 	try {
-		const { stdout, stderr } = await exec(tool, args, { encoding: "utf8", timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
+		const { stdout, stderr } = await exec(tool, args, { encoding: "utf8", timeout: 120_000, maxBuffer: 32 * 1024 * 1024,
+			...(process.platform === "win32" ? { env: javaEnvironment(process.env) } : {}) });
 		return { tool, args, stdout, stderr, exitCode: 0 };
 	} catch (error) {
 		const e = error as Error & { code?: string | number; stdout?: string; stderr?: string };
@@ -112,7 +114,12 @@ export async function checkPdfAccessibility(snapshot: string, options: { profile
 	if (profile !== "ua1" && profile !== "ua2") throw new Error("PDF/UA profile must be ua1 or ua2");
 	const executable = options.executable ?? process.env.VERAPDF ?? "verapdf";
 	if (!executable.trim()) throw new Error("veraPDF executable must not be empty");
-	const evidence = await run(executable, ["--flavour", profile, "--format", "json", "--maxfailuresdisplayed", "-1", snapshot]);
+	const args = ["--flavour", profile, "--format", "json", "--maxfailuresdisplayed", "-1", snapshot];
+	const bundledJava = process.platform === "win32" && options.executable === undefined
+		&& (!process.env.VERAPDF || process.env.VERAPDF === process.env.VERAPDF_JAVA) ? process.env.VERAPDF_JAVA : undefined;
+	const evidence = bundledJava
+		? await run(bundledJava, veraPdfJavaArgs(process.env.VERAPDF_CLASSPATH ?? "", args))
+		: await run(executable, args);
 	const output = { evidence: [evidence], machineStatus: "complete" as "complete" | "incomplete",
 		validator: { name: "veraPDF", profile, version: undefined as string | undefined, machineCompliant: undefined as boolean | undefined, coverage: undefined as ReturnType<typeof parseVeraPdf>["coverage"] | undefined },
 		evaluations: [] as { rule: string; outcome: "passed" | "failed" | "untested"; reason: string }[], findings: [] as Finding[], needsReview: [] as Finding[] };

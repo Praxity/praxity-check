@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { checkPdfAccessibility, parseVeraPdf } from "../src/pdf-accessibility.ts";
+import { javaEnvironment } from "../src/verapdf-runtime.ts";
 
 function payload(failed = false) {
 	return { report: { buildInformation: { releaseDetails: [{ id: "core", version: "1.30.2" }] },
@@ -178,6 +179,75 @@ test("missing validator is incomplete and retains subprocess evidence", async ()
 	assert.equal(result.evaluations[0]?.outcome, "untested");
 	assert.equal(result.validator.machineCompliant, undefined);
 	assert.match(result.evidence[0]!.error!, /ENOENT/);
+});
+
+test("Java environment removes injected options case-insensitively on Windows", () => {
+	const inherited = { CLASSPATH_PREFIX: "bad", Java_Opts: "bad", java_tool_options: "bad", Jdk_Java_Options: "bad", _java_OPTIONS: "bad", PATH: "retained", CUSTOM: "retained" };
+	assert.deepEqual(javaEnvironment(inherited, "win32"), { PATH: "retained", CUSTOM: "retained" });
+	assert.equal(inherited.CLASSPATH_PREFIX, "bad");
+	assert.equal(javaEnvironment({ JAVA_OPTS: "bad", Java_Opts: "retained" }, "darwin").Java_Opts, "retained");
+});
+
+test("Windows bundled Java runs the veraPDF main directly, preserves paths and excludes inherited JVM options", { skip: process.platform !== "win32" }, async t => {
+	const root = await mkdtemp(join(tmpdir(), "pdf java "));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const dir = join(root, "runtime ü & 100%"), executable = join(dir, "java.exe"), source = join(dir, "JavaFixture.cs");
+	await mkdir(dir);
+	await writeFile(join(dir, "validation.json"), JSON.stringify(payload()));
+	await writeFile(source, `using System;
+using System.IO;
+using System.Collections;
+class JavaFixture {
+ static int Main(string[] args) {
+  string directory = AppDomain.CurrentDomain.BaseDirectory;
+  File.WriteAllLines(Path.Combine(directory, "args.txt"), args);
+  string blocked = "";
+  foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables()) {
+   string key = ((string)entry.Key).ToUpperInvariant();
+   if (key == "CLASSPATH_PREFIX" || key == "JAVA_OPTS" || key == "JAVA_TOOL_OPTIONS" || key == "JDK_JAVA_OPTIONS" || key == "_JAVA_OPTIONS") blocked += key + "\\n";
+  }
+  File.WriteAllText(Path.Combine(directory, "injected.txt"), blocked);
+  Console.Write(File.ReadAllText(Path.Combine(directory, "validation.json")));
+  return 0;
+ }
+}`);
+	const compiled = spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "Microsoft.NET/Framework64/v4.0.30319/csc.exe"), ["/nologo", `/out:${executable}`, source], { encoding: "utf8" });
+	assert.equal(compiled.status, 0, compiled.error?.message ?? compiled.stdout + compiled.stderr);
+	const snapshot = join(dir, "document ü & 100%.pdf"), classpath = join(dir, "verapdf", "bin", "*");
+	const env: NodeJS.ProcessEnv = { ...javaEnvironment(process.env, "win32"), VERAPDF_JAVA: executable, VERAPDF_CLASSPATH: classpath,
+		CLASSPATH_PREFIX: "poison", Java_Opts: "poison", java_tool_options: "poison", Jdk_Java_Options: "poison", _java_OPTIONS: "poison" };
+	delete env.VERAPDF;
+	const code = `import { checkPdfAccessibility } from ${JSON.stringify(new URL("../src/pdf-accessibility.ts", import.meta.url).href)}; process.stdout.write(JSON.stringify(await checkPdfAccessibility(${JSON.stringify(snapshot)}, {profile: "ua1"})));`;
+	const child = spawnSync(process.execPath, ["--input-type=module", "-e", code], { env, encoding: "utf8" });
+	assert.equal(child.status, 0, child.error?.message ?? child.stderr);
+	const result = JSON.parse(child.stdout);
+	assert.equal(result.machineStatus, "complete");
+	assert.equal(result.validator.machineCompliant, true);
+	assert.equal(result.evidence[0].tool, executable);
+	const expected = ["-Dfile.encoding=UTF8", "--add-exports=java.base/sun.security.pkcs=ALL-UNNAMED", "-classpath", classpath,
+		"org.verapdf.apps.GreenfieldCliWrapper", "--flavour", "ua1", "--format", "json", "--maxfailuresdisplayed", "-1", snapshot];
+	assert.deepEqual(result.evidence[0].args, expected);
+	assert.deepEqual((await readFile(join(dir, "args.txt"), "utf8")).trim().split(/\r?\n/), expected);
+	assert.equal(await readFile(join(dir, "injected.txt"), "utf8"), "");
+	const explicitExecutable = join(dir, "external-verapdf.exe");
+	await copyFile(executable, explicitExecutable);
+	const validationArgs = ["--flavour", "ua1", "--format", "json", "--maxfailuresdisplayed", "-1", snapshot];
+	for (const scenario of [
+		{ selected: executable, explicit: undefined, tool: executable, args: expected },
+		{ selected: explicitExecutable, explicit: undefined, tool: explicitExecutable, args: validationArgs },
+		{ selected: executable, explicit: explicitExecutable, tool: explicitExecutable, args: validationArgs },
+	]) {
+		const options = { profile: "ua1", ...(scenario.explicit ? { executable: scenario.explicit } : {}) };
+		const selectionCode = `import { checkPdfAccessibility } from ${JSON.stringify(new URL("../src/pdf-accessibility.ts", import.meta.url).href)}; process.stdout.write(JSON.stringify(await checkPdfAccessibility(${JSON.stringify(snapshot)}, ${JSON.stringify(options)})));`;
+		const selected = spawnSync(process.execPath, ["--input-type=module", "-e", selectionCode], { env: { ...env, VERAPDF: scenario.selected }, encoding: "utf8" });
+		assert.equal(selected.status, 0, selected.error?.message ?? selected.stderr);
+		const validation = JSON.parse(selected.stdout);
+		assert.equal(validation.machineStatus, "complete");
+		assert.equal(validation.evidence[0].tool, scenario.tool);
+		assert.deepEqual(validation.evidence[0].args, scenario.args);
+		assert.deepEqual((await readFile(join(dir, "args.txt"), "utf8")).trim().split(/\r?\n/), scenario.args);
+		assert.equal(await readFile(join(dir, "injected.txt"), "utf8"), "");
+	}
 });
 
 test("real veraPDF distinguishes untagged PDF from tagged generated PDF", async (t) => {
