@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test, type TestContext } from "node:test";
 import { extractPdfFacts, type PdfToolEvidence, type PopplerExecution } from "../src/pdf-facts.ts";
 
@@ -52,6 +53,62 @@ test("production extraction reads a real PDF fixture and leaves the caller's sna
 	assert.ok(extraction.evidence.slice(4).every(item => item.args.includes(path)));
 	assert.equal((await stat(path)).mode, mode);
 	assert.deepEqual(await readFile(path), before);
+});
+
+test("extraction uses the declared Poppler folder exclusively and retains PATH lookup when unset", async t => {
+	const path = await snapshot(t), root = dirname(path);
+	const bundled = join(root, "bundled bin"), decoy = join(root, "decoy bin"), missing = join(root, "missing bin");
+	const filename = process.platform === "win32" ? "pdfinfo.exe" : "pdfinfo";
+	const marker = join(root, "executed tool.txt"), adapter = join(root, "pdfinfo-stub.mjs");
+	for (const directory of [bundled, decoy, missing]) await mkdir(directory);
+	// A renamed Node executable and an import hook provide a native stub without a shell or compiler.
+	for (const directory of [bundled, decoy]) {
+		await copyFile(process.execPath, join(directory, filename));
+		await chmod(join(directory, filename), 0o700);
+	}
+	await writeFile(adapter, `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(marker)}, process.execPath);
+console.log("Pages: 1\\nEncrypted: no\\nToolPath: " + process.execPath);
+process.exit(0);
+`);
+	const saved = { CHECK_POPPLER_BIN: process.env.CHECK_POPPLER_BIN, PATH: process.env.PATH, NODE_OPTIONS: process.env.NODE_OPTIONS };
+	t.after(() => {
+		for (const [name, value] of Object.entries(saved)) {
+			if (value === undefined) delete process.env[name]; else process.env[name] = value;
+		}
+	});
+	process.env.PATH = decoy;
+	process.env.NODE_OPTIONS = `--import=${pathToFileURL(adapter).href}`;
+	await t.test("declared folder runs its exact executable ahead of a PATH decoy", async () => {
+		process.env.CHECK_POPPLER_BIN = bundled;
+		const extraction = await extractPdfFacts(path);
+		assert.equal(extraction.facts.metadata.ToolPath, join(bundled, filename));
+		assert.equal(await readFile(marker, "utf8"), join(bundled, filename));
+		assert.equal(extraction.evaluations.find(item => item.rule === "pdf.open")?.outcome, "passed");
+	});
+	await t.test("missing bundled executable is unavailable and never runs the PATH decoy", async () => {
+		await rm(marker);
+		process.env.CHECK_POPPLER_BIN = missing;
+		const extraction = await extractPdfFacts(path);
+		assert.equal(extraction.machineStatus, "incomplete");
+		assert.deepEqual(extraction.facts.metadata, {});
+		for (const evidence of extraction.evidence.filter(item => item.tool === "pdfinfo")) {
+			assert.equal(evidence.exitCode, null);
+			assert.equal(evidence.stdout, "");
+			assert.equal(evidence.stderr, "");
+			assert.ok(evidence.error?.includes("ENOENT"));
+			assert.ok(evidence.error?.includes(join(missing, filename)));
+		}
+		assert.equal(extraction.evaluations.find(item => item.rule === "pdf.open")?.outcome, "untested");
+		await assert.rejects(access(marker), { code: "ENOENT" });
+	});
+	await t.test("unset folder preserves source-checkout PATH lookup", async () => {
+		delete process.env.CHECK_POPPLER_BIN;
+		const extraction = await extractPdfFacts(path);
+		assert.equal(extraction.facts.metadata.ToolPath, join(decoy, filename));
+		assert.equal(await readFile(marker, "utf8"), join(decoy, filename));
+		assert.equal(extraction.evaluations.find(item => item.rule === "pdf.open")?.outcome, "passed");
+	});
 });
 
 test("the execution seam retains extraction order, evidence and coordinate conventions", async (t) => {

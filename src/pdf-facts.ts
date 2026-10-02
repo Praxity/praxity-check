@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import { popplerExecutable } from "./poppler.ts";
 
 const exec = promisify(execFile);
 export type PdfToolEvidence = { tool: string; args: string[]; exitCode: number | null; stdout: string; stderr: string; error?: string };
@@ -13,7 +14,7 @@ type Warning = { rule: string; message: string; remedy: string; evidence: string
 
 const run: PopplerExecution = async (tool, args) => {
 	try {
-		const { stdout, stderr } = await exec(tool, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } });
+		const { stdout, stderr } = await exec(popplerExecutable(tool), args, { encoding: "utf8", timeout: 30_000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } });
 		return { tool, args, exitCode: 0, stdout, stderr };
 	} catch (error) {
 		const e = error as Error & { code?: number | string; stdout?: string; stderr?: string };

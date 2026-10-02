@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { extractPdfFacts } from "./pdf-facts.ts";
 import { preparePdfDesignEvidence } from "./pdf-design.ts";
+import { popplerExecutable } from "./poppler.ts";
 import { parseReviewExecutionOption, runPreparedReview, validateReviewExecutionOptions, type ReviewExecutionOptions } from "./review-runner.ts";
 
 import { parseChecks, parseTier, type CheckDomain, type CheckTier } from "./selection.ts";
@@ -228,12 +229,12 @@ export async function preparePdfReview(path: string, options: { tier: CheckTier 
 		const extraction = await extractPdfFacts(snapshot);
 		if (extraction.machineStatus !== "complete") throw new Error("PDF facts could not be extracted; run check for diagnostics");
 		const pages = selectReviewPages(extraction.facts.pages.length, options.pages);
-		const rendererVersion = await exec("pdftoppm", ["-v"], { timeout: 10_000, maxBuffer: 1024 * 1024 });
+		const rendererVersion = await exec(popplerExecutable("pdftoppm"), ["-v"], { timeout: 10_000, maxBuffer: 1024 * 1024 });
 		const artifacts = [];
 		for (const page of pages) {
 			const prefix = `page-${page}`;
 			const args = ["-f", String(page), "-l", String(page), "-singlefile", "-scale-to", "1600", "-png", snapshot, join(dir, prefix)];
-			const result = await exec("pdftoppm", args, { timeout: 30_000, maxBuffer: 1024 * 1024 });
+			const result = await exec(popplerExecutable("pdftoppm"), args, { timeout: 30_000, maxBuffer: 1024 * 1024 });
 			const png = await readFile(join(dir, `${prefix}.png`));
 			await chmod(join(dir, `${prefix}.png`), 0o600);
 			const facts = { geometry: extraction.facts.pages[page - 1], words: extraction.facts.words.filter((w) => w.page === page), images: extraction.facts.images.filter((i) => i.page === page), coordinates: extraction.facts.coordinates };

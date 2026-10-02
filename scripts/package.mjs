@@ -121,7 +121,7 @@ function launcher(platform) {
 if (platform === "win32") return `@echo off\r
 setlocal DisableDelayedExpansion\r
 for %%I in ("%~dp0..") do set "CHECK_DIR=%%~fI"\r
-set "PATH=%CHECK_DIR%\\dependencies\\bin;%PATH%"\r
+set "CHECK_POPPLER_BIN=%CHECK_DIR%\\dependencies\\bin"\r
 set "PLAYWRIGHT_BROWSERS_PATH=%CHECK_DIR%\\dependencies\\browsers"\r
 if exist "%CHECK_DIR%\\dependencies\\share\\poppler\\" set "POPPLER_DATADIR=%CHECK_DIR%\\dependencies\\share\\poppler"\r
 if exist "%CHECK_DIR%\\dependencies\\etc\\fonts\\fonts.conf" (\r
@@ -131,7 +131,6 @@ if exist "%CHECK_DIR%\\dependencies\\etc\\fonts\\fonts.conf" (\r
 if exist "%CHECK_DIR%\\dependencies\\java\\bin\\java.exe" (\r
   set "JAVA_HOME=%CHECK_DIR%\\dependencies\\java"\r
   set "JAVACMD=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
-  set "PATH=%CHECK_DIR%\\dependencies\\java\\bin;%PATH%"\r
   if exist "%CHECK_DIR%\\dependencies\\verapdf\\bin\\*.jar" (\r
     set "VERAPDF=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
     set "VERAPDF_JAVA=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
@@ -144,7 +143,7 @@ exit /b %errorlevel%\r
 return `#!/bin/sh
 set -eu
 CHECK_DIR="$(CDPATH= cd -- "\${0%/*}/.." && pwd)"
-export PATH="$CHECK_DIR/dependencies/bin:$PATH"
+export CHECK_POPPLER_BIN="$CHECK_DIR/dependencies/bin"
 export PLAYWRIGHT_BROWSERS_PATH="$CHECK_DIR/dependencies/browsers"
 if [ -d "$CHECK_DIR/dependencies/share/poppler" ]; then export POPPLER_DATADIR="$CHECK_DIR/dependencies/share/poppler"; fi
 if [ -f "$CHECK_DIR/dependencies/etc/fonts/fonts.conf" ]; then
@@ -154,7 +153,6 @@ fi
 if [ -x "$CHECK_DIR/dependencies/bin/verapdf" ]; then export VERAPDF="$CHECK_DIR/dependencies/bin/verapdf"; fi
 if [ -x "$CHECK_DIR/dependencies/java/bin/java" ]; then
   export JAVA_HOME="$CHECK_DIR/dependencies/java"
-  export PATH="$JAVA_HOME/bin:$PATH"
 fi
 exec "$CHECK_DIR/runtime/node" "$CHECK_DIR/lib/cli.js" "$@"
 `;
