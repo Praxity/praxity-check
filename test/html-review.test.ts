@@ -7,8 +7,9 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { crc32 } from "node:zlib";
 import { discover } from "../src/discover.ts";
-import { importHtmlReview, validateHtmlReview, type HtmlReview } from "../src/html-review.ts";
+import { importHtmlReview, readHtmlReviewBundle, validateHtmlReview, writeHtmlReviewBundle, type HtmlReview } from "../src/html-review.ts";
 import { assertOutputOutside, snapshotInput } from "../src/input.ts";
+import { SURFACE_IDS, type prepareInteractionReview } from "../src/interaction-review.ts";
 
 const cli = resolve("src/cli.ts");
 const digest = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
@@ -33,6 +34,35 @@ function zip(entries: Array<[string, string]>) {
 
 const html = `<!doctype html><html lang="en"><head><title>Synthetic tabs</title><link rel="stylesheet" href="asset.css"></head><body><h1>Sections</h1><div role="tablist" aria-label="Sections"><button role="tab" id="one" aria-selected="true" aria-controls="panel-one">One</button><button role="tab" id="two" tabindex="-1" aria-selected="false" aria-controls="panel-two">Two</button></div><section id="panel-one" role="tabpanel" aria-labelledby="one">First section</section><section id="panel-two" role="tabpanel" aria-labelledby="two" hidden>Second section</section><button></button></body></html>`;
 const css = "body { color: black; background: white; }";
+
+test("retained review import accepts every collection surface id", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "check-html-surfaces-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const source = join(dir, "source"), bundle = join(dir, "bundle"), reviewPath = join(bundle, "review.json");
+	await mkdir(source);
+	const contentSha256 = digest("synthetic surface evidence");
+	const packet: Awaited<ReturnType<typeof prepareInteractionReview>> = {
+		markdown: "Synthetic surface evidence", auditedPages: 1,
+		evidence: {
+			pages: [{ file: "index.html", audited: true }], omitted: 0, perSurfaceCaps: [],
+			environment: { browser: "synthetic", engine: "synthetic", viewport: "synthetic", preferredColorScheme: "light", documentColorScheme: "light", theme: "synthetic" },
+			candidates: SURFACE_IDS.map((surface) => ({
+				surface, page: "index.html", selector: `#${surface}`, occurrences: [`index.html — #${surface}`], occurrenceCount: 1,
+				dom: { html: `<div id="${surface}"></div>`, aria: "", contextSelector: `#${surface}`, visible: true, related: [] }, traces: [],
+			})),
+		},
+	};
+	await writeHtmlReviewBundle(bundle, source, contentSha256, packet, false);
+	const discovery = { pages: [{ file: "index.html", url: "http://127.0.0.1/index.html" }], stubs: [] };
+	const { manifest, evidence } = await readHtmlReviewBundle(reviewPath, contentSha256, discovery);
+	const review: HtmlReview = {
+		schemaVersion: "html-review-2", contentSha256, evidenceSha256: manifest.evidenceSha256, tier: "inference", checks: ["accessibility"],
+		pagesReviewed: ["index.html"], candidatesReviewed: evidence.candidates.map((candidate) => candidate.id), reviewer: { model: "synthetic" }, findings: [],
+	};
+	await writeFile(reviewPath, JSON.stringify(review));
+	const imported = await importHtmlReview(reviewPath, contentSha256, discovery);
+	assert.deepEqual(imported.retainedEvidence.candidates.map((candidate) => candidate.surface), SURFACE_IDS);
+});
 
 test("HTML bundle captures real actions, imports retained evidence without browser/check execution and rejects invalid or stale reviews", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "check-html-review-"));

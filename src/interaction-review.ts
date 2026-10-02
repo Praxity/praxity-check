@@ -12,6 +12,7 @@ const MAX_UNIQUE_CANDIDATES = 80;
 const MAX_OCCURRENCES_SHOWN = 8;
 const MAX_HTML_CHARS = 4_000;
 const MAX_ARIA_CHARS = 2_000;
+const MAX_SNAPSHOT_ELEMENTS = 32;
 
 const SURFACES = [
 	{
@@ -65,6 +66,9 @@ const SURFACES = [
 ] as const;
 
 type SurfaceId = (typeof SURFACES)[number]["id"];
+
+// The id-only interface preserves locality for this module's selectors and rules.
+export const SURFACE_IDS: readonly SurfaceId[] = SURFACES.map((surface) => surface.id);
 
 interface DomSlice {
 	html: string;
@@ -160,7 +164,7 @@ async function domSlice(locator: Locator): Promise<DomSlice> {
 }
 
 async function dynamicState(page: Page, rootSelector: string): Promise<string> {
-	const state = await page.evaluate(({ selector: rootSelector, locateSource, nearbySource }) => {
+	const state = await page.evaluate(({ selector: rootSelector, locateSource, nearbySource, maxElements }) => {
 		const locate = (0, eval)(locateSource) as (element: Element | null) => string;
 		const root = document.querySelector(rootSelector);
 		if (!root) return { active: locate(document.activeElement), elements: ["candidate detached"] };
@@ -194,7 +198,7 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 		}
 		return {
 			active: locate(document.activeElement),
-			elements: interesting.slice(0, 32).map((element) => ({
+			elements: interesting.slice(0, maxElements).map((element) => ({
 				selector: locate(element),
 				...(nearby.includes(element) ? { context: "nearby DOM; relationship unverified" } : {}),
 				text: (element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
@@ -210,7 +214,7 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 							: {},
 			})),
 		};
-	}, { selector: rootSelector, locateSource: UNIQUE_SELECTOR, nearbySource: DISCLOSURE_NEARBY });
+	}, { selector: rootSelector, locateSource: UNIQUE_SELECTOR, nearbySource: DISCLOSURE_NEARBY, maxElements: MAX_SNAPSHOT_ELEMENTS });
 	return clip(JSON.stringify(state), 6_000);
 }
 
@@ -221,7 +225,7 @@ export function summarizeRetainedState(before: string, after: string): string[] 
 	const parse = (source: string) => {
 		if (source.length > 6_000) throw new Error("bounded snapshot exceeded");
 		const state: unknown = JSON.parse(source);
-		if (!object(state) || Object.keys(state).some(key => !["active", "elements"].includes(key)) || typeof state.active !== "string" || !Array.isArray(state.elements) || state.elements.length > 32) throw new Error("unknown snapshot shape");
+		if (!object(state) || Object.keys(state).some(key => !["active", "elements"].includes(key)) || typeof state.active !== "string" || !Array.isArray(state.elements) || state.elements.length > MAX_SNAPSHOT_ELEMENTS) throw new Error("unknown snapshot shape");
 		const elements = new Map<string, ElementState>();
 		for (const element of state.elements) {
 			if (!object(element) || Object.keys(element).some(key => !["selector", "context", "text", "visible", "attributes", "properties"].includes(key)) ||

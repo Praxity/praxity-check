@@ -2,9 +2,13 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { prepareInteractionReview } from "./interaction-review.ts";
+import { SURFACE_IDS, type prepareInteractionReview } from "./interaction-review.ts";
 import type { Discovery } from "./discover.ts";
 import { assertOutputOutside } from "./input.ts";
+
+// Keep the accepted format stable when collection budgets change, so saved
+// bundles remain importable without tying this module's limit to collection.
+const MAX_RETAINED_CANDIDATES = 80;
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const identity = (value: unknown) => hash(JSON.stringify(value));
@@ -34,7 +38,7 @@ const list = (items: unknown, maxItems: number) => ({ type: "array", maxItems, i
 export const htmlReviewSchema = {
 	$schema: "https://json-schema.org/draft/2020-12/schema",
 	...object({ schemaVersion: { type: "string", enum: ["html-review-2"] }, contentSha256: sha, evidenceSha256: sha, tier: { type: "string", enum: ["inference"] }, checks: { type: "array", minItems: 1, maxItems: 1, items: { type: "string", enum: ["accessibility"] } },
-		pagesReviewed: { ...list(prose, 20_000), minItems: 1 }, candidatesReviewed: list(sha, 80), reviewer: object({ model: prose }),
+		pagesReviewed: { ...list(prose, 20_000), minItems: 1 }, candidatesReviewed: list(sha, MAX_RETAINED_CANDIDATES), reviewer: object({ model: prose }),
 		findings: { type: "array", maxItems: 200, items: object({ page: prose, candidateId: sha, stateId: sha, check: { type: "string", enum: ["accessibility"] }, category: { type: "string", enum: categories }, claim: { type: "string", enum: ["structure", "executed-behavior", "coverage"] }, confidence: { type: "string", enum: ["high", "medium", "low"] }, message: prose, action: prose, consequence: prose, verification: prose, evidence: object({ observation: prose, traceIds: list(sha, 32) }) }) },
 	}),
 };
@@ -52,7 +56,7 @@ function bundleSchema(contentSha256: string, evidenceSha256: string, evidence: E
 	const pages = boundedEnum(evidence.pages.filter(page => page.audited).map(page => page.file), prose);
 	const candidates = boundedEnum(evidence.candidates.map(candidate => candidate.id), sha);
 	props.pagesReviewed = { ...list(pages, 20_000), minItems: 1 };
-	props.candidatesReviewed = list(candidates, 80);
+	props.candidatesReviewed = list(candidates, MAX_RETAINED_CANDIDATES);
 	const findings = props.findings as { items: { properties: Record<string, unknown> } };
 	findings.items.properties.page = pages;
 	findings.items.properties.candidateId = candidates;
@@ -94,7 +98,7 @@ async function readBounded(path: string, limit: number) {
 
 function validateEvidence(value: unknown, discovery: Discovery): Evidence {
 	record(value, ["pages", "candidates", "environment", "omitted", "perSurfaceCaps"]);
-	if (!Array.isArray(value.pages) || value.pages.length > 20_000 || !Array.isArray(value.candidates) || value.candidates.length > 80) throw new Error("Invalid retained HTML evidence coverage");
+	if (!Array.isArray(value.pages) || value.pages.length > 20_000 || !Array.isArray(value.candidates) || value.candidates.length > MAX_RETAINED_CANDIDATES) throw new Error("Invalid retained HTML evidence coverage");
 	const knownPages = new Set(discovery.pages.map((page) => page.file));
 	const pages = new Set<string>();
 	const prepared = new Set<string>();
@@ -113,7 +117,7 @@ function validateEvidence(value: unknown, discovery: Discovery): Evidence {
 	for (const candidate of value.candidates) {
 		record(candidate, ["surface", "page", "selector", "occurrences", "occurrenceCount", "dom", "traces", "id", "stateId"], ["traceNote"]);
 		text(candidate.page); text(candidate.selector); digest(candidate.id); digest(candidate.stateId);
-		if (!prepared.has(candidate.page) || ids.has(candidate.id) || typeof candidate.surface !== "string" || !["tabs", "dialogs", "disclosures", "forms", "choices", "stateful", "live", "flows"].includes(candidate.surface)) throw new Error("Invalid retained candidate identity or page");
+		if (!prepared.has(candidate.page) || ids.has(candidate.id) || typeof candidate.surface !== "string" || !SURFACE_IDS.some((id) => id === candidate.surface)) throw new Error("Invalid retained candidate identity or page");
 		ids.add(candidate.id); strings(candidate.occurrences, 8);
 		if (!Number.isSafeInteger(candidate.occurrenceCount) || Number(candidate.occurrenceCount) < candidate.occurrences.length) throw new Error("Invalid candidate occurrence count");
 		optionalText(candidate.traceNote);
@@ -140,7 +144,7 @@ export function validateHtmlReview(value: unknown, contentSha256: string, eviden
 	digest(value.contentSha256); digest(value.evidenceSha256);
 	if ((value.schemaVersion !== "html-review-1" && value.schemaVersion !== "html-review-2") || value.contentSha256 !== contentSha256 || value.evidenceSha256 !== evidenceSha256) throw new Error("HTML review content revision or retained evidence does not match");
 	if (value.tier !== "inference" || !Array.isArray(value.checks) || value.checks.length !== 1 || value.checks[0] !== "accessibility") throw new Error("HTML review requires inference tier and accessibility checks; design is unsupported");
-	strings(value.pagesReviewed, 20_000); strings(value.candidatesReviewed, 80);
+	strings(value.pagesReviewed, 20_000); strings(value.candidatesReviewed, MAX_RETAINED_CANDIDATES);
 	const pages = new Set(evidence.pages.filter((page) => page.audited).map((page) => page.file));
 	const candidates = new Map(evidence.candidates.map((candidate) => [candidate.id, candidate]));
 	if (!value.pagesReviewed.length || value.pagesReviewed.some((page) => !pages.has(page))) throw new Error("HTML review identifies an unknown or unprepared page");
