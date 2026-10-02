@@ -1,3 +1,6 @@
+# Local maintainer context written per machine.
+AGENTS.local.md
+
 node_modules/
 dist/
 .DS_Store
