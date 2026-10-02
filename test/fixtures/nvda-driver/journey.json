@@ -6,6 +6,7 @@
     { "id": "load", "intent": "Hear the page on load", "keys": [], "waitMs": 4500, "expect": { "spoken": ["NVDA shared driver pilot"], "path": "/index.html" } },
     { "id": "heading", "intent": "Find the next heading in browse mode", "keys": ["Control+Home", "h"], "capture": false, "waitMs": 1500, "expect": { "spoken": ["Result controls"], "notSpoken": ["no next heading"] } },
     { "id": "button", "intent": "Find the result button in browse mode", "keys": ["b"], "capture": false, "waitMs": 1500, "expect": { "spoken": ["Show result"] } },
-    { "id": "announce", "intent": "Activate the button and hear its result", "keys": ["Enter"], "capture": false, "waitMs": 2000, "expect": { "spoken": [{ "text": "Ready to continue", "via": "live" }] } }
+    { "id": "announce", "intent": "Activate the button and hear its result", "keys": ["Enter"], "capture": false, "waitMs": 2000, "expect": { "spoken": [{ "text": "Ready to continue", "via": "live" }] } },
+    { "id": "address", "intent": "Type the second page's address in the address bar", "address": "next.html", "keys": [], "waitMs": 3000, "expect": { "spoken": ["Second page"], "path": "/next.html" } }
   ]
 }

@@ -18,7 +18,8 @@ test("real portable NVDA delivers navigation keys and speaks the local live regi
   t.diagnostic(`Speech transcript: ${result.markdownPath}`);
   const report = JSON.parse(await readFile(result.jsonPath, "utf8"));
   assert.equal(result.exitCode, 0, JSON.stringify(report.results.map((step: { step: { id: string }; classification: string; reasons: string[] }) => ({ id: step.step.id, classification: step.classification, reasons: step.reasons })), null, 2));
-  assert.equal(report.results.length, 4);
+  // The address step types into Chrome's address bar, so it also proves the page-focus checks read real focus.
+  assert.equal(report.results.length, 5);
   for (const step of report.results) {
     assert.equal(step.status, "pass", step.step.id);
     assert.equal(step.speech.source, "nvda-log", step.step.id);

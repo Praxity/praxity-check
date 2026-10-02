@@ -549,7 +549,10 @@ export function evaluateStep(step: JourneyStep, record: StepRecord | undefined, 
 	const speech = events ? { source: "nvda-log" as const, phrases: logSpeech, events: speechEvents } : { source: relaySpeech.length ? "guidepup-relay" as const : "none" as const, phrases: relaySpeech, events: [] };
 	const modes = window.filter((event) => event.kind === "mode").map((event) => event.text);
 	const addressStart = record.setup ? undefined : record.keys.find((key) => key.source === "address" && key.key === "Control+l")?.startedAt;
-	const addressEnd = record.setup ? undefined : record.keys.find((key) => key.source === "address" && key.key === "Enter")?.startedAt;
+	// NVDA echoes the last typed word when Enter ends it, and nothing else is sent until the
+	// step's next key, so the address window runs from Control+L to that key (or step end).
+	const addressEnter = record.setup ? -1 : record.keys.findIndex((key) => key.source === "address" && key.key === "Enter");
+	const addressEnd = addressEnter < 0 ? undefined : record.keys[addressEnter + 1]?.startedAt ?? record.endedAt;
 	const typed = window.filter((event) => event.kind === "typed" && !(addressStart !== undefined && addressEnd !== undefined && event.epochMs >= addressStart && event.epochMs < addressEnd)).map((event) => event.text);
 	const firstKeyMs = delivery.events.find((event) => event.attribution === "journey" || event.attribution === "address")?.epochMs ?? record.keys[0]?.startedAt;
 	const timeline: StepResult["timeline"] = [

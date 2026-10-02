@@ -231,10 +231,15 @@ test("foreground policy rejects dialogs in the browser process", () => {
 	assert.equal(foregroundGuardDecision({ ...reading(), owned: true }, 42, true).outcome, "stop");
 });
 
+// Switching focus emulation off makes hasFocus() truthful; it moves no focus and sends no keys.
+const injected = (commands: string[]) => commands.filter((command) => command !== "Emulation.setFocusEmulationEnabled");
+
 class SyntheticBrowser extends ChromiumJourneyBrowser {
 	url = "http://127.0.0.1:1234/index.html";
 	visible = true;
 	focused = true;
+	// Playwright leaves focus emulation on for pages it attaches to; then hasFocus() is always true.
+	focusEmulation = true;
 	navigation: { errorText?: string; loaderId?: string; isDownload?: boolean } = { loaderId: "loaded" };
 	frame: { url: string; loaderId: string; unreachableUrl?: string } = { url: this.url, loaderId: "loaded" };
 	commands: string[] = [];
@@ -247,13 +252,14 @@ class SyntheticBrowser extends ChromiumJourneyBrowser {
 
 	protected override async evaluate<T>(expression: string): Promise<T> {
 		const value = expression === "location.href" ? this.url : expression === "document.visibilityState" ? (this.visible ? "visible" : "hidden")
-			: expression === "document.hasFocus()" ? this.focused : expression === "document.readyState" ? "complete" : undefined;
+			: expression === "document.hasFocus()" ? this.focusEmulation || this.focused : expression === "document.readyState" ? "complete" : undefined;
 		if (value === undefined) throw new Error(`unexpected expression ${expression}`);
 		return value as T;
 	}
 
-	protected override async send<T>(method: string): Promise<T> {
+	protected override async send<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
 		this.commands.push(method);
+		if (method === "Emulation.setFocusEmulationEnabled") { this.focusEmulation = params.enabled === true; return {} as T; }
 		if (method === "Page.navigate") return this.navigation as T;
 		if (method === "Page.getFrameTree") return { frameTree: { frame: this.frame } } as T;
 		throw new Error(`unexpected command ${method}`);
@@ -277,7 +283,7 @@ test("guard acquires the browser from the shell and verifies it before allowing 
 	} });
 	assert.deepEqual(await browser.guard("http://127.0.0.1:1234"), { ok: true, detail: "Course" });
 	assert.deepEqual(activations, [false]);
-	assert.deepEqual(browser.commands, [], "activation never injects page focus or journey keys");
+	assert.deepEqual(injected(browser.commands), [], "activation never injects page focus or journey keys");
 });
 
 test("guard acquires from a verified taskbar but rejects shell title or class lookalikes", async () => {
@@ -417,7 +423,7 @@ test("foreground acquisition preserves the address-bar guard", async () => {
 	browser.focused = false;
 	assert.match((await browser.guard("http://127.0.0.1:1234")).detail, /browser's own interface/);
 	assert.equal((await browser.guard("http://127.0.0.1:1234", { pageFocus: false })).ok, true);
-	assert.deepEqual(browser.commands, []);
+	assert.deepEqual(injected(browser.commands), []);
 });
 
 test("guard stops on a persistent modifier without sending a release", async () => {
@@ -427,7 +433,7 @@ test("guard stops on a persistent modifier without sending a release", async () 
 	assert.equal(result.ok, false);
 	assert.match(result.detail, /keys still held down: Control/);
 	assert.ok(count >= 2);
-	assert.deepEqual(browser.commands, []);
+	assert.deepEqual(injected(browser.commands), []);
 });
 
 test("guard checks the foreground again when a held modifier clears", async () => {

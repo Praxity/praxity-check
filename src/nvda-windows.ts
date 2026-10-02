@@ -617,6 +617,16 @@ export class ChromiumJourneyBrowser implements JourneyBrowser {
 		return await (await fetch(`http://127.0.0.1:${this.#port}/json/list`)).json() as Array<{ id: string; type: string; url: string; webSocketDebuggerUrl?: string }>;
 	}
 
+	/**
+	 * Whether keyboard focus is in the page rather than the browser's own interface.
+	 * Playwright enables focus emulation on every page it attaches to, which makes
+	 * document.hasFocus() always true. Switch it off on this session right before reading.
+	 */
+	async #pageHasFocus(): Promise<boolean> {
+		await this.send("Emulation.setFocusEmulationEnabled", { enabled: false });
+		return this.evaluate<boolean>("document.hasFocus()");
+	}
+
 	protected async send<T = any>(method: string, params: Record<string, unknown> = {}): Promise<T> {
 		const cdp = this.#browserCdp;
 		const sessionId = this.#pageSessionId;
@@ -671,7 +681,7 @@ export class ChromiumJourneyBrowser implements JourneyBrowser {
 			const href = await this.evaluate<string>("location.href");
 			if (new URL(href).origin !== new URL(origin).origin) return { ok: false, detail: `browser left the audited package: ${href}` };
 			if (await this.evaluate<string>("document.visibilityState") !== "visible") return { ok: false, detail: "the journey tab is not the visible tab" };
-			if ((options.pageFocus ?? true) && !await this.evaluate<boolean>("document.hasFocus()")) {
+			if ((options.pageFocus ?? true) && !await this.#pageHasFocus()) {
 				return { ok: false, detail: "keyboard focus is in the browser's own interface (such as the address bar), not the page" };
 			}
 			// Page reads take time. Refuse a window change before returning permission to send keys.
@@ -725,7 +735,7 @@ export class ChromiumJourneyBrowser implements JourneyBrowser {
 			this.evaluate<string>(this.#courseExpression("document.title")),
 			this.evaluate<string[]>(this.#courseExpression(LIVE_REGION_TEXT)),
 			this.#focused(),
-			this.evaluate<boolean>("document.hasFocus()"),
+			this.#pageHasFocus(),
 		]);
 		let orientation: OrientationSnapshot | undefined;
 		if (options.snapshot) {

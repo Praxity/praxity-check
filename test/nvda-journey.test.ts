@@ -383,20 +383,26 @@ test("delivery excludes lone modifiers using recorded indices after address keys
 	assert.match(missing.reasons.join(" "), /logged 1 of 2/);
 });
 
-test("typed echoes are exempt only between typed address Control+l and Enter", () => {
-	const step = journey([{ id: "a", intent: "Address", address: "check.html" }]).steps[0]!;
-	const observed = record({ address: "http://127.0.0.1:4000/check.html", keys: [
+test("typed echoes are exempt from address Control+l until the next key the runner sends", () => {
+	const step = journey([{ id: "a", intent: "Address", address: "check.html", keys: ["h"] }]).steps[0]!;
+	const observed = record({ address: "http://127.0.0.1:4000/check.html", startedAt: at("14:00:01.000"), endedAt: at("14:00:04.000"), keys: [
 		{ key: "Control+l", source: "address", capture: false, relaySpeech: "", startedAt: at("14:00:01.200") },
 		{ key: "Enter", source: "address", capture: false, relaySpeech: "", startedAt: at("14:00:02.000") },
+		{ key: "h", source: "journey", capture: false, relaySpeech: "", startedAt: at("14:00:02.800") },
 	] });
-	const echo = (time: string) => [{ kind: "typed" as const, text: "h", timeOfDayMs: timeOfDayMs(at(time)) }];
-	assert.equal(evaluateStep(step, observed, echo("14:00:01.500")).classification, "expected");
-	for (const time of ["14:00:01.100", "14:00:02.000", "14:00:02.500"]) {
-		const result = evaluateStep(step, observed, echo(time));
+	const inputs = [["14:00:01.200", "control+l"], ["14:00:02.000", "enter"], ["14:00:02.800", "h"]].map(([time, key]) => ({ kind: "input" as const, text: `kb(desktop):${key}`, timeOfDayMs: timeOfDayMs(at(time!)) }));
+	const withEcho = (time: string) => [...inputs, { kind: "typed" as const, text: "html", timeOfDayMs: timeOfDayMs(at(time)) }];
+	// NVDA reports the last typed word when Enter ends it, before the runner's next key.
+	for (const time of ["14:00:01.500", "14:00:02.000", "14:00:02.500"]) assert.equal(evaluateStep(step, observed, withEcho(time)).classification, "expected", time);
+	for (const time of ["14:00:01.100", "14:00:03.000"]) {
+		const result = evaluateStep(step, observed, withEcho(time));
 		assert.equal(result.classification, "inconclusive-automation", time);
 		assert.match(result.reasons.join(" "), /typed text/);
 	}
-	const setup = evaluateStep({ ...step, setup: true }, { ...observed, keys: [], setup: { method: "cdp", url: observed.address! } }, echo("14:00:01.500"));
+	const addressOnly = journey([{ id: "a", intent: "Address", address: "check.html" }]).steps[0]!;
+	const typedOnly = { ...observed, keys: observed.keys.slice(0, 2) };
+	assert.equal(evaluateStep(addressOnly, typedOnly, [...inputs.slice(0, 2), { kind: "typed" as const, text: "html", timeOfDayMs: timeOfDayMs(at("14:00:03.500")) }]).classification, "expected", "no key follows Enter, so the step end closes the window");
+	const setup = evaluateStep({ ...addressOnly, setup: true }, { ...observed, keys: [], setup: { method: "cdp", url: observed.address! } }, [{ kind: "typed" as const, text: "h", timeOfDayMs: timeOfDayMs(at("14:00:01.500")) }]);
 	assert.equal(setup.classification, "inconclusive-automation");
 	assert.match(setup.reasons.join(" "), /typed text/);
 });
