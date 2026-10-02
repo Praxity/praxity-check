@@ -1,89 +1,18 @@
-import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { promisify } from "node:util";
+import { extractPdfFacts } from "./pdf-facts.ts";
 import { pdfFeedback, type Feedback } from "./feedback.ts";
 import { evaluatePdfPrint } from "./pdf-print.ts";
 import { checkPdfAccessibility } from "./pdf-accessibility.ts";
 
 import { normalizePdfPolicy, parseChecks, parseTier, selectChecks, type PdfOptions } from "./selection.ts";
 
-const exec = promisify(execFile);
 type Outcome = "passed" | "failed" | "cantTell" | "inapplicable" | "untested";
-type Evidence = { tool: string; args: string[]; exitCode: number | null; stdout: string; stderr: string; error?: string };
 type Issue = { id: string; rule: string; severity: "serious" | "moderate"; confidence: "high" | "medium"; location: { documentSha256: string; page?: number }; message: string; remedy: string; evidence: unknown };
-type Page = { page: number; width: number; height: number; rotation: number; boxes: Record<string, number[]> };
 export type { PdfOptions } from "./selection.ts";
-
-async function run(tool: string, args: string[]): Promise<Evidence> {
-	try {
-		const { stdout, stderr } = await exec(tool, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: "C" } });
-		return { tool, args, exitCode: 0, stdout, stderr };
-	} catch (error) {
-		const e = error as Error & { code?: number | string; stdout?: string; stderr?: string };
-		return { tool, args, exitCode: typeof e.code === "number" ? e.code : null, stdout: e.stdout ?? "", stderr: e.stderr ?? "", error: e.message };
-	}
-}
-
-export function parsePages(raw: string, count: number): Page[] {
-	const pages: Page[] = [];
-	for (let page = 1; page <= count; page++) {
-		const prefix = `^Page\\s+${page}\\s+`;
-		const size = raw.match(new RegExp(`${prefix}size:\\s+([\\d.]+) x ([\\d.]+) pts`, "m"));
-		const rotation = raw.match(new RegExp(`${prefix}rot:\\s+(-?\\d+)`, "m"));
-		if (!size || !rotation) throw new Error(`Missing page ${page} geometry`);
-		const boxes: Record<string, number[]> = {};
-		for (const name of ["MediaBox", "CropBox", "BleedBox", "TrimBox", "ArtBox"]) {
-			const match = raw.match(new RegExp(`${prefix}${name}:\\s+([^\\r\\n]+)`, "m"));
-			const values = match?.[1]?.trim().split(/\s+/).map(Number);
-			if (!values || values.length !== 4 || values.some((n) => !Number.isFinite(n))) throw new Error(`Missing page ${page} ${name}`);
-			boxes[name] = values;
-		}
-		pages.push({ page, width: Number(size[1]), height: Number(size[2]), rotation: Number(rotation[1]), boxes });
-	}
-	return pages;
-}
-
-function tableRows(raw: string, header: RegExp): string[] {
-	const lines = raw.trim().split(/\r?\n/);
-	if (!header.test(lines[0] ?? "") || !/^-+(?:\s+-+)*$/.test(lines[1] ?? "")) throw new Error("Unrecognized Poppler table header");
-	return lines.slice(2).filter((line) => line.trim());
-}
-export function parseFonts(raw: string) {
-	return tableRows(raw, /^name\s+type\s+encoding\s+emb\s+sub\s+uni\s+object ID$/).map((line) => {
-		const m = line.match(/^(\S+)\s+(.+?)\s+(\S+)\s+(yes|no)\s+(yes|no)\s+(yes|no)\s+(\d+)\s+(\d+)\s*$/);
-		if (!m) throw new Error(`Unrecognized font row: ${line}`);
-		return { name: m[1]!, type: m[2]!, encoding: m[3]!, embedded: m[4] === "yes", subset: m[5] === "yes", unicodeMap: m[6] === "yes", object: `${m[7]} ${m[8]}`, raw: line };
-	});
-}
-export function parseImages(raw: string) {
-	return tableRows(raw, /^page\s+num\s+type\s+width height/).map((line) => {
-		const cells = line.trim().split(/\s+/);
-		// Inline images replace the two object-ID columns with one [inline] column.
-		const inline = cells[10] === "[inline]";
-		const x = Number(cells[inline ? 11 : 12]), y = Number(cells[inline ? 12 : 13]);
-		const page = Number(cells[0]), width = Number(cells[3]), height = Number(cells[4]);
-		if (cells.length !== (inline ? 15 : 16) || ![page, width, height, x, y].every(Number.isFinite) || page < 1) throw new Error(`Unrecognized image row: ${line}`);
-		return { page, number: Number(cells[1]), type: cells[2]!, width, height, color: cells[5]!, object: inline ? "inline" : `${cells[10]} ${cells[11]}`, xPpi: x, yPpi: y, raw: line };
-	});
-}
-export function parseText(raw: string) {
-	const lines = raw.trimEnd().split(/\r?\n/);
-	if (lines.shift() !== "level\tpage_num\tpar_num\tblock_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext") throw new Error("Unrecognized Poppler TSV header");
-	for (const line of lines) {
-		// Poppler can emit an extra newline after word text; empty records carry no facts.
-		if (line === "") continue;
-		const cells = line.split("\t");
-		if (cells.length < 12 || ![1, 3, 4, 5].includes(Number(cells[0])) || !cells.slice(0, 11).every((cell) => cell.trim() !== "" && Number.isFinite(Number(cell)))) throw new Error("Invalid Poppler TSV row");
-	}
-	return lines.filter((line) => line.startsWith("5\t")).map((line) => {
-		const c = line.split("\t"), values = [c[1], c[6], c[7], c[8], c[9]].map(Number);
-		if (c.length < 12 || !values.every(Number.isFinite)) throw new Error("Invalid text rectangle");
-		return { page: values[0]!, rect: values.slice(1), text: c.slice(11).join("\t") };
-	});
-}
+export { parsePages, parseFonts, parseImages, parseText } from "./pdf-facts.ts";
 
 /** Check a read-only private snapshot. The report retains all subprocess evidence before cleanup. */
 export async function checkPdf(path: string, options: PdfOptions = {}) {
@@ -92,65 +21,29 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 	const design = selection.tier === "deterministic" && selection.checks.includes("design");
 	const accessibility = selection.tier === "deterministic" && selection.checks.includes("accessibility");
 	const bytes = await readFile(path);
-	const sha256 = createHash("sha256").update(bytes).digest("hex");
-	const report = {
-		get feedback(): Feedback { return pdfFeedback(report); },
-		schemaVersion: "pdf-1" as const, run: { id: randomUUID(), startedAt: new Date().toISOString(), runtime: process.version },
-		document: { kind: "pdf" as const, path: resolve(path), sha256, bytes: bytes.length }, policy, selection,
-		machineStatus: "complete" as "complete" | "incomplete", evidence: [] as Evidence[],
-		pdfuaValidation: undefined as Awaited<ReturnType<typeof checkPdfAccessibility>>["validator"] | undefined,
-		facts: { metadata: {} as Record<string, string>, pages: [] as Page[], fonts: [] as ReturnType<typeof parseFonts>, images: [] as ReturnType<typeof parseImages>, words: [] as ReturnType<typeof parseText>,
-			coordinates: { boxes: "PDF default user space, bottom-left origin; UserUnit not extracted", text: "Poppler TSV page presentation, top-left origin, points; not normalized to unrotated CropBox" } },
-		evaluations: [] as { rule: string; outcome: Outcome; reason: string }[], findings: [] as Issue[], needsReview: [] as Issue[],
-	};
-	const evaluate = (rule: string, outcome: Outcome, reason: string) => report.evaluations.push({ rule, outcome, reason });
-	const issue = (rule: string, message: string, remedy: string, evidence: unknown, page?: number, review = false) => {
-		const list = review ? report.needsReview : report.findings;
-		list.push({ id: createHash("sha256").update(JSON.stringify([sha256, rule, page, evidence])).digest("hex"), rule, severity: review ? "moderate" : "serious", confidence: review ? "medium" : "high", location: { documentSha256: sha256, ...(page ? { page } : {}) }, message, remedy, evidence });
-	};
+	const run = { id: randomUUID(), startedAt: new Date().toISOString(), runtime: process.version };
 	const dir = await mkdtemp(join(tmpdir(), "praxity-pdf-"));
 	const snapshot = join(dir, "input.pdf");
 	try {
 		await writeFile(snapshot, bytes, { mode: 0o400 });
 		await chmod(snapshot, 0o400);
-		const tools = ["pdfinfo", "pdffonts", "pdfimages", "pdftotext"];
-		report.evidence.push(...await Promise.all(tools.map((tool) => run(tool, ["-v"]))));
-		const extract = async <T>(rule: string, tool: string, args: string[], parse: (raw: string) => T): Promise<T | undefined> => {
-			const evidence = await run(tool, [...args, snapshot, ...(tool === "pdftotext" ? ["-"] : [])]);
-			report.evidence.push(evidence);
-			try {
-				if (evidence.exitCode !== 0) throw new Error(evidence.error ?? evidence.stderr);
-				const facts = parse(evidence.stdout);
-				evaluate(rule, "passed", "Extraction completed; this is not a quality or conformance verdict.");
-				if (evidence.stderr.trim()) issue(rule, "Poppler reported warnings while reading the PDF. See the evidence.", "Review the diagnostic and regenerate from source if needed.", evidence.stderr, undefined, true);
-				return facts;
-			} catch (error) {
-				report.machineStatus = "incomplete";
-				evaluate(rule, "untested", error instanceof Error ? error.message : String(error));
-				return undefined;
-			}
+		const extraction = await extractPdfFacts(snapshot);
+		const sha256 = extraction.document.sha256;
+		const report = {
+			get feedback(): Feedback { return pdfFeedback(report); },
+			schemaVersion: "pdf-1" as const, run,
+			document: { kind: "pdf" as const, path: resolve(path), sha256, bytes: extraction.document.bytes }, policy, selection,
+			machineStatus: extraction.machineStatus, evidence: extraction.evidence,
+			pdfuaValidation: undefined as Awaited<ReturnType<typeof checkPdfAccessibility>>["validator"] | undefined,
+			facts: extraction.facts,
+			evaluations: [...extraction.evaluations] as { rule: string; outcome: Outcome; reason: string }[], findings: [] as Issue[], needsReview: [] as Issue[],
 		};
-		if (!bytes.subarray(0, 1024).includes(Buffer.from("%PDF-"))) {
-			report.machineStatus = "incomplete";
-			evaluate("pdf.open", "untested", "Input has no PDF header in its first 1024 bytes.");
-		} else {
-			const count = await extract("pdf.open", "pdfinfo", [], (raw) => {
-				for (const line of raw.split(/\r?\n/)) { const m = line.match(/^([^:]+):\s*(.*)$/); if (m) report.facts.metadata[m[1]!] = m[2]!; }
-				const count = Number(report.facts.metadata.Pages);
-				if (!Number.isInteger(count) || count < 1) throw new Error("Missing or invalid page count");
-				if (report.facts.metadata.Encrypted?.startsWith("yes")) throw new Error("Encrypted PDFs are not supported in this slice.");
-				return count;
-			});
-			if (count !== undefined) {
-				report.facts.pages = await extract("page.facts", "pdfinfo", ["-box", "-f", "1", "-l", String(count)], (raw) => parsePages(raw, count)) ?? [];
-				report.facts.fonts = await extract("font.facts", "pdffonts", [], parseFonts) ?? [];
-				report.facts.images = await extract("image.facts", "pdfimages", ["-list"], parseImages) ?? [];
-				report.facts.words = await extract("text.facts", "pdftotext", ["-tsv"], parseText) ?? [];
-			}
-		}
-		for (const rule of ["page.facts", "font.facts", "image.facts", "text.facts"]) {
-			if (!report.evaluations.some((e) => e.rule === rule)) evaluate(rule, "untested", "PDF could not be opened; extraction did not run.");
-		}
+		const evaluate = (rule: string, outcome: Outcome, reason: string) => report.evaluations.push({ rule, outcome, reason });
+		const issue = (rule: string, message: string, remedy: string, evidence: unknown, page?: number, review = false) => {
+			const list = review ? report.needsReview : report.findings;
+			list.push({ id: createHash("sha256").update(JSON.stringify([sha256, rule, page, evidence])).digest("hex"), rule, severity: review ? "moderate" : "serious", confidence: review ? "medium" : "high", location: { documentSha256: sha256, ...(page ? { page } : {}) }, message, remedy, evidence });
+		};
+		for (const warning of extraction.needsReview) issue(warning.rule, warning.message, warning.remedy, warning.evidence, undefined, true);
 		const extracted = (rule: string) => report.evaluations.some((e) => e.rule === rule && e.outcome === "passed");
 		if (design || accessibility) {
 			if (extracted("font.facts")) {

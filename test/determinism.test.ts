@@ -10,14 +10,8 @@ import { after, before, test } from "node:test";
 const run = promisify(execFile);
 const CLI = join(dirname(dirname(fileURLToPath(import.meta.url))), "src", "cli.ts");
 
-/**
- * Determinism is the whole argument for this tool existing beside an agent
- * process that is broader and more variable. If two runs over one unchanged
- * target ever disagree, that argument is gone -- and it would go quietly,
- * because nobody diffs two runs by hand.
- *
- * Three runs, not two: an alternating instability would pass a pair.
- */
+// The module tests audit determinism; these runs also cover report serialization,
+// terminal output and exit codes. Three runs catch an alternating instability.
 
 let root: string;
 
@@ -46,27 +40,27 @@ after(async () => {
 	await rm(root, { recursive: true, force: true });
 });
 
-test("three runs over an unchanged target produce identical findings", async () => {
-	const signatures: string[] = [];
+test("three CLI runs serialize identical reports and preserve output and exit codes", async () => {
+	const results: Array<{ report: string; stdout: string; stderr: string }> = [];
 
 	for (let attempt = 0; attempt < 3; attempt++) {
-		const out = join(root, `run-${attempt}.json`);
+		const out = join(root, "report.json");
 		// Exit code 1 means findings were present, which this fixture guarantees.
-		await run("node", [CLI, "check", root, "--json", out]).catch((error: { code?: number }) => {
-			if (error.code !== 1) throw error;
+		let terminal: { stdout: string; stderr: string } | undefined;
+		await assert.rejects(run(process.execPath, [CLI, "check", root, "--json", out]), (error: unknown) => {
+			assert.ok(error && typeof error === "object" && "code" in error && "stdout" in error && "stderr" in error);
+			assert.equal(error.code, 1);
+			terminal = { stdout: String(error.stdout), stderr: String(error.stderr) };
+			return true;
 		});
-		const report = JSON.parse(await readFile(out, "utf-8")) as {
-			findings: Array<{ rule: string; confidence: string; selector?: string; evidence: string }>;
-		};
-		signatures.push(
-			report.findings
-				.map((f) => `${f.rule}|${f.confidence}|${f.selector ?? ""}|${f.evidence}`)
-				.sort()
-				.join("\n"),
-		);
+		const serialized = await readFile(out, "utf-8");
+		assert.ok(JSON.parse(serialized).findings.length > 0, "fixture produced no findings");
+		assert.ok(terminal);
+		assert.equal(terminal.stderr, "");
+		// Each CLI run starts a server on a new ephemeral port.
+		results.push({ report: serialized.replace(/http:\/\/127\.0\.0\.1:\d+/g, "http://127.0.0.1:<port>"), ...terminal });
 	}
 
-	assert.ok(signatures[0]!.length > 0, "fixture produced no findings, so this proves nothing");
-	assert.equal(signatures[0], signatures[1], "run 1 and run 2 disagreed");
-	assert.equal(signatures[1], signatures[2], "run 2 and run 3 disagreed");
+	assert.deepEqual(results[0], results[1], "run 1 and run 2 disagreed");
+	assert.deepEqual(results[1], results[2], "run 2 and run 3 disagreed");
 });

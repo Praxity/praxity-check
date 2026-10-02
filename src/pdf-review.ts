@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { checkPdf } from "./pdf.ts";
+import { extractPdfFacts } from "./pdf-facts.ts";
 import { preparePdfDesignEvidence } from "./pdf-design.ts";
 import { parseReviewExecutionOption, runPreparedReview, validateReviewExecutionOptions, type ReviewExecutionOptions } from "./review-runner.ts";
 
@@ -225,9 +225,9 @@ export async function preparePdfReview(path: string, options: { tier: CheckTier 
 	try {
 		const snapshot = join(dir, "input.pdf");
 		await writeFile(snapshot, bytes, { mode: 0o400 });
-		const report = await checkPdf(snapshot, { tier: "inference", checks: checks.join(","), pdfua: "off" });
-		if (report.machineStatus !== "complete") throw new Error("PDF facts could not be extracted; run check for diagnostics");
-		const pages = selectReviewPages(report.facts.pages.length, options.pages);
+		const extraction = await extractPdfFacts(snapshot);
+		if (extraction.machineStatus !== "complete") throw new Error("PDF facts could not be extracted; run check for diagnostics");
+		const pages = selectReviewPages(extraction.facts.pages.length, options.pages);
 		const rendererVersion = await exec("pdftoppm", ["-v"], { timeout: 10_000, maxBuffer: 1024 * 1024 });
 		const artifacts = [];
 		for (const page of pages) {
@@ -236,13 +236,13 @@ export async function preparePdfReview(path: string, options: { tier: CheckTier 
 			const result = await exec("pdftoppm", args, { timeout: 30_000, maxBuffer: 1024 * 1024 });
 			const png = await readFile(join(dir, `${prefix}.png`));
 			await chmod(join(dir, `${prefix}.png`), 0o600);
-			const facts = { geometry: report.facts.pages[page - 1], words: report.facts.words.filter((w) => w.page === page), images: report.facts.images.filter((i) => i.page === page), coordinates: report.facts.coordinates };
+			const facts = { geometry: extraction.facts.pages[page - 1], words: extraction.facts.words.filter((w) => w.page === page), images: extraction.facts.images.filter((i) => i.page === page), coordinates: extraction.facts.coordinates };
 			const factsBytes = JSON.stringify(facts, null, 2);
 			await writeFile(join(dir, `${prefix}.json`), factsBytes, { mode: 0o600 });
-			artifacts.push({ page, geometry: report.facts.pages[page - 1], renderPixels: { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, image: `${prefix}.png`, facts: `${prefix}.json`, factsSha256: hash(factsBytes), imageSha256: createHash("sha256").update(png).digest("hex"), render: { tool: "pdftoppm", args, stdout: result.stdout, stderr: result.stderr } });
+			artifacts.push({ page, geometry: extraction.facts.pages[page - 1], renderPixels: { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, image: `${prefix}.png`, facts: `${prefix}.json`, factsSha256: hash(factsBytes), imageSha256: createHash("sha256").update(png).digest("hex"), render: { tool: "pdftoppm", args, stdout: result.stdout, stderr: result.stderr } });
 		}
-		const designEvidence = options.designEvidence ? await preparePdfDesignEvidence(snapshot, dir, report.facts.pages.filter((page) => pages.includes(page.page)), { minTextSizePt: options.minTextSizePt }) : undefined;
-		const manifest = { schemaVersion: canonical ? "pdf-review-bundle-2" : "pdf-review-bundle-1", ...(designEvidence ? { designEvidence } : {}), renderer: { name: "pdftoppm", version: `${rendererVersion.stdout}${rendererVersion.stderr}`.trim() }, documentSha256: report.document.sha256, tier: canonical ? "inference" : focus, ...(canonical ? { focus, checks } : {}), pageCount: report.facts.pages.length, selectedPages: pages, coverage: pages.length === report.facts.pages.length ? "all-pages" : "sample", context: { audience: options.audience ?? null, use: options.use ?? null }, artifacts };
+		const designEvidence = options.designEvidence ? await preparePdfDesignEvidence(snapshot, dir, extraction.facts.pages.filter((page) => pages.includes(page.page)), { minTextSizePt: options.minTextSizePt }) : undefined;
+		const manifest = { schemaVersion: canonical ? "pdf-review-bundle-2" : "pdf-review-bundle-1", ...(designEvidence ? { designEvidence } : {}), renderer: { name: "pdftoppm", version: `${rendererVersion.stdout}${rendererVersion.stderr}`.trim() }, documentSha256: extraction.document.sha256, tier: canonical ? "inference" : focus, ...(canonical ? { focus, checks } : {}), pageCount: extraction.facts.pages.length, selectedPages: pages, coverage: pages.length === extraction.facts.pages.length ? "all-pages" : "sample", context: { audience: options.audience ?? null, use: options.use ?? null }, artifacts };
 		const manifestBytes = JSON.stringify(manifest, null, 2);
 		const bundleSha256 = hash(manifestBytes);
 		await writeFile(join(dir, "manifest.json"), manifestBytes, { mode: 0o600 });
