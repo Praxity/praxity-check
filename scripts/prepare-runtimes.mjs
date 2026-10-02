@@ -1,23 +1,66 @@
-import { access, cp, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, open, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 const run = (file, args) => execFileSync(file, args, { encoding: "utf8" }).trim();
 
-export async function browserRuntime(cache) {
+function browserTarget(platform, arch) {
+	if (platform === "darwin" && arch === "arm64") return { directory: "chrome-headless-shell-mac-arm64", executable: "chrome-headless-shell" };
+	if (platform === "win32" && arch === "x64") return { directory: "chrome-headless-shell-win64", executable: "chrome-headless-shell.exe" };
+	throw new Error(`Runtime assembly supports macOS arm64 and Windows x64 only; received ${platform} ${arch}`);
+}
+
+async function windowsExecutable(path) {
+	const executable = await open(path, "r");
+	try {
+		const dos = Buffer.alloc(64);
+		const header = Buffer.alloc(6);
+		const dosRead = await executable.read(dos, 0, dos.length, 0);
+		if (dosRead.bytesRead !== dos.length || dos.toString("ascii", 0, 2) !== "MZ") throw new Error("Browser must be a Windows x64 PE executable");
+		const peRead = await executable.read(header, 0, header.length, dos.readUInt32LE(0x3c));
+		if (peRead.bytesRead !== header.length || header.readUInt32LE(0) !== 0x00004550 || header.readUInt16LE(4) !== 0x8664) throw new Error("Browser must be a Windows x64 PE executable");
+	} finally {
+		await executable.close();
+	}
+}
+
+export async function browserRuntime(cache, { platform = process.platform, arch = process.arch } = {}) {
+	const target = browserTarget(platform, arch);
 	const require = createRequire(import.meta.url);
 	const core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
 	const metadata = JSON.parse(await readFile(join(dirname(core), "browsers.json"), "utf8"));
 	const browser = metadata.browsers.find(item => item.name === "chromium-headless-shell");
+	if (!browser?.revision || !browser.browserVersion) throw new Error("Playwright metadata must include the Chromium headless-shell revision and version");
 	const directory = `chromium_headless_shell-${browser.revision}`;
-	const runtime = join(cache, directory, "chrome-headless-shell-mac-arm64");
-	await access(join(runtime, "chrome-headless-shell"));
+	const runtime = join(cache, directory, target.directory);
+	const executable = join(runtime, target.executable);
+	if (!(await stat(executable)).isFile()) throw new Error(`Browser executable must be a regular file: ${executable}`);
 	await readFile(join(runtime, "LICENSE.headless_shell"));
+	await readFile(join(runtime, "ABOUT"));
+	if (platform === "win32") await windowsExecutable(executable);
 	return { ...browser, directory, playwright: JSON.parse(await readFile(core, "utf8")).version };
+}
+
+function within(path, directory) {
+	const child = relative(directory, path);
+	return child === "" || (!isAbsolute(child) && child !== ".." && !child.startsWith(`..${sep}`));
+}
+
+async function copyRuntime(source, destination, { exclude = [] } = {}) {
+	await cp(source, destination, {
+		recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE,
+		filter: async path => {
+			const parts = relative(source, path).split(/[\\/]/);
+			if (parts.some(part => exclude.includes(part) || part === ".links" || /\.(map|log)$/i.test(part))) return false;
+			const entry = await stat(path);
+			if (!entry.isFile() && !entry.isDirectory()) throw new Error(`Runtime source must contain regular files and directories: ${path}`);
+			return true;
+		},
+	});
 }
 
 async function files(directory) {
@@ -73,37 +116,56 @@ async function relocateJava(java, source, output, supplementalNotices) {
 	}
 }
 
-export async function prepareRuntimes(values) {
-	if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("Runtime assembly supports macOS arm64 only");
-	for (const key of ["poppler", "verapdf", "java", "browsers", "output"]) if (!values[key]) throw new Error(`Required: --${key} <directory>`);
+export async function prepareRuntimes(values, { runCommand = run } = {}) {
+	const platform = values.platform ?? process.platform;
+	const arch = values.arch ?? process.arch;
+	const target = browserTarget(platform, arch);
+	if (platform !== process.platform || arch !== process.arch) throw new Error(`Runtime target ${platform} ${arch} does not match assembly host ${process.platform} ${process.arch}`);
+	const sourceKeys = platform === "win32" ? ["browsers"] : ["poppler", "verapdf", "java", "browsers"];
+	for (const key of [...sourceKeys, "output"]) if (!values[key]) throw new Error(`Required: --${key} <directory>`);
+	if (platform === "win32" && ["poppler", "verapdf", "java"].some(key => values[key])) throw new Error("Windows runtime assembly accepts browsers only; omit --poppler, --verapdf and --java");
 	const output = resolve(values.output);
-	const sources = Object.fromEntries(await Promise.all(["poppler", "verapdf", "java", "browsers"].map(async key => [key, await realpath(values[key])])));
-	for (const source of Object.values(sources)) if (output === source || output.startsWith(source + "/")) throw new Error("Output must be outside source runtime directories");
-	const popplerNotice = await readFile(join(sources.poppler, "NOTICE.md"), "utf8");
-	for (const file of ["pdfinfo", "pdffonts", "pdfimages", "pdftotext", "pdftohtml", "pdftoppm"]) await access(join(sources.poppler, "bin", file));
-	for (const file of ["LICENSE.GPL", "LICENSE.MPL"]) await readFile(join(sources.verapdf, file));
-	await readFile(join(sources.java, "legal/java.base/LICENSE"));
-	const release = await readFile(join(sources.java, "release"), "utf8");
-	if (!/OS_ARCH="aarch64"/.test(release) || !/OS_NAME="Darwin"/.test(release)) throw new Error("Java must target macOS arm64");
-	const browser = await browserRuntime(sources.browsers);
-	const browserExecutable = join(sources.browsers, browser.directory, "chrome-headless-shell-mac-arm64/chrome-headless-shell");
-	if (!run("/usr/bin/lipo", ["-archs", browserExecutable]).split(/\s+/).includes("arm64")) throw new Error("Browser must include arm64");
-	if (!run(browserExecutable, ["--version"]).endsWith(browser.browserVersion)) throw new Error("Browser binary version does not match Playwright metadata");
+	const sources = Object.fromEntries(await Promise.all(sourceKeys.map(async key => [key, await realpath(values[key])])));
+	const outputParent = await realpath(dirname(output));
+	const actualOutput = join(outputParent, relative(dirname(output), output));
+	for (const source of Object.values(sources)) if (within(actualOutput, source)) throw new Error("Output must be outside source runtime directories");
+	let popplerNotice, release;
+	if (platform === "darwin") {
+		popplerNotice = await readFile(join(sources.poppler, "NOTICE.md"), "utf8");
+		for (const file of ["pdfinfo", "pdffonts", "pdfimages", "pdftotext", "pdftohtml", "pdftoppm"]) await access(join(sources.poppler, "bin", file));
+		for (const file of ["LICENSE.GPL", "LICENSE.MPL"]) await readFile(join(sources.verapdf, file));
+		await readFile(join(sources.java, "legal/java.base/LICENSE"));
+		release = await readFile(join(sources.java, "release"), "utf8");
+		if (!/OS_ARCH="aarch64"/.test(release) || !/OS_NAME="Darwin"/.test(release)) throw new Error("Java must target macOS arm64");
+	}
+	const browser = await browserRuntime(sources.browsers, { platform, arch });
+	const browserSource = join(sources.browsers, browser.directory, target.directory);
+	const browserExecutable = join(browserSource, target.executable);
+	if (platform === "darwin" && !runCommand("/usr/bin/lipo", ["-archs", browserExecutable]).split(/\s+/).includes("arm64")) throw new Error("Browser must include arm64");
+	if (runCommand(browserExecutable, ["--version"]).trim().split(/\s+/).at(-1) !== browser.browserVersion) throw new Error("Browser binary version does not match Playwright metadata");
+	const browserNotice = `## Browser\n\nPlaywright ${browser.playwright}, Chromium headless shell ${browser.browserVersion}, revision ${browser.revision}. License and credits: browsers/${browser.directory}/${target.directory}/LICENSE.headless_shell and ABOUT. Only headless operation is supplied.\n`;
+	if (platform === "win32") {
+		await mkdir(output);
+		await copyRuntime(browserSource, join(output, "browsers", browser.directory, target.directory));
+		await writeFile(join(output, "runtime-versions.json"), JSON.stringify({ platform, arch, browser }, null, 2) + "\n");
+		await writeFile(join(output, "NOTICE.md"), `# Windows browser runtime\n\n${browserNotice}`);
+		return output;
+	}
 	await mkdir(output);
-	await cp(sources.poppler, output, { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE });
-	await cp(sources.java, join(output, "java"), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE });
-	await cp(sources.verapdf, join(output, "verapdf"), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE, filter: path => !relative(sources.verapdf, path).split("/").includes("Uninstaller") });
-	await cp(join(sources.browsers, browser.directory), join(output, "browsers", browser.directory), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE });
+	await copyRuntime(sources.poppler, output);
+	await copyRuntime(sources.java, join(output, "java"));
+	await copyRuntime(sources.verapdf, join(output, "verapdf"), { exclude: ["Uninstaller"] });
+	await copyRuntime(browserSource, join(output, "browsers", browser.directory, target.directory));
 	await relocateJava(join(output, "java"), sources.java, output, values["supplemental-notices"]);
 	await writeFile(join(output, "bin/verapdf"), `#!/bin/sh\nset -eu\nRUNTIME_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"\nexport JAVA_HOME="$RUNTIME_DIR/java"\nexport JAVACMD="$JAVA_HOME/bin/java"\nunset CLASSPATH_PREFIX JAVA_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS\nexec "$RUNTIME_DIR/verapdf/verapdf" "$@"\n`, { mode: 0o755 });
 	const javaVersion = run(join(output, "java/bin/java"), ["--version"]);
 	const veraPDFVersion = run(join(output, "bin/verapdf"), ["--version"]);
 	await writeFile(join(output, "runtime-versions.json"), JSON.stringify({ platform: "darwin", arch: "arm64", java: javaVersion, veraPDF: veraPDFVersion, browser, javaRelease: release }, null, 2) + "\n");
-	await writeFile(join(output, "NOTICE.md"), `${popplerNotice}\n\n## Java\n\n${javaVersion}\n\nLicense and third-party notices: java/legal. External library notices, when present: java-external/NOTICE.md and java-external/notices.\n\n## veraPDF\n\n${veraPDFVersion}\n\nProject licenses: verapdf/LICENSE.GPL and verapdf/LICENSE.MPL. Embedded dependency notices remain in verapdf/bin/*.jar.\n\n## Browser\n\nPlaywright ${browser.playwright}, Chromium headless shell ${browser.browserVersion}, revision ${browser.revision}. License and credits: browsers/${browser.directory}/chrome-headless-shell-mac-arm64/LICENSE.headless_shell and ABOUT. Only headless operation is supplied.\n`);
+	await writeFile(join(output, "NOTICE.md"), `${popplerNotice}\n\n## Java\n\n${javaVersion}\n\nLicense and third-party notices: java/legal. External library notices, when present: java-external/NOTICE.md and java-external/notices.\n\n## veraPDF\n\n${veraPDFVersion}\n\nProject licenses: verapdf/LICENSE.GPL and verapdf/LICENSE.MPL. Embedded dependency notices remain in verapdf/bin/*.jar.\n\n${browserNotice}`);
 	return output;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-	const { values } = parseArgs({ options: Object.fromEntries(["poppler", "verapdf", "java", "browsers", "output", "supplemental-notices"].map(name => [name, { type: "string" }])) });
+	const { values } = parseArgs({ options: Object.fromEntries(["platform", "arch", "poppler", "verapdf", "java", "browsers", "output", "supplemental-notices"].map(name => [name, { type: "string" }])) });
 	console.log(await prepareRuntimes(values));
 }
