@@ -234,6 +234,14 @@ test("foreground policy rejects dialogs in the browser process", () => {
 // Switching focus emulation off makes hasFocus() truthful; it moves no focus and sends no keys.
 const injected = (commands: string[]) => commands.filter((command) => command !== "Emulation.setFocusEmulationEnabled");
 
+class FakeClock {
+	#time = 10_000;
+	sleeps: number[] = [];
+	now = () => this.#time;
+	advance(ms: number): void { this.#time += ms; }
+	sleep = async (ms: number): Promise<void> => { this.sleeps.push(ms); this.advance(ms); };
+}
+
 class SyntheticBrowser extends ChromiumJourneyBrowser {
 	url = "http://127.0.0.1:1234/index.html";
 	visible = true;
@@ -244,8 +252,8 @@ class SyntheticBrowser extends ChromiumJourneyBrowser {
 	frame: { url: string; loaderId: string; unreachableUrl?: string } = { url: this.url, loaderId: "loaded" };
 	commands: string[] = [];
 
-	constructor(probe?: ChromiumOptions["probe"]) {
-		super({ executable: "unused", screenshots: "unused", probe });
+	constructor(probe?: ChromiumOptions["probe"], clock?: ChromiumOptions["clock"]) {
+		super({ executable: "unused", screenshots: "unused", probe, clock });
 	}
 
 	override get pid(): number { return 42; }
@@ -267,10 +275,14 @@ class SyntheticBrowser extends ChromiumJourneyBrowser {
 }
 
 test("guard permits a transient modifier after a fresh sample clears it", async () => {
+	const clock = new FakeClock();
+	const started = clock.now();
 	let count = 0;
-	const browser = new SyntheticBrowser({ read: async () => reading(count++ === 0 ? ["Control"] : []) });
-	assert.equal((await browser.guard("http://127.0.0.1:1234")).ok, true);
+	const browser = new SyntheticBrowser({ read: async () => reading(count++ === 0 ? ["Control"] : []) }, clock);
+	assert.deepEqual(await browser.guard("http://127.0.0.1:1234"), { ok: true, detail: "Course" });
 	assert.equal(count, 3, "foreground is checked again after page checks");
+	assert.equal(clock.now() - started, 50);
+	assert.deepEqual(clock.sleeps, [50]);
 });
 
 test("guard acquires the browser from the shell and verifies it before allowing keys", async () => {
@@ -306,32 +318,102 @@ test("guard acquires from a verified taskbar but rejects shell title or class lo
 });
 
 test("guard retries ordinary activation then permits only one Alt unlock attempt", async () => {
+	const clock = new FakeClock();
+	const started = clock.now();
 	let current = shell();
 	const activations: boolean[] = [];
+	const attemptTimes: number[] = [];
 	const browser = new SyntheticBrowser({ read: async () => current, acquire: async (_pid, unlock) => {
 		activations.push(unlock);
+		attemptTimes.push(clock.now() - started);
 		if (activations.length === 3) current = reading();
 		return current;
-	} });
-	assert.equal((await browser.guard("http://127.0.0.1:1234")).ok, true);
+	} }, clock);
+	assert.deepEqual(await browser.guard("http://127.0.0.1:1234"), { ok: true, detail: "Course" });
 	assert.deepEqual(activations, [false, true, false]);
+	assert.deepEqual(attemptTimes, [0, 50, 100]);
+	assert.deepEqual(clock.sleeps, [50, 50]);
 });
 
 test("guard bounds unsuccessful foreground acquisition", async () => {
+	const clock = new FakeClock();
+	const started = clock.now();
 	const activations: boolean[] = [];
-	const browser = new SyntheticBrowser({ read: async () => shell(), acquire: async (_pid, unlock) => { activations.push(unlock); return shell(); } });
+	const attemptTimes: number[] = [];
+	const acquisitionBudgets: (number | undefined)[] = [];
+	const readBudgets: (number | undefined)[] = [];
+	const browser = new SyntheticBrowser({
+		read: async (timeoutMs) => { readBudgets.push(timeoutMs); return shell(); },
+		acquire: async (_pid, unlock, _hwnd, timeoutMs) => {
+			activations.push(unlock);
+			attemptTimes.push(clock.now() - started);
+			acquisitionBudgets.push(timeoutMs);
+			return shell();
+		},
+	}, clock);
 	const result = await browser.guard("http://127.0.0.1:1234");
-	assert.equal(result.ok, false);
-	assert.match(result.detail, /foreground.*(1500 ms|timed out)/);
-	assert.ok(activations.length > 1 && activations.length <= 31);
+	assert.deepEqual(result, { ok: false, detail: "could not acquire the journey browser foreground within 1500 ms" });
+	assert.equal(clock.now() - started, 1500);
+	assert.deepEqual(clock.sleeps, Array(30).fill(50));
+	assert.equal(activations.length, 30);
 	assert.equal(activations.filter(Boolean).length, 1);
+	assert.deepEqual(attemptTimes, Array.from({ length: 30 }, (_, i) => i * 50));
+	assert.deepEqual(acquisitionBudgets, Array.from({ length: 30 }, (_, i) => 1500 - i * 50));
+	assert.deepEqual(readBudgets, [undefined, ...Array.from({ length: 29 }, (_, i) => 1450 - i * 50)]);
 });
 
 test("guard bounds an acquisition adapter that never answers", async () => {
-	const browser = new SyntheticBrowser({ read: async () => shell(), acquire: async () => new Promise(() => {}) });
+	// A real timer proves the default adapter answer limit still fires while acquisition cannot make progress.
+	let attempts = 0;
+	const browser = new SyntheticBrowser({ read: async () => shell(), acquire: async () => { attempts++; return new Promise(() => {}); } });
 	const result = await browser.guard("http://127.0.0.1:1234");
-	assert.equal(result.ok, false);
-	assert.match(result.detail, /foreground acquisition timed out/);
+	assert.deepEqual(result, { ok: false, detail: "journey browser foreground acquisition timed out" });
+	assert.equal(attempts, 1);
+});
+
+test("guard bounds stalled acquisition and polling adapters with the remaining budget even when the clock is stopped", async () => {
+	for (const stalled of ["acquire", "read"] as const) {
+		const clock = new FakeClock();
+		const started = clock.now();
+		const acquisitionBudgets: (number | undefined)[] = [];
+		const readBudgets: (number | undefined)[] = [];
+		const browser = new SyntheticBrowser({
+			read: async (timeoutMs) => {
+				readBudgets.push(timeoutMs);
+				if (stalled === "read" && readBudgets.length === 2) return new Promise(() => {});
+				return shell();
+			},
+			acquire: async (_pid, _unlock, _hwnd, timeoutMs) => {
+				acquisitionBudgets.push(timeoutMs);
+				if (acquisitionBudgets.length === 2) return new Promise(() => {});
+				clock.advance(1449);
+				return shell();
+			},
+		}, clock);
+		assert.deepEqual(await browser.guard("http://127.0.0.1:1234"), { ok: false, detail: "journey browser foreground acquisition timed out" });
+		assert.equal(clock.now() - started, 1499);
+		assert.deepEqual(clock.sleeps, [50]);
+		assert.deepEqual(readBudgets, [undefined, 1]);
+		assert.deepEqual(acquisitionBudgets, stalled === "acquire" ? [1500, 1] : [1500]);
+	}
+});
+
+test("guard retries a modifier returned by acquisition before 300 ms and stops at 300 ms", async () => {
+	for (const elapsed of [299, 300]) {
+		const clock = new FakeClock();
+		let samples = 0;
+		let attempts = 0;
+		const browser = new SyntheticBrowser({
+			read: async () => samples++ === 0 ? shell() : reading(),
+			acquire: async () => { attempts++; clock.advance(elapsed); return reading(["Control"]); },
+		}, clock);
+		assert.deepEqual(await browser.guard("http://127.0.0.1:1234"), elapsed === 299
+			? { ok: true, detail: "Course" }
+			: { ok: false, detail: "keys still held down: Control; the probe cannot identify their source" });
+		assert.equal(attempts, 1);
+		assert.equal(samples, elapsed === 299 ? 3 : 1);
+		assert.deepEqual(clock.sleeps, elapsed === 299 ? [50] : []);
+	}
 });
 
 test("guard never attempts acquisition over a foreign application or security dialog", async () => {
@@ -346,14 +428,17 @@ test("guard never attempts acquisition over a foreign application or security di
 });
 
 test("guard stops when a security dialog appears between activation retries", async () => {
+	const clock = new FakeClock();
 	let samples = 0;
 	const activations: boolean[] = [];
 	const browser = new SyntheticBrowser({
 		read: async () => samples++ === 0 ? shell() : { ...reading([], 7), title: "Windows Security" },
 		acquire: async (_pid, unlock) => { activations.push(unlock); return shell(); },
-	});
-	assert.match((await browser.guard("http://127.0.0.1:1234")).detail, /Windows Security/);
+	}, clock);
+	assert.deepEqual(await browser.guard("http://127.0.0.1:1234"), { ok: false, detail: 'foreground window belongs to process 7 ("Windows Security"), not the journey browser 42' });
+	assert.equal(samples, 2);
 	assert.deepEqual(activations, [false]);
+	assert.deepEqual(clock.sleeps, [50]);
 });
 
 test("guard stops when the acquisition helper reports an interruption before activation", async () => {
@@ -364,21 +449,34 @@ test("guard stops when the acquisition helper reports an interruption before act
 });
 
 test("guard waits for shell modifiers to clear before attempting acquisition", async () => {
+	const clock = new FakeClock();
+	const started = clock.now();
 	let samples = 0;
-	let acquired = false;
-	const browser = new SyntheticBrowser({ read: async () => acquired ? reading() : shell(samples++ === 0 ? ["Control"] : []), acquire: async () => {
-		assert.ok(samples >= 2);
-		acquired = true;
-		return reading();
-	} });
-	assert.equal((await browser.guard("http://127.0.0.1:1234")).ok, true);
+	const attemptTimes: number[] = [];
+	const browser = new SyntheticBrowser({ read: async () => {
+		samples++;
+		return attemptTimes.length ? reading() : shell(samples === 1 ? ["Control"] : []);
+	}, acquire: async () => { attemptTimes.push(clock.now() - started); return reading(); } }, clock);
+	assert.deepEqual(await browser.guard("http://127.0.0.1:1234"), { ok: true, detail: "Course" });
+	assert.equal(samples, 3);
+	assert.deepEqual(attemptTimes, [50]);
+	assert.deepEqual(clock.sleeps, [50]);
 });
 
 test("guard leaves persistent shell modifiers untouched", async () => {
-	let activated = false;
-	const browser = new SyntheticBrowser({ read: async () => shell(["Control", "Alt"]), acquire: async () => { activated = true; return reading(); } });
-	assert.match((await browser.guard("http://127.0.0.1:1234")).detail, /keys still held down/);
-	assert.equal(activated, false);
+	const clock = new FakeClock();
+	const started = clock.now();
+	const sampleTimes: number[] = [];
+	let attempts = 0;
+	const browser = new SyntheticBrowser({
+		read: async () => { sampleTimes.push(clock.now() - started); return shell(["Control", "Alt"]); },
+		acquire: async () => { attempts++; return reading(); },
+	}, clock);
+	assert.deepEqual(await browser.guard("http://127.0.0.1:1234"), { ok: false, detail: "keys still held down: Control, Alt; the probe cannot identify their source" });
+	assert.equal(clock.now() - started, 300);
+	assert.deepEqual(sampleTimes, [0, 50, 100, 150, 200, 250, 300]);
+	assert.deepEqual(clock.sleeps, [50, 50, 50, 50, 50, 50]);
+	assert.equal(attempts, 0);
 });
 
 test("guard verifies the same browser HWND across page checks and subsequent guards", async () => {
@@ -427,21 +525,25 @@ test("foreground acquisition preserves the address-bar guard", async () => {
 });
 
 test("guard stops on a persistent modifier without sending a release", async () => {
+	const clock = new FakeClock();
+	const started = clock.now();
 	let count = 0;
-	const browser = new SyntheticBrowser({ read: async () => { count++; return reading(["Control"]); } });
+	const browser = new SyntheticBrowser({ read: async () => { count++; return reading(["Control"]); } }, clock);
 	const result = await browser.guard("http://127.0.0.1:1234");
-	assert.equal(result.ok, false);
-	assert.match(result.detail, /keys still held down: Control/);
-	assert.ok(count >= 2);
-	assert.deepEqual(injected(browser.commands), []);
+	assert.deepEqual(result, { ok: false, detail: "keys still held down: Control; the probe cannot identify their source" });
+	assert.equal(count, 7);
+	assert.equal(clock.now() - started, 300);
+	assert.deepEqual(clock.sleeps, [50, 50, 50, 50, 50, 50]);
 });
 
 test("guard checks the foreground again when a held modifier clears", async () => {
+	const clock = new FakeClock();
 	let count = 0;
-	const browser = new SyntheticBrowser({ read: async () => count++ === 0 ? reading(["Control"]) : reading([], 7) });
+	const browser = new SyntheticBrowser({ read: async () => count++ === 0 ? reading(["Control"]) : reading([], 7) }, clock);
 	const result = await browser.guard("http://127.0.0.1:1234");
-	assert.equal(result.ok, false);
-	assert.match(result.detail, /process 7/);
+	assert.deepEqual(result, { ok: false, detail: 'foreground window belongs to process 7 ("Course"), not the journey browser 42' });
+	assert.equal(count, 2);
+	assert.deepEqual(clock.sleeps, [50]);
 });
 
 test("guard retains origin, visibility and page-focus checks", async () => {

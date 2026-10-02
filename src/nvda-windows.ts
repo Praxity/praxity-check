@@ -20,7 +20,7 @@ import { promisify } from "node:util";
 import { audioDuckingSetting, evaluateJourney, narrationIntervals, renderJourneyMarkdown, runJourney, settingDifferences, verifyAddressDestination, withJourneySignals, type BrowserEvent, type BrowserObservation, type Corroboration, type FocusedNode, type Journey, type JourneyBrowser, type JourneyEnvironment, type JourneyOutcome, type JourneyRun, type NvdaDriver, type OrientationSnapshot } from "./nvda-journey.ts";
 
 const run = promisify(execFile);
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function within<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -433,6 +433,8 @@ export interface ChromiumOptions {
 	/** Process adapter. The default launches the configured executable with these browser switches. */
 	launch?: (executable: string, args: string[]) => ChildProcess;
 	probe?: Pick<ForegroundAdapter, "read"> & Partial<Pick<ForegroundAdapter, "acquire">>;
+	/** Clock seam for foreground timing so tests can advance the acquisition and settling windows. */
+	clock?: { now: () => number; sleep: (ms: number) => Promise<void> };
 	/** Optional same-origin LMS child used for course corroboration. The guard always reads the top document. */
 	courseFrameSelector?: string;
 	/** Extra switches, for example a host resolver rule that blocks remote hosts. */
@@ -443,6 +445,7 @@ export interface ChromiumOptions {
 /** A headed Chromium-family browser (Chrome, Chrome for Testing or Edge) with a throwaway profile. */
 export class ChromiumJourneyBrowser implements JourneyBrowser {
 	#options: ChromiumOptions;
+	#clock: NonNullable<ChromiumOptions["clock"]>;
 	#child: ChildProcess | undefined;
 	#profile: string | undefined;
 	#port = 0;
@@ -459,6 +462,7 @@ export class ChromiumJourneyBrowser implements JourneyBrowser {
 
 	constructor(options: ChromiumOptions) {
 		this.#options = options;
+		this.#clock = options.clock ?? { now: Date.now, sleep: delay };
 	}
 
 	get pid(): number | undefined {
@@ -672,30 +676,31 @@ export class ChromiumJourneyBrowser implements JourneyBrowser {
 	async #acquireForeground(): Promise<ForegroundReading> {
 		const probe = this.#options.probe;
 		if (!probe) throw new Error("no foreground probe configured");
+		// Adapter answer timeouts use real timers so a hung adapter stays bounded even when the clock seam is stopped.
 		let foreground = await within(probe.read(), 5_000, "foreground probe did not answer within 5 seconds");
-		const started = Date.now();
+		const started = this.#clock.now();
 		const deadline = started + 1_500;
 		let attempts = 0;
 		let unlocked = false;
 		let decision = foregroundGuardDecision(foreground, this.pid, true);
 		while (decision.outcome === "retry" || decision.outcome === "acquire") {
-			if (Date.now() >= deadline) throw new Error("could not acquire the journey browser foreground within 1500 ms");
+			if (this.#clock.now() >= deadline) throw new Error("could not acquire the journey browser foreground within 1500 ms");
 			if (decision.outcome === "acquire") {
 				if (!probe.acquire) throw new Error("foreground probe cannot acquire the journey browser");
 				// Try ordinary activation first. At most one Alt pair is allowed per guard.
 				const unlock: boolean = attempts > 0 && !unlocked;
-				const remaining = Math.max(1, deadline - Date.now());
+				const remaining = Math.max(1, deadline - this.#clock.now());
 				foreground = await within(probe.acquire(this.pid!, unlock, this.#foregroundHwnd, remaining), remaining, "journey browser foreground acquisition timed out");
 				attempts++;
 				unlocked ||= unlock;
-				decision = foregroundGuardDecision(foreground, this.pid, Date.now() - started < 300);
+				decision = foregroundGuardDecision(foreground, this.pid, this.#clock.now() - started < 300);
 				if (decision.outcome !== "retry" && decision.outcome !== "acquire") break;
 			}
-			await delay(50);
-			if (Date.now() >= deadline) throw new Error("could not acquire the journey browser foreground within 1500 ms");
-			const remaining = Math.max(1, deadline - Date.now());
+			await this.#clock.sleep(50);
+			if (this.#clock.now() >= deadline) throw new Error("could not acquire the journey browser foreground within 1500 ms");
+			const remaining = Math.max(1, deadline - this.#clock.now());
 			foreground = await within(probe.read(remaining), remaining, "journey browser foreground acquisition timed out");
-			decision = foregroundGuardDecision(foreground, this.pid, Date.now() - started < 300);
+			decision = foregroundGuardDecision(foreground, this.pid, this.#clock.now() - started < 300);
 		}
 		if (decision.outcome === "stop") throw new Error(decision.detail);
 		if (this.#foregroundHwnd && foreground.hwnd !== this.#foregroundHwnd) throw new Error("the journey browser foreground window changed");
