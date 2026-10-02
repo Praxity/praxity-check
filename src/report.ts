@@ -495,10 +495,18 @@ export function humanSummary(report: AuditReport, minConfidence: Confidence = "h
 		);
 	}
 
-	const failed = report.pages.filter((page) => !page.triage.ok);
+	const failed = report.pages.filter((page) => !page.audited);
 	if (failed.length > 0) {
-		lines.push("", "Pages not checked:");
+		lines.push("", `Pages not checked: ${count("page", failed.length)}.`);
 		for (const page of failed) lines.push(`  ${page.file}: ${page.triage.reason ?? "unknown reason"}`);
+	}
+	const uncheckedStates = report.evaluations.filter((evaluation) =>
+		evaluation.type === "check" && evaluation.check.startsWith("scenario:"));
+	if (uncheckedStates.length > 0) {
+		lines.push("", `States not checked: ${count("state", uncheckedStates.length)}.`);
+		for (const state of uncheckedStates) {
+			if (state.type === "check") lines.push(`  ${state.page}, state ${state.state}: ${state.reason}`);
+		}
 	}
 
 	if (report.network.blockedRequestCount > 0 || report.notes.length > 0) lines.push("");

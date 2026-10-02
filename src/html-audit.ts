@@ -47,30 +47,36 @@ export interface HtmlAuditResult {
 }
 
 /**
- * Audit discovered pages and declared states. The interface gives tests leverage
- * over whole audits. The module's depth hides browser settings, check order,
+ * Audit discovered pages and declared states. The interface lets tests exercise
+ * whole audits. The module's depth hides browser settings, check order,
  * context lifetimes and time limits; probe restoration keeps its locality in
  * checks.ts. Returns page results, blocked requests and the browser version,
  * viewport and colour scheme.
  *
  * A failed check retains earlier check results and records unchecked coverage.
- * Initial navigation or triage failure retains an unaudited page with no findings.
  * The 60s limit covers checks only, after settling, triage and title retrieval.
- * An initial page timeout discards results already gathered for that page and
- * retains only its title, settling note and a page-audit unchecked record. Declared
- * states are then skipped. A scenario page creation, navigation, settling, triage,
- * action or check-run failure records that state as unchecked, discards its
- * gathered results and keeps earlier states. Successful states concatenate their
- * results without deduplication.
+ * A timeout retains completed checks' findings, review items, notes, evaluations
+ * and rules; every unfinished check is recorded as unchecked with the timeout
+ * reason. The page remains audited. After an initial timeout, declared states
+ * are recorded as unchecked and skipped. Scenario timeouts also retain completed
+ * checks and allow later states to run. States concatenate their results without
+ * deduplication.
  *
- * Browser launch, initial context or page creation, initial settling, triage and
- * title retrieval, scenario-context creation and page or scenario-context cleanup
- * failures reject the audit. They do not return partial results, including results
- * from earlier pages or states. Browser-close failures do not replace the outcome.
+ * Initial page creation, navigation, settling, triage or title retrieval failure
+ * retains an unaudited page with no findings and records skipped declared states.
+ * Scenario context or page creation, navigation, settling, triage or action failure
+ * records that state as unchecked. Earlier evidence survives and later pages and
+ * states continue. Page and context cleanup failures become notes, preserving the
+ * evidence. Only browser launch and initial context creation failures reject the
+ * audit. Browser-close failures do not replace the outcome.
  */
-export async function auditHtml(options: HtmlAuditOptions): Promise<HtmlAuditResult> {
+export async function auditHtml(
+	options: HtmlAuditOptions,
+	/** @internal Tests shorten the check deadline without changing production options. */
+	testOptions: { pageAuditTimeoutMs?: number } = {},
+): Promise<HtmlAuditResult> {
 	return withAuditBrowser(async (browser, blockedRequests) => ({
-		pages: await auditPages(browser, options.pages, blockedRequests, options.scenarios, options.auditOrigin, options.allowNetwork),
+		pages: await auditPages(browser, options.pages, blockedRequests, options.scenarios, options.auditOrigin, options.allowNetwork, testOptions.pageAuditTimeoutMs ?? PAGE_AUDIT_TIMEOUT_MS),
 		blockedRequests,
 		environment: {
 			browser: { engine: "chromium", version: browser.version() },
@@ -111,21 +117,6 @@ async function withAuditBrowser<T>(run: (browser: Browser, blockedRequests: Bloc
 	}
 }
 
-async function withPageTimeout<T>(page: Page, run: () => Promise<T>): Promise<T> {
-	let timer: NodeJS.Timeout | undefined;
-	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => {
-			void page.close();
-			reject(new Error(`page audit exceeded ${PAGE_AUDIT_TIMEOUT_MS / 1000}s`));
-		}, PAGE_AUDIT_TIMEOUT_MS);
-	});
-	try {
-		return await Promise.race([run(), timeout]);
-	} finally {
-		clearTimeout(timer);
-	}
-}
-
 /**
  * Each check is isolated. One evaluate exception used to escape here, unwind
  * auditPages and discard every page already audited along with the JSON -- a
@@ -133,7 +124,7 @@ async function withPageTimeout<T>(page: Page, run: () => Promise<T>): Promise<T>
  * recorded as not run, which is materially different from a check that ran and
  * found nothing.
  */
-async function runChecks(page: Page, pageId: string): Promise<CheckResult> {
+async function runChecks(page: Page, pageId: string, timeoutMs: number): Promise<{ result: CheckResult; timedOut: boolean }> {
 	// Order matters: motion must be observed before anything interacts with the
 	// page, and the last group mutates the viewport or document, so it runs after
 	// every check that reads the natural page state.
@@ -151,9 +142,26 @@ async function runChecks(page: Page, pageId: string): Promise<CheckResult> {
 	const evaluations: NonNullable<CheckResult["evaluations"]> = [];
 	const rules = new Map<string, NonNullable<CheckResult["rules"]>[number]>();
 	const untested: NonNullable<CheckResult["untested"]> = [];
+	let timedOut = false;
+	let timer: NodeJS.Timeout | undefined;
+	const timeoutError = new Error(`page audit exceeded ${timeoutMs / 1000}s`);
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => {
+			timedOut = true;
+			reject(timeoutError);
+		}, timeoutMs);
+	});
+	const unchecked = (check: (page: Page, pageId: string) => Promise<CheckResult>, reason: string) => {
+		untested.push({
+			type: "check", check: check.name, page: pageId,
+			state: check === darkSchemeVisuals ? "dark" : "initial", outcome: "untested", reason,
+		});
+		notes.push(`${check.name} did not run on ${pageId}: ${reason}. Treat it as unchecked, not as clean.`);
+	};
 	const run = async (check: (page: Page, pageId: string) => Promise<CheckResult>, newVariantsOnly = false) => {
 		try {
-			const result = await check(page, pageId);
+			// Merge only the race winner, so a late check cannot alter returned evidence.
+			const result = await Promise.race([check(page, pageId), timeout]);
 			const findingKeys = new Set(findings.map((item) => `${item.rule}\0${item.selector ?? ""}`));
 			const reviewKeys = new Set(needsReview.map((item) => `${item.rule}\0${item.selector ?? ""}`));
 			findings.push(...result.findings.filter((item) =>
@@ -166,17 +174,7 @@ async function runChecks(page: Page, pageId: string): Promise<CheckResult> {
 			untested.push(...(result.untested ?? []));
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
-			untested.push({
-				type: "check",
-				check: check.name,
-				page: pageId,
-				state: check === darkSchemeVisuals ? "dark" : "initial",
-				outcome: "untested",
-				reason,
-			});
-			notes.push(
-				`${check.name} did not run on ${pageId}: ${reason} — treat as unchecked, not as clean`,
-			);
+			unchecked(check, reason);
 		}
 	};
 	const checks: Array<{
@@ -187,25 +185,21 @@ async function runChecks(page: Page, pageId: string): Promise<CheckResult> {
 		{ check: darkSchemeVisuals, newVariantsOnly: true },
 		...mutating.map((check) => ({ check })),
 	];
-	for (let index = 0; index < checks.length; index++) {
-		const current = checks[index];
-		if (!current) continue;
-		if (page.isClosed()) {
-			for (const remaining of checks.slice(index)) {
-				untested.push({
-					type: "check",
-					check: remaining.check.name,
-					page: pageId,
-					state: remaining.check === darkSchemeVisuals ? "dark" : "initial",
-					outcome: "untested",
-					reason: "page closed before check ran",
-				});
+	try {
+		for (let index = 0; index < checks.length; index++) {
+			const current = checks[index];
+			if (!current) continue;
+			if (timedOut || page.isClosed()) {
+				const reason = timedOut ? timeoutError.message : "page closed before check ran";
+				for (const remaining of checks.slice(index)) unchecked(remaining.check, reason);
+				break;
 			}
-			break;
+			await run(current.check, current.newVariantsOnly);
 		}
-		await run(current.check, current.newVariantsOnly);
+	} finally {
+		clearTimeout(timer);
 	}
-	return { findings, needsReview, notes, evaluations, rules: [...rules.values()], untested };
+	return { result: { findings, needsReview, notes, evaluations, rules: [...rules.values()], untested }, timedOut };
 }
 
 async function createAuditContext(
@@ -250,6 +244,17 @@ async function createAuditContext(
 	return context;
 }
 
+function uncheckedState(pageId: string, scenario: Scenario, reason: string): CheckResult {
+	return {
+		findings: [],
+		notes: [`state ${scenario.id} did not run on ${pageId}: ${reason}. Treat it as not run, not as passed.`],
+		untested: [{
+			type: "check", check: `scenario:${scenario.id}`, page: pageId, state: scenario.id,
+			outcome: "untested", reason,
+		}],
+	};
+}
+
 async function auditPages(
 	browser: Browser,
 	pages: DiscoveredPage[],
@@ -257,154 +262,114 @@ async function auditPages(
 	scenarios: Scenario[],
 	auditOrigin: string,
 	allowNetwork: boolean,
+	timeoutMs: number,
 ): Promise<PageAudit[]> {
 	const context = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
 	const audits: PageAudit[] = [];
-	for (const discoveredPage of pages) {
-		const blockedBefore = blockedRequests.length;
-		const page = await context.newPage();
-		try {
-			let response;
+	try {
+		for (const discoveredPage of pages) {
+			const blockedBefore = blockedRequests.length;
+			const declaredStates = scenarios.filter((candidate) => candidate.page === discoveredPage.file);
+			const audit: PageAudit = {
+				page: discoveredPage, triage: { ok: false }, audited: false, findings: [], notes: [],
+			};
+			audits.push(audit);
+			let page: Page | undefined;
 			try {
-				response = await page.goto(discoveredPage.url, {
-					waitUntil: "load",
-					timeout: NAVIGATION_TIMEOUT_MS,
-				});
-			} catch (error) {
-				const reason = `navigation failed: ${error instanceof Error ? error.message : String(error)}`;
-				audits.push({
-					page: discoveredPage,
-					triage: { ok: false, reason },
-					audited: false,
-					findings: [],
-					notes: [],
-					untested: [{
-						type: "check",
-						check: "page-audit",
-						page: discoveredPage.file,
-						state: "initial",
-						outcome: "untested",
-						reason,
-					}],
-				});
-				continue;
-			}
-
-			const settleNote = await settle(page);
-			const verdict = await triage(page, response?.status() ?? null, blockedRequests.length - blockedBefore);
-			if (!verdict.ok) {
-				audits.push({
-					page: discoveredPage,
-					triage: verdict,
-					audited: false,
-					findings: [],
-					notes: settleNote ? [`${discoveredPage.file}: ${settleNote}`] : [],
-					untested: [{
-						type: "check",
-						check: "page-audit",
-						page: discoveredPage.file,
-						state: "initial",
-						outcome: "untested",
-						reason: verdict.reason ?? "page triage failed",
-					}],
-				});
-				continue;
-			}
-
-			const title = await page.title();
-			let result: CheckResult;
-			try {
-				result = await withPageTimeout(page, () => runChecks(page, discoveredPage.file));
-			} catch (error) {
-				const reason = error instanceof Error ? error.message : String(error);
-				audits.push({
-					page: discoveredPage,
-					triage: { ok: false, reason },
-					audited: false,
-					title,
-					findings: [],
-					notes: settleNote ? [`${discoveredPage.file}: ${settleNote}`] : [],
-					untested: [{
-						type: "check",
-						check: "page-audit",
-						page: discoveredPage.file,
-						state: "initial",
-						outcome: "untested",
-						reason,
-					}],
-				});
-				continue;
-			}
-			const stateResults = [result];
-			for (const scenario of scenarios.filter((candidate) => candidate.page === discoveredPage.file)) {
-				const stateContext = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
+				let phase = "page creation";
 				try {
-					const statePage = await stateContext.newPage();
-					const blockedBeforeState = blockedRequests.length;
-					const response = await statePage.goto(discoveredPage.url, {
-						waitUntil: "load",
-						timeout: NAVIGATION_TIMEOUT_MS,
+					page = await context.newPage();
+					phase = "navigation";
+					const response = await page.goto(discoveredPage.url, {
+						waitUntil: "load", timeout: NAVIGATION_TIMEOUT_MS,
 					});
-					const settleNote = await settle(statePage);
-					const stateVerdict = await triage(
-						statePage,
-						response?.status() ?? null,
-						blockedRequests.length - blockedBeforeState,
-					);
-					if (!stateVerdict.ok) throw new Error(stateVerdict.reason ?? "page triage failed");
-					await runScenarioActions(statePage, scenario);
-					const stateResult = await withPageTimeout(statePage, () => runChecks(statePage, discoveredPage.file));
-					stateResults.push({
-						findings: stateResult.findings.map((item) => ({ ...item, state: scenario.id })),
-						needsReview: (stateResult.needsReview ?? []).map((item) => ({ ...item, state: scenario.id })),
-						notes: [
-							...(settleNote ? [`${discoveredPage.file}, state ${scenario.id}: ${settleNote}`] : []),
-							...stateResult.notes.map((note) => `state ${scenario.id}: ${note}`),
-						],
-						evaluations: (stateResult.evaluations ?? []).map((evaluation) => ({ ...evaluation, state: scenario.id })),
-						rules: stateResult.rules,
-						untested: (stateResult.untested ?? []).map((evaluation) => ({ ...evaluation, state: scenario.id })),
-					});
+					phase = "settling";
+					const settleNote = await settle(page);
+					if (settleNote) audit.notes.push(`${discoveredPage.file}: ${settleNote}`);
+					phase = "triage";
+					audit.triage = await triage(page, response?.status() ?? null, blockedRequests.length - blockedBefore);
+					if (audit.triage.ok) {
+						phase = "title retrieval";
+						audit.title = await page.title();
+					}
 				} catch (error) {
-					const reason = error instanceof Error ? error.message : String(error);
-					stateResults.push({
-						findings: [],
-						notes: [`state ${scenario.id} did not run on ${discoveredPage.file}: ${reason}. Treat it as not run, not as passed.`],
-						untested: [{
-							type: "check",
-							check: `scenario:${scenario.id}`,
-							page: discoveredPage.file,
-							state: scenario.id,
-							outcome: "untested",
-							reason,
-						}],
-					});
-				} finally {
-					await stateContext.close();
+					audit.triage = { ok: false, reason: `${phase} failed: ${error instanceof Error ? error.message : String(error)}` };
+				}
+				if (!audit.triage.ok || !page) {
+					const reason = audit.triage.reason ?? "page triage failed";
+					const skipped = declaredStates.map((scenario) => uncheckedState(discoveredPage.file, scenario, reason));
+					audit.untested = [{
+						type: "check", check: "page-audit", page: discoveredPage.file,
+						state: "initial", outcome: "untested", reason,
+					}, ...skipped.flatMap((state) => state.untested ?? [])];
+					audit.notes.push(...skipped.flatMap((state) => state.notes));
+					continue;
+				}
+
+				const initial = await runChecks(page, discoveredPage.file, timeoutMs);
+				const stateResults = [initial.result];
+				if (initial.timedOut) {
+					const reason = `initial page audit exceeded ${timeoutMs / 1000}s`;
+					stateResults.push(...declaredStates.map((scenario) => uncheckedState(discoveredPage.file, scenario, reason)));
+				} else for (const scenario of declaredStates) {
+					let stateContext: BrowserContext | undefined;
+					try {
+						stateContext = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
+						const statePage = await stateContext.newPage();
+						const blockedBeforeState = blockedRequests.length;
+						const response = await statePage.goto(discoveredPage.url, {
+							waitUntil: "load", timeout: NAVIGATION_TIMEOUT_MS,
+						});
+						const settleNote = await settle(statePage);
+						const stateVerdict = await triage(
+							statePage, response?.status() ?? null, blockedRequests.length - blockedBeforeState,
+						);
+						if (!stateVerdict.ok) throw new Error(stateVerdict.reason ?? "page triage failed");
+						await runScenarioActions(statePage, scenario);
+						const { result: stateResult } = await runChecks(statePage, discoveredPage.file, timeoutMs);
+						stateResults.push({
+							findings: stateResult.findings.map((item) => ({ ...item, state: scenario.id })),
+							needsReview: (stateResult.needsReview ?? []).map((item) => ({ ...item, state: scenario.id })),
+							notes: [
+								...(settleNote ? [`${discoveredPage.file}, state ${scenario.id}: ${settleNote}`] : []),
+								...stateResult.notes.map((note) => `state ${scenario.id}: ${note}`),
+							],
+							evaluations: (stateResult.evaluations ?? []).map((evaluation) => ({ ...evaluation, state: scenario.id })),
+							rules: stateResult.rules,
+							untested: (stateResult.untested ?? []).map((evaluation) => ({ ...evaluation, state: scenario.id })),
+						});
+					} catch (error) {
+						const reason = error instanceof Error ? error.message : String(error);
+						stateResults.push(uncheckedState(discoveredPage.file, scenario, reason));
+					} finally {
+						try {
+							await stateContext?.close();
+						} catch (error) {
+							audit.notes.push(`state ${scenario.id} context cleanup failed on ${discoveredPage.file}: ${error instanceof Error ? error.message : String(error)}`);
+						}
+					}
+				}
+				audit.audited = true;
+				audit.findings = stateResults.flatMap((state) => state.findings);
+				audit.needsReview = stateResults.flatMap((state) => state.needsReview ?? []);
+				audit.notes.push(...stateResults.flatMap((state) => state.notes));
+				audit.evaluations = stateResults.flatMap((state) => state.evaluations ?? []);
+				audit.rules = stateResults.flatMap((state) => state.rules ?? []);
+				audit.untested = stateResults.flatMap((state) => state.untested ?? []);
+			} finally {
+				try {
+					if (page && !page.isClosed()) await page.close();
+				} catch (error) {
+					audit.notes.push(`page cleanup failed on ${discoveredPage.file}: ${error instanceof Error ? error.message : String(error)}`);
 				}
 			}
-			const combined: CheckResult = {
-				findings: stateResults.flatMap((state) => state.findings),
-				needsReview: stateResults.flatMap((state) => state.needsReview ?? []),
-				notes: stateResults.flatMap((state) => state.notes),
-				evaluations: stateResults.flatMap((state) => state.evaluations ?? []),
-				rules: stateResults.flatMap((state) => state.rules ?? []),
-				untested: stateResults.flatMap((state) => state.untested ?? []),
-			};
-			audits.push({
-				page: discoveredPage,
-				triage: verdict,
-				audited: true,
-				title,
-				findings: combined.findings,
-				needsReview: combined.needsReview,
-				notes: settleNote ? [`${discoveredPage.file}: ${settleNote}`, ...combined.notes] : combined.notes,
-				evaluations: combined.evaluations,
-				rules: combined.rules,
-				untested: combined.untested,
-			});
-		} finally {
-			if (!page.isClosed()) await page.close();
+		}
+	} finally {
+		try {
+			await context.close();
+		} catch (error) {
+			// Keep cleanup evidence with the last page; it applies to the shared context.
+			audits.at(-1)?.notes.push(`initial context cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 	return audits;
