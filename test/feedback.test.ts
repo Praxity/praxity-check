@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { pdfFeedback } from "../src/feedback.ts";
 import { createReport } from "../src/report.ts";
-import { normalizePdfReview } from "../src/pdf-review.ts";
+import { acceptPdfReview } from "../src/pdf-review.ts";
 
 function resolvePointer(report: unknown, pointer: string): unknown {
 	return pointer.slice(1).split("/").reduce<unknown>((value, key) => {
@@ -42,15 +42,15 @@ test("HTML feedback preserves state, unresolved evidence, skipped pages and revi
 	}
 });
 
-test("PDF feedback separates extraction, check domains, sampled inference and partial evidence", () => {
+test("PDF feedback separates extraction, check domains, sampled inference and partial evidence", async () => {
 	const hash = "a".repeat(64);
 	const issue = { id: "font-1", rule: "font.embedding", severity: "serious" as const, confidence: "high" as const,
 		location: { documentSha256: hash }, message: "Font is not embedded.", remedy: "Embed it.", evidence: { font: "Synthetic" } };
 	const finding = { page: 1, confidence: "medium" as const, message: "Instructions overlap.", action: "Increase spacing.", consequence: "Instructions are obscured.", origin: "Unknown source cause.", verification: "Inspect regenerated page.", evidence: { observation: "Two lines overlap." } };
-	const legacy = normalizePdfReview({ schemaVersion: "pdf-review-1", documentSha256: hash, tier: "visual", pagesReviewed: [1], reviewer: { model: "test-model" }, findings: [finding] });
-	const canonical = normalizePdfReview({ schemaVersion: "pdf-review-3", documentSha256: hash, tier: "inference", focus: "visual", checks: ["design"], pagesReviewed: [1], reviewer: { model: "test-model" }, findings: [
+	const legacy = (await acceptPdfReview({ schemaVersion: "pdf-review-1", documentSha256: hash, tier: "visual", pagesReviewed: [1], reviewer: { model: "test-model" }, findings: [finding] }, hash, 2)).normalized;
+	const canonical = (await acceptPdfReview({ schemaVersion: "pdf-review-3", documentSha256: hash, tier: "inference", focus: "visual", checks: ["design"], pagesReviewed: [1], reviewer: { model: "test-model" }, findings: [
 		{ ...finding, check: "design", category: "observed-defect" }, { ...finding, check: "design", category: "suggestion" },
-	] });
+	] }, hash, 2)).normalized;
 	const report: Parameters<typeof pdfFeedback>[0] = {
 		schemaVersion: "pdf-1", run: { id: "00000000-0000-0000-0000-000000000000", startedAt: "2026-09-15", runtime: "test" },
 		document: { kind: "pdf", path: "synthetic.pdf", sha256: hash, bytes: 123 },
