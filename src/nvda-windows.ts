@@ -17,7 +17,7 @@ import { isAuditServerUrl } from "./serve.ts";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
-import { audioDuckingSetting, evaluateStep, logEvents, narrationIntervals, parseNvdaLog, renderJourneyMarkdown, runJourney, settingDifferences, verifyAddressDestination, withJourneySignals, type BrowserEvent, type BrowserObservation, type Corroboration, type FocusedNode, type Journey, type JourneyBrowser, type JourneyEnvironment, type JourneyRun, type NvdaDriver, type OrientationSnapshot } from "./nvda-journey.ts";
+import { audioDuckingSetting, evaluateJourney, narrationIntervals, renderJourneyMarkdown, runJourney, settingDifferences, verifyAddressDestination, withJourneySignals, type BrowserEvent, type BrowserObservation, type Corroboration, type FocusedNode, type Journey, type JourneyBrowser, type JourneyEnvironment, type JourneyOutcome, type JourneyRun, type NvdaDriver, type OrientationSnapshot } from "./nvda-journey.ts";
 
 const run = promisify(execFile);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -800,6 +800,8 @@ export async function runNvdaJourney(target: string, journey: Journey, output: s
 		await mkdir(lock).catch((cause: unknown) => { throw new Error(`Another NVDA journey owns ${lock}. Remove a stale lock only after checking that NVDA and the runner have stopped.`, { cause }); });
 		let probe: ForegroundProbe | undefined;
 		let result: { exitCode: 0 | 1 | 2; jsonPath: string; markdownPath: string };
+		let evidence: JourneyOutcome & { version: 1; journey: Journey; environment: JourneyEnvironment; run: JourneyRun };
+		let rawLogForEvidence: string | null = null;
 		try {
 			signal.throwIfAborted();
 			const running = await runningNvdaProcesses();
@@ -869,24 +871,23 @@ export async function runNvdaJourney(target: string, journey: Journey, output: s
 			environment.settingsNotDefault = settingDifferences(effective);
 			environment.audioDucking = audioDuckingSetting(effective);
 			await writeFile(join(output, "settings.json"), JSON.stringify(effective, null, 2));
-			const events = rawLog === null ? null : logEvents(parseNvdaLog(rawLog));
-			const results = journey.steps.map((step) => {
-				const result = evaluateStep(step, run.records.find((record) => record.id === step.id), events);
-				if (events === null || !events.length) {
-					result.classification = "inconclusive-automation";
-					result.reasons.push("NVDA input/output log is missing or empty; the journey cannot pass without delivery and speech evidence.");
-				}
-				return { ...result, status: result.classification === "expected" ? "pass" : ["inconclusive-automation", "not-run"].includes(result.classification) ? "inconclusive" : "fail" };
-			});
-			const exitCode = signal.aborted || run.stopped || results.some((result) => result.status === "inconclusive") ? 2 : results.some((result) => result.status === "fail") ? 1 : 0;
+			rawLogForEvidence = rawLog;
+			const { results, exitCode } = evaluateJourney(journey, run, rawLog, signal.aborted);
 			const jsonPath = join(output, "journey.json"), markdownPath = join(output, "transcript.md");
-			await writeFile(jsonPath, JSON.stringify({ version: 1, journey, environment, run, results, exitCode }, null, 2));
+			evidence = { version: 1, journey, environment, run, results, exitCode };
+			await writeFile(jsonPath, JSON.stringify(evidence, null, 2));
 			await writeFile(markdownPath, renderJourneyMarkdown(journey, run, results, environment));
 			result = { exitCode, jsonPath, markdownPath };
 		} finally {
 			try { await probe?.restore(); }
 			finally { probe?.close(); await rm(lock, { recursive: true }); }
 		}
-		return { ...result, exitCode: signal.aborted ? 2 : result.exitCode };
+		if (signal.aborted && evidence.exitCode !== 2) {
+			// An interruption during restore arrived after the evidence was written; re-evaluate so
+			// journey.json and the returned exit code agree.
+			evidence = { ...evidence, ...evaluateJourney(journey, evidence.run, rawLogForEvidence, true) };
+			await writeFile(result.jsonPath, JSON.stringify(evidence, null, 2));
+		}
+		return { ...result, exitCode: evidence.exitCode };
 	});
 }

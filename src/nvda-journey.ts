@@ -488,6 +488,15 @@ export interface StepResult {
 	reasons: string[];
 }
 
+export interface JourneyStepResult extends StepResult {
+	status: "pass" | "fail" | "inconclusive";
+}
+
+export interface JourneyOutcome {
+	results: JourneyStepResult[];
+	exitCode: 0 | 1 | 2;
+}
+
 export interface InputEvent extends TimedLogEvent { attribution: "journey" | "address" | "harness" | "unattributed"; keyIndex?: number }
 
 /** NVDA 2026.2's IO log does not record a modifier pressed on its own, so its delivery cannot be verified. */
@@ -669,6 +678,24 @@ export function evaluateStep(step: JourneyStep, record: StepRecord | undefined, 
 		if (unmetSpoken.length) result.reasons.push("Expected speech was not heard and the corroboration cannot say why. Review the speech and page state.");
 	}
 	return result;
+}
+
+/**
+ * The final journey decision: missing-log override, per-step status and exit precedence.
+ * Pure, so the runner can re-evaluate after cleanup if an interruption arrives late.
+ */
+export function evaluateJourney(journey: Journey, run: JourneyRun, rawLog: string | null, interrupted: boolean): JourneyOutcome {
+	const events = rawLog === null ? null : logEvents(parseNvdaLog(rawLog));
+	const results = journey.steps.map((step): JourneyStepResult => {
+		const result = evaluateStep(step, run.records.find((record) => record.id === step.id), events);
+		if (events === null || !events.length) {
+			result.classification = "inconclusive-automation";
+			result.reasons.push("NVDA input/output log is missing or empty; the journey cannot pass without delivery and speech evidence.");
+		}
+		return { ...result, status: result.classification === "expected" ? "pass" : ["inconclusive-automation", "not-run"].includes(result.classification) ? "inconclusive" : "fail" };
+	});
+	const exitCode = interrupted || run.stopped || results.some((result) => result.status === "inconclusive") ? 2 : results.some((result) => result.status === "fail") ? 1 : 0;
+	return { results, exitCode };
 }
 
 // ---------------------------------------------------------------------------
