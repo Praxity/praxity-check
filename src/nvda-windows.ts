@@ -8,8 +8,8 @@ import { guidepupCachePath, nvdaExecutable } from "./guidepup-assets.ts";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { createServer, type Server as NetworkServer } from "node:net";
 import { chromium, type Browser } from "playwright";
@@ -440,6 +440,51 @@ export interface ChromiumOptions {
 	/** Extra switches, for example a host resolver rule that blocks remote hosts. */
 	args?: string[];
 	allowNetwork?: boolean;
+	/** Where Chrome's cached Windows-password check is kept between throwaway profiles; false disables it. */
+	osPasswordCache?: string | false;
+}
+
+// Only Windows Chrome runs this check.
+const DEFAULT_OS_PASSWORD_CACHE = process.platform === "win32" ? join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "praxity-check", "chrome-os-password.json") : false;
+
+/*
+ * Chrome on Windows learns whether the account has a blank password by attempting a sign-in
+ * with an empty one, then caches the answer in the profile's Local State. A throwaway profile
+ * repeats that failed sign-in on every launch, and ten launches within ten minutes lock the
+ * account. Only these two values move between profiles, so Chrome checks once per machine.
+ */
+type OsPasswordCheck = { os_password_blank: boolean; os_password_last_changed: string };
+function osPasswordCheck(value: unknown): OsPasswordCheck | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const { os_password_blank: blank, os_password_last_changed: changed } = value as Record<string, unknown>;
+	return typeof blank === "boolean" && typeof changed === "string" && /^\d{1,20}$/.test(changed) ? { os_password_blank: blank, os_password_last_changed: changed } : undefined;
+}
+
+async function readJson(path: string): Promise<unknown> {
+	try { return JSON.parse(await readFile(path, "utf8")); }
+	catch (error) {
+		// A missing or half-written file only means Chrome checks again; other read errors are real.
+		if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return undefined;
+		throw error;
+	}
+}
+
+/** Write the cached check into a fresh profile's Local State before Chrome starts. Returns whether it did. */
+export async function seedChromeOsPasswordCheck(profile: string, cache: string): Promise<boolean> {
+	const check = osPasswordCheck(await readJson(cache));
+	if (!check) return false;
+	await writeFile(join(profile, "Local State"), JSON.stringify({ password_manager: check }));
+	return true;
+}
+
+/** Keep Chrome's check from a finished profile for the next one. Returns whether there was one to keep. */
+export async function keepChromeOsPasswordCheck(profile: string, cache: string): Promise<boolean> {
+	const state = await readJson(join(profile, "Local State"));
+	const check = osPasswordCheck(state && typeof state === "object" ? (state as Record<string, unknown>).password_manager : undefined);
+	if (!check) return false;
+	await mkdir(dirname(cache), { recursive: true });
+	await writeFile(cache, JSON.stringify(check));
+	return true;
 }
 
 /** A headed Chromium-family browser (Chrome, Chrome for Testing or Edge) with a throwaway profile. */
@@ -499,6 +544,8 @@ export class ChromiumJourneyBrowser implements JourneyBrowser {
 		}
 		this.#profile = await mkdtemp(join(tmpdir(), "praxity-nvda-browser-"));
 		await writeFile(join(this.#profile, "First Run"), "");
+		const osPasswordCache = this.#options.osPasswordCache ?? DEFAULT_OS_PASSWORD_CACHE;
+		if (osPasswordCache) await seedChromeOsPasswordCheck(this.#profile, osPasswordCache);
 		const launch = this.#options.launch ?? ((executable: string, args: string[]) => spawn(executable, args, { stdio: "ignore", windowsHide: false }));
 		this.#child = launch(this.#options.executable, [
 			`--user-data-dir=${this.#profile}`,
@@ -817,7 +864,11 @@ export class ChromiumJourneyBrowser implements JourneyBrowser {
 		this.#networkDeny = undefined;
 		if (deny) await new Promise<void>((resolve, reject) => deny.close((error) => error ? reject(error) : resolve()));
 		if (running()) throw new Error("journey browser did not exit", { cause: disconnectError });
-		if (this.#profile) await rm(this.#profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+		if (this.#profile) {
+			const osPasswordCache = this.#options.osPasswordCache ?? DEFAULT_OS_PASSWORD_CACHE;
+			try { if (osPasswordCache) await keepChromeOsPasswordCheck(this.#profile, osPasswordCache); }
+			finally { await rm(this.#profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); }
+		}
 	}
 }
 
