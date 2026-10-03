@@ -1,5 +1,6 @@
 import * as nodeFs from "node:fs/promises";
 import { readFile } from "node:fs/promises";
+import { constants as nodeFsConstants } from "node:fs";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -42,11 +43,20 @@ export function javaEnvironment(env: NodeJS.ProcessEnv, platform = process.platf
 }
 
 
+// Check's original pdf-accessibility.ts and package launchers select direct Java only on Windows.
+// An executable flag always selects a wrapper. Empty environment values mean no selection.
+function validatorSelection(host: Pick<ComponentHost, "env" | "platform">, executable?: string) {
+ const validator = variable(host, "VERAPDF") || undefined;
+ const java = variable(host, "VERAPDF_JAVA") || undefined;
+ const direct = executable === undefined && host.platform === "win32" && !!java && (!validator || validator === java);
+ return { value: executable ?? (direct ? java : validator), direct,
+  classpath: direct ? variable(host, "VERAPDF_CLASSPATH") : undefined };
+}
+
 export function veraPdfCommand(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, executable: string | undefined, args: string[]) {
- const tool = executable ?? env.VERAPDF ?? "verapdf";
+ const selection = validatorSelection({ env, platform }, executable), tool = selection.value ?? "verapdf";
  if (!tool.trim()) throw new Error("veraPDF executable must not be empty");
- const java = platform === "win32" && executable === undefined && (!env.VERAPDF || env.VERAPDF === env.VERAPDF_JAVA) ? env.VERAPDF_JAVA : undefined;
- return java ? { tool: java, args: veraPdfJavaArgs(env.VERAPDF_CLASSPATH ?? "", args) } : { tool, args };
+ return { tool, args: selection.direct ? veraPdfJavaArgs(selection.classpath ?? "", args) : args };
 }
 
 export function componentLauncher(platform: string) {
@@ -104,8 +114,8 @@ export function componentHost(overrides: Partial<ComponentHost> = {}): Component
   }, ...overrides };
 }
 
-function variable(host: ComponentHost, key: string) {
- return host.platform === "win32" ? Object.entries(host.env).find(([name]) => name.toUpperCase() === key)?.[1] : host.env[key];
+function variable(host: Pick<ComponentHost, "env" | "platform">, key: string) {
+ return host.platform === "win32" ? Object.entries(host.env).find(([name]) => name.toUpperCase() === key.toUpperCase())?.[1] : host.env[key];
 }
 
 export function componentsDirectory(host: Pick<ComponentHost, "env" | "platform" | "home"> & Partial<Pick<ComponentHost, "path">>): string {
@@ -126,8 +136,8 @@ const javaTargets: Record<string, { file: string; sha256: string; size: number }
  "linux-arm64": { file: "OpenJDK17U-jre_aarch64_linux_hotspot_17.0.20.1_1.tar.gz", sha256: "b8efcd5acc9109fe8d35bed132499643048a257b4f6042906ece37d03c839d77", size: 45989435 },
 };
 
-async function componentDefinitions(host: Pick<ComponentHost, "platform" | "arch">): Promise<Component[]> {
- const browser = await browserDefinition(), target = browserLayout(host.platform, host.arch);
+async function componentDefinitions(host: Pick<ComponentHost, "platform" | "arch"> & Partial<Pick<ComponentHost, "env">>): Promise<Component[]> {
+ const browser = await browserDefinition(), target = browserLayout(host.platform, host.arch, variable({ env: host.env ?? {}, platform: host.platform }, "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE"));
  return [
   { id: "browser", version: browser.browserVersion, purpose: "HTML accessibility audits and interaction evidence", license: "BSD and bundled notices; FFmpeg LGPL-2.1+", checks: ["html"], archives: [], entryPoint: target ? `${browser.directory}/${target.directory}/${target.executable}` : "" },
   { id: "java", version: windowsJavaPins.java.version, purpose: "Run the veraPDF PDF/UA validator", license: "GPL-2.0 with Classpath Exception", checks: ["pdf"], archives: [], entryPoint: `${windowsJavaPins.java.directory}/${host.platform === "darwin" ? "Contents/Home/" : ""}bin/java${host.platform === "win32" ? ".exe" : ""}` },
@@ -196,9 +206,45 @@ export async function checkInventory(root: string, component: Component, host: C
  } catch (e) { if (e instanceof SyntaxError || (e as NodeJS.ErrnoException).code === "ENOENT" || (e instanceof Error && /symlink|non-regular/.test(e.message))) return "damaged"; throw e; }
 }
 
+// Playwright packages/utils/env.ts: only undefined falls through to npm aliases.
+function playwrightVariable(host: ComponentHost, key: string) {
+ return variable(host, key) ?? variable(host, `npm_config_${key.toLowerCase()}`) ?? variable(host, `npm_package_config_${key.toLowerCase()}`);
+}
+
+function browserCache(host: ComponentHost) {
+ const { join, resolve, isAbsolute } = host.path;
+ const override = playwrightVariable(host, "PLAYWRIGHT_BROWSERS_PATH");
+ let cache: string;
+ // Playwright server/registry: "0" means package-local; empty means the OS cache.
+ if (override === "0") {
+  const require = createRequire(import.meta.url);
+  cache = join(dirname(createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json")), ".local-browsers");
+ } else if (override) cache = override;
+ else if (host.platform === "win32") cache = join(variable(host, "LOCALAPPDATA") || join(host.home, "AppData", "Local"), "ms-playwright");
+ else if (host.platform === "darwin") cache = join(host.home, "Library", "Caches", "ms-playwright");
+ else cache = join(variable(host, "XDG_CACHE_HOME") || join(host.home, ".cache"), "ms-playwright");
+ // Relative paths, including OS cache homes, resolve from INIT_CWD or the working directory.
+ return isAbsolute(cache) ? cache : resolve(playwrightVariable(host, "INIT_CWD") || host.cwd, cache);
+}
+
+async function exists(host: ComponentHost, path: string, executable = false) {
+ try { await host.fs.access(path, executable ? nodeFsConstants.X_OK : nodeFsConstants.F_OK); return true; }
+ catch (error) {
+  if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+  throw error;
+ }
+}
+
+// veraPDF 1.30.2 verapdf: JAVACMD, JAVA_HOME (IBM jre/sh/java before bin/java), then PATH.
+// The script discovers JAVA_HOME on Darwin and Gentoo when it is absent.
+async function posixJavaHome(host: ComponentHost, home: string) {
+ const ibm = host.path.join(home, "jre", "sh", "java");
+ return await exists(host, ibm, true) ? ibm : host.path.join(home, "bin", "java");
+}
+
 async function executablePath(host: ComponentHost, value: string) {
  const { join, resolve } = host.path;
- const candidates = /[\\/]/.test(value) ? [resolve(value)] : (variable(host, "PATH") ?? "").split(host.platform === "win32" ? ";" : ":").filter(Boolean).flatMap(dir => host.platform === "win32" ? [join(dir, value), ...[".exe", ".cmd", ".bat"].map(ext => join(dir, value + ext))] : [join(dir, value)]);
+ const candidates = /[\\/]/.test(value) ? [resolve(host.cwd, value)] : (variable(host, "PATH") ?? "").split(host.platform === "win32" ? ";" : ":").filter(Boolean).flatMap(dir => host.platform === "win32" ? [join(dir, value), ...[".exe", ".cmd", ".bat"].map(ext => join(dir, value + ext))] : [join(dir, value)]);
  for (const path of candidates) {
   try { if ((await host.fs.stat(path)).isFile()) return path; }
   catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT" && (e as NodeJS.ErrnoException).code !== "ENOTDIR") throw e; }
@@ -206,30 +252,36 @@ async function executablePath(host: ComponentHost, value: string) {
  return null;
 }
 
-export async function resolveComponent(host: ComponentHost, id: ComponentId, explicit?: string, options: { probeVersion?: boolean } = {}): Promise<ComponentResolution> {
- const { join, resolve } = host.path;
+export async function resolveComponent(host: ComponentHost, id: ComponentId, explicit?: string, options: { probeVersion?: boolean; validatorExecutable?: string } = {}): Promise<ComponentResolution> {
+ const { join } = host.path;
  const component = (await componentDefinitions(host)).find(item => item.id === id)!;
  const missing = (inventory: ComponentResolution["inventory"] = "absent", path: string | null = null): ComponentResolution => ({ id, usable: false, source: null, path, version: null, pinned: null, inventory, reason: `${id === "browser" ? "Browser" : id === "java" ? "Java 17 or newer" : "veraPDF"} is ${inventory === "damaged" ? "damaged" : "not installed"}; checks not run. Run check setup ${component.checks.join(" ")}.` });
  let value = explicit;
+ let selectionName = explicit === undefined ? undefined : "the executable argument";
  let classpath: string | undefined;
- if (id === "verapdf") {
-  if (!value && host.platform === "win32" && (!variable(host, "VERAPDF") || variable(host, "VERAPDF") === variable(host, "VERAPDF_JAVA"))) { value = variable(host, "VERAPDF_JAVA"); classpath = value ? variable(host, "VERAPDF_CLASSPATH") : undefined; }
-  value ??= variable(host, "VERAPDF");
- }
+ let wrapperJava = false;
+ const validator = validatorSelection(host, id === "verapdf" ? explicit : options.validatorExecutable);
+ if (id === "verapdf") { value = validator.value; classpath = validator.classpath; }
  if (id === "java" && value === undefined) {
-  const directJava = host.platform === "win32" && (!variable(host, "VERAPDF") || variable(host, "VERAPDF") === variable(host, "VERAPDF_JAVA"));
-  for (const key of [...(directJava ? ["VERAPDF_JAVA"] : []), "JAVACMD", "JAVA_HOME"]) {
+  // verapdf.bat ignores JAVA_HOME. VERAPDF_JAVA belongs only to Check's direct launcher.
+  const keys = validator.direct ? ["VERAPDF_JAVA"] : host.platform === "win32" ? ["JAVACMD"] : ["JAVACMD", "JAVA_HOME"];
+  for (const key of keys) {
    const override = variable(host, key);
    if (!override) continue;
-   value = key === "JAVA_HOME" ? join(override, "bin", host.platform === "win32" ? "java.exe" : "java") : override;
+   value = key === "JAVA_HOME" ? await posixJavaHome(host, override) : override;
+   selectionName = key;
    break;
   }
+  // A wrapper chooses its own Java; an unrelated managed JRE cannot replace that choice.
+  wrapperJava = options.validatorExecutable !== undefined || !!validator.value && !validator.direct;
+  if (!wrapperJava && !validator.direct) {
+   const definition = (await componentDefinitions(host)).find(item => item.id === "verapdf")!;
+   wrapperJava = await checkInventory(componentDirectory(host, definition), definition, host) !== "intact"
+    && !!await executablePath(host, "verapdf");
+  }
  }
- if (id === "browser" && component.entryPoint && !value && variable(host, "PLAYWRIGHT_BROWSERS_PATH")) {
-  const cache = variable(host, "PLAYWRIGHT_BROWSERS_PATH")!;
-  if (cache === "0") { const require = createRequire(import.meta.url); value = join(dirname(createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json")), ".local-browsers", component.entryPoint); }
-  else value = resolve(variable(host, "INIT_CWD") ?? process.cwd(), cache, component.entryPoint);
- }
+ if (id === "browser" && component.entryPoint && value === undefined && playwrightVariable(host, "PLAYWRIGHT_BROWSERS_PATH"))
+  value = join(browserCache(host), component.entryPoint);
  async function found(path: string, source: "explicit" | "setup" | "system", inventory: ComponentResolution["inventory"], probeTool = path): Promise<ComponentResolution> {
   let version: string | null = null;
   // Validation obtains veraPDF's version from its JSON, so wrappers need no version command.
@@ -245,12 +297,15 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
  if (value !== undefined) {
   if (!value.trim()) throw new Error(`${id} executable must not be empty`);
   const path = await executablePath(host, value);
-  return path ? found(path, "explicit", "unmanaged") : { ...missing("unmanaged", value), source: "explicit" };
+  const result = path ? await found(path, "explicit", "unmanaged") : { ...missing("unmanaged", value), source: "explicit" as const };
+  if (id === "java" && !result.usable && selectionName)
+   result.reason = `Java selected by ${selectionName} at ${value} is unusable${result.version ? ` (version ${result.version})` : ""}. Fix or clear ${selectionName} to use Java 17 or newer; setup cannot replace an explicit selection.`;
+  return result;
  }
  if (!component.entryPoint) return missing();
  const managed = componentDirectory(host, component);
  const inventory = await checkInventory(managed, component, host);
- if (inventory === "intact") {
+ if (inventory === "intact" && !wrapperJava) {
   if (id === "verapdf") {
    const java = await resolveComponent(host, "java");
    classpath = join(managed, "payload", "bin", "*");
@@ -259,14 +314,31 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
   }
   return found(join(managed, component.entryPoint), "setup", inventory);
  }
+ if (id === "java" && host.platform !== "win32") {
+  let home: string | undefined;
+  if (host.platform === "darwin") {
+   if (await exists(host, "/usr/libexec/java_home", true)) {
+    const result = await host.run("/usr/libexec/java_home", [], host.env);
+    if (result.code !== 0 || !result.stdout.trim()) return { ...missing(), reason: "veraPDF's Java home discovery failed; checks not run. Set JAVACMD to Java 17 or newer." };
+    home = result.stdout.trim();
+   } else home = `/System/Library/Frameworks/JavaVM.framework/Versions/${variable(host, "JAVA_VERSION") || "CurrentJDK"}/Home`;
+  } else if (await exists(host, "/etc/gentoo-release")) {
+   const result = await host.run("java-config", ["--jre-home"], host.env);
+   if (result.code !== 0 || !result.stdout.trim()) return { ...missing(), reason: "veraPDF's Java home discovery failed; checks not run. Set JAVACMD to Java 17 or newer." };
+   home = result.stdout.trim();
+  }
+  if (home) {
+   const value = await posixJavaHome(host, home), path = await executablePath(host, value);
+   return path ? found(path, "system", "unmanaged") : missing("unmanaged", value);
+  }
+ }
  if (id === "java" || id === "verapdf") {
   const path = await executablePath(host, id === "java" ? "java" : "verapdf");
   if (path) return { ...await found(path, "system", "unmanaged"), ...(inventory === "damaged" ? { inventory } : {}) };
  }
  // Existing developer Playwright caches remain usable without requiring setup.
  if (id === "browser") {
-  const cache = host.platform === "win32" ? join(variable(host, "LOCALAPPDATA") ?? join(host.home, "AppData", "Local"), "ms-playwright") : host.platform === "darwin" ? join(host.home, "Library", "Caches", "ms-playwright") : join(variable(host, "XDG_CACHE_HOME") ?? join(host.home, ".cache"), "ms-playwright");
-  const path = await executablePath(host, join(cache, component.entryPoint));
+  const path = await executablePath(host, join(browserCache(host), component.entryPoint));
   if (path) return { ...await found(path, "explicit", "unmanaged"), ...(inventory === "damaged" ? { inventory } : {}) };
  }
  return missing(inventory, inventory === "damaged" ? managed : null);
@@ -286,11 +358,18 @@ export async function doctorCli(args: string[], host = componentHost(), print: (
  print(args.includes("--json") ? JSON.stringify(result, null, 2) : result.components.map(item => `${item.id}: ${item.usable ? "found" : "missing"} | ${item.path ?? "no location"} | version ${item.version ?? "unknown"} | pinned ${item.pinned ?? "unknown"} | inventory ${item.inventory} | ${item.source ?? "missing"}${item.reason ? " | " + item.reason : ""}`).join("\n"));
  return result.exitCode;
 }
-function browserLayout(platform: string, arch: string) {
+// Playwright utils/hostPlatform.ts maps every Windows architecture to win64;
+// registry EXECUTABLE_PATHS describes runtime layouts independently of Check's download pins.
+function browserLayout(platform: string, arch: string, override?: string) {
+ if (override) {
+  if (override === "<unknown>") return null;
+  platform = override === "win64" ? "win32" : override.startsWith("mac") ? "darwin" : "linux";
+  arch = override.endsWith("arm64") ? "arm64" : "x64";
+ }
  if (platform === "darwin" && ["x64", "arm64"].includes(arch)) return { directory: `chrome-headless-shell-mac-${arch}`, executable: "chrome-headless-shell" };
  if (platform === "linux" && arch === "x64") return { directory: "chrome-headless-shell-linux64", executable: "chrome-headless-shell" };
  if (platform === "linux" && arch === "arm64") return { directory: "chrome-linux", executable: "headless_shell" };
- if (platform === "win32" && arch === "x64") return { directory: "chrome-headless-shell-win64", executable: "chrome-headless-shell.exe" };
+ if (platform === "win32") return { directory: "chrome-headless-shell-win64", executable: "chrome-headless-shell.exe" };
  return null;
 }
 export function browserTarget(platform: string, arch: string) {

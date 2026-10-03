@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, posix } from "node:path";
 import test from "node:test";
 import { checkPdfAccessibility } from "../src/pdf-accessibility.ts";
-import { componentHost, componentDirectory, componentManifest, componentsDirectory, doctorCli, resolveComponent, writeInventory, type ComponentHost, type ComponentId } from "../src/components.ts";
+import { componentHost, componentDirectory, componentManifest, componentsDirectory, doctorCli, resolveComponent, writeInventory, veraPdfCommand, type ComponentHost, type ComponentId } from "../src/components.ts";
 
 async function fixture(t: test.TestContext, platform = process.platform as string, arch = process.arch as string) {
  const root = await fs.mkdtemp(join(tmpdir(), "check components "));
@@ -24,10 +25,19 @@ async function fixture(t: test.TestContext, platform = process.platform as strin
    return (fn as Function)(...args);
   };
  } }) : fs;
- const host = componentHost({ env: {}, platform, arch, home, fs: files,
+ const host = componentHost({ env: {}, platform, arch, home, cwd: home, fs: files,
   ...(foreignPosix ? { path: posix } : {}),
   run: async (file, args) => ({ stdout: args.includes("-classpath") ? "veraPDF 1.30.2" : file.includes("java") ? "openjdk 17.0.20.1+1" : file.includes("verapdf") || file.endsWith(".jar") ? "veraPDF 1.30.2" : "Chromium 151.0.7922.34", stderr: "", code: 0 }) });
- host.env = { CHECK_COMPONENTS_DIR: host.path.join(home, "components"), PATH: host.path.join(home, "system") };
+ if (platform === "darwin") {
+  const access = host.fs.access;
+  host.fs = { ...host.fs, access: (async (path, mode) => {
+   if (path === "/usr/libexec/java_home") return;
+   return access(path, mode);
+  }) as typeof fs.access };
+  const run = host.run;
+  host.run = async (file, args, env) => file === "/usr/libexec/java_home" ? { stdout: home, stderr: "", code: 0 } : run(file, args, env);
+ }
+ host.env = { CHECK_COMPONENTS_DIR: host.path.join(home, "components"), PATH: host.path.join(home, platform === "darwin" ? "bin" : "system") };
  return host;
 }
 async function install(host: ComponentHost, id: ComponentId) {
@@ -176,10 +186,12 @@ test("Java overrides follow the active launcher precedence and skip empty variab
   const old = host.path.join(host.home, "old-java");
   await host.fs.mkdir(host.path.dirname(good), { recursive: true });
   await host.fs.writeFile(good, "Java 17"); await host.fs.writeFile(old, "Java 11");
-  host.run = async file => ({ stdout: file === old ? "openjdk 11.0.28" : "openjdk 17.0.20.1+1", stderr: "", code: 0 });
+  host.run = async file => ({ stdout: file === "/usr/libexec/java_home" ? host.home : file === old ? "openjdk 11.0.28" : "openjdk 17.0.20.1+1", stderr: "", code: 0 });
+  const system = host.path.join(host.env.PATH!, platform === "win32" ? "java.exe" : "java");
+  await host.fs.mkdir(host.path.dirname(system), { recursive: true }); await host.fs.writeFile(system, "Java 17", { mode: 0o700 });
   const base = { ...host.env };
   const cases: [string, NodeJS.ProcessEnv, string, boolean][] = [
-   ["empty JAVACMD falls through to JAVA_HOME", { JAVACMD: "", JAVA_HOME: host.path.join(host.home, "jdk") }, good, true],
+   ["empty JAVACMD follows the platform launcher", { JAVACMD: "", JAVA_HOME: host.path.join(host.home, "jdk") }, platform === "win32" ? system : good, true],
    ["empty VERAPDF_JAVA falls through to JAVACMD", { VERAPDF_JAVA: "", JAVACMD: good }, good, true],
    ["JAVACMD beats JAVA_HOME", { JAVACMD: good, JAVA_HOME: host.path.join(host.home, "missing") }, good, true],
    ["active old JAVACMD blocks JAVA_HOME", { JAVACMD: old, JAVA_HOME: host.path.join(host.home, "jdk") }, old, false],
@@ -189,7 +201,7 @@ test("Java overrides follow the active launcher precedence and skip empty variab
   for (const [name, env, path, usable] of cases) await t.test(`${platform}: ${name}`, async () => {
    host.env = { ...base, ...env };
    const java = await resolveComponent(host, "java");
-   assert.equal(java.path, path); assert.equal(java.usable, usable); assert.equal(java.source, "explicit");
+   assert.equal(java.path, path); assert.equal(java.usable, usable); assert.equal(java.source, path === system ? "system" : "explicit");
   });
   await t.test(`${platform}: empty variables allow system Java`, async () => {
    await host.fs.mkdir(base.PATH!, { recursive: true });
@@ -203,7 +215,7 @@ test("Java overrides follow the active launcher precedence and skip empty variab
 
 test("doctor requires successful identifiable version probes", async t => {
  const host = await fixture(t);
- await install(host, "java");
+ host.env.JAVACMD = await install(host, "java");
  const path = join(host.home, "verapdf-wrapper");
  await fs.writeFile(path, "wrapper");
  host.env.VERAPDF = path;
@@ -250,4 +262,192 @@ test("relative Playwright caches resolve from INIT_CWD", async t => {
  assert.equal(await doctorCli(["html"], host, () => {}), 0);
  host.env.PLAYWRIGHT_BROWSERS_PATH = resolve(host.env.INIT_CWD, "browser-cache");
  assert.equal((await resolveComponent(host, "browser")).path, path);
+});
+
+
+test("empty veraPDF variables allow managed and system validators", async t => {
+ for (const source of ["setup", "system"] as const) await t.test(source, async t => {
+  const host = await fixture(t, "win32");
+  const path = source === "setup" ? await install(host, "verapdf") : host.path.join(host.env.PATH!, "verapdf.bat");
+  if (source === "setup") await install(host, "java");
+  else { await host.fs.mkdir(host.path.dirname(path), { recursive: true }); await host.fs.writeFile(path, "wrapper"); }
+  for (const VERAPDF of [undefined, ""]) {
+   host.env = { ...host.env, VERAPDF, VERAPDF_JAVA: "" };
+   const result = await resolveComponent(host, "verapdf");
+   assert.equal(result.path, path); assert.equal(result.source, source); assert.equal(result.usable, true);
+   assert.equal(veraPdfCommand(host.env, "win32", undefined, []).tool, "verapdf");
+  }
+ });
+});
+
+// veraPDF 1.30.2 verapdf.bat: JAVACMD or PATH, never JAVA_HOME.
+// POSIX verapdf: JAVACMD, JAVA_HOME, then PATH. Check's Windows direct launcher uses VERAPDF_JAVA.
+test("Java selection matches each launcher across absent empty valid old and invalid overrides", async t => {
+ for (const platform of ["win32", "darwin", "linux"]) for (const launcher of ["wrapper", "direct", "matched", "flag"]) await t.test(`${platform} ${launcher}`, async t => {
+  const host = await fixture(t, platform), { join, dirname } = host.path;
+  const system = join(host.env.PATH!, platform === "win32" ? "java.exe" : "java");
+  const goodHome = join(host.home, "good"), oldHome = join(host.home, "old"), invalidHome = join(host.home, "invalid");
+  const good = join(goodHome, "bin", platform === "win32" ? "java.exe" : "java"), old = join(oldHome, "bin", platform === "win32" ? "java.exe" : "java"), invalid = join(invalidHome, "bin", platform === "win32" ? "java.exe" : "java");
+  for (const path of [system, good, old]) { await host.fs.mkdir(dirname(path), { recursive: true }); await host.fs.writeFile(path, "Java", { mode: 0o700 }); }
+  host.run = async file => ({ stdout: file === "/usr/libexec/java_home" ? host.home : file === old ? 'openjdk version "11.0.28"' : 'openjdk version "17.0.20.1"', stderr: "", code: 0 });
+  const values = [undefined, "", good, old, invalid], homes = [undefined, "", goodHome, oldHome, invalidHome];
+  const base = { ...host.env };
+  for (const [i, VERAPDF_JAVA] of values.entries()) for (const [j, JAVACMD] of values.entries()) for (const [k, JAVA_HOME] of homes.entries()) {
+   const wrapper = join(host.home, "verapdf-wrapper");
+   host.env = { ...base, VERAPDF_JAVA, JAVACMD, JAVA_HOME, ...(launcher === "wrapper" ? { VERAPDF: wrapper } : launcher === "matched" ? { VERAPDF: VERAPDF_JAVA } : {}) };
+   const selected = platform === "win32" && ["direct", "matched"].includes(launcher) && VERAPDF_JAVA ? VERAPDF_JAVA
+    : JAVACMD || (platform !== "win32" && JAVA_HOME ? join(JAVA_HOME, "bin", "java") : system);
+   const result = await resolveComponent(host, "java", undefined, launcher === "flag" ? { validatorExecutable: wrapper } : {});
+   const label = `${platform} ${launcher} VERAPDF_JAVA=${i} JAVACMD=${j} JAVA_HOME=${k}`;
+   assert.equal(result.path, selected, label);
+   assert.equal(result.usable, selected !== old && selected !== invalid, label);
+   assert.equal(result.source, selected === system ? "system" : "explicit", label);
+  }
+ });
+});
+
+test("a wrapper uses system Java even when managed Java is installed", async t => {
+ for (const platform of ["win32", "linux"]) await t.test(platform, async t => {
+  const host = await fixture(t, platform), { join, dirname } = host.path;
+  await install(host, "java");
+  const system = join(host.env.PATH!, platform === "win32" ? "java.exe" : "java"), wrapper = join(host.env.PATH!, platform === "win32" ? "verapdf.bat" : "verapdf");
+  await host.fs.mkdir(dirname(system), { recursive: true });
+  for (const path of [system, wrapper]) await host.fs.writeFile(path, "system executable", { mode: 0o700 });
+  for (const VERAPDF of [undefined, wrapper]) {
+   host.env.VERAPDF = VERAPDF;
+   assert.equal((await resolveComponent(host, "java")).path, system);
+  }
+ });
+});
+
+test("validator flags always bypass direct Java and empty flags still fail", async t => {
+ const host = await fixture(t, "win32"), wrapper = host.path.join(host.home, "verapdf-wrapper"), java = host.path.join(host.home, "java.exe");
+ for (const path of [wrapper, java]) await host.fs.writeFile(path, "executable");
+ host.env = { ...host.env, VERAPDF_JAVA: java, VERAPDF_CLASSPATH: "jars/*" };
+ assert.equal((await resolveComponent(host, "verapdf", wrapper)).path, wrapper);
+ await assert.rejects(resolveComponent(host, "verapdf", ""), /must not be empty/);
+ const command = veraPdfCommand(host.env, "win32", wrapper, ["--version"]);
+ assert.equal(command.tool, wrapper); assert.deepEqual(command.args, ["--version"]);
+});
+
+// Ask the installed registry itself, in a new process so it rereads each environment.
+test("browser lookup matches the installed Playwright registry on every runtime target", async t => {
+ const require = createRequire(import.meta.url), core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
+ for (const [platform, arch] of [["win32", "x64"], ["win32", "arm64"], ["darwin", "x64"], ["darwin", "arm64"], ["linux", "x64"], ["linux", "arm64"]]) await t.test(`${platform} ${arch}`, async t => {
+  const host = await fixture(t); host.platform = platform!; host.arch = arch!;
+  const base = { ...host.env, LOCALAPPDATA: join(host.home, "local"), XDG_CACHE_HOME: join(host.home, "xdg") };
+  const cache = join(host.home, "cache"), caller = join(host.home, "caller");
+  const cases: [string, NodeJS.ProcessEnv, boolean][] = [
+   ["absent", {}, true], ["empty", { PLAYWRIGHT_BROWSERS_PATH: "" }, true],
+   ["absolute", { PLAYWRIGHT_BROWSERS_PATH: cache }, true], ["invalid", { PLAYWRIGHT_BROWSERS_PATH: cache }, false],
+   ["relative with INIT_CWD", { PLAYWRIGHT_BROWSERS_PATH: "cache", INIT_CWD: caller }, true],
+   ["relative with empty INIT_CWD", { PLAYWRIGHT_BROWSERS_PATH: "cache", INIT_CWD: "" }, true],
+   ["relative without INIT_CWD", { PLAYWRIGHT_BROWSERS_PATH: "cache" }, true],
+   ["local", { PLAYWRIGHT_BROWSERS_PATH: "0" }, true],
+   ["npm config", { npm_config_playwright_browsers_path: cache }, true],
+   ["npm package config", { npm_package_config_playwright_browsers_path: cache }, true],
+   ["direct beats npm", { PLAYWRIGHT_BROWSERS_PATH: cache, npm_config_playwright_browsers_path: "ignored" }, true],
+   ["empty masks npm", { PLAYWRIGHT_BROWSERS_PATH: "", npm_config_playwright_browsers_path: "ignored" }, true],
+   ["npm config beats package", { npm_config_playwright_browsers_path: cache, npm_package_config_playwright_browsers_path: "ignored" }, true],
+   ["empty npm masks package", { npm_config_playwright_browsers_path: "", npm_package_config_playwright_browsers_path: "ignored" }, true],
+   ["npm INIT_CWD", { PLAYWRIGHT_BROWSERS_PATH: "cache", npm_config_init_cwd: caller }, true],
+   ["empty INIT_CWD masks npm", { PLAYWRIGHT_BROWSERS_PATH: "cache", INIT_CWD: "", npm_config_init_cwd: caller }, true],
+   ["host platform override", { PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: "win64" }, true],
+   ["empty cache home", { LOCALAPPDATA: "", XDG_CACHE_HOME: "" }, true],
+   ["relative cache home", { LOCALAPPDATA: "local", XDG_CACHE_HOME: "xdg", INIT_CWD: caller }, true],
+  ];
+  for (const [name, env, usable] of cases) {
+   host.env = { ...base, ...env };
+   const childEnv = { ...process.env };
+   for (const key of Object.keys(childEnv)) if (/^(PLAYWRIGHT_|npm_config_(playwright_|init_cwd)|npm_package_config_(playwright_|init_cwd)|INIT_CWD|LOCALAPPDATA|XDG_CACHE_HOME)/i.test(key)) delete childEnv[key];
+   Object.assign(childEnv, host.env);
+   const code = `const os=require('os'); os.platform=()=>${JSON.stringify(platform)}; os.arch=()=>${JSON.stringify(arch)}; os.homedir=()=>${JSON.stringify(host.home)}; os.release=()=>'24.0.0'; os.cpus=()=>[{model:${JSON.stringify(arch === "arm64" ? "Apple" : "Intel")}}]; Object.defineProperty(process,'platform',{value:${JSON.stringify(platform)}}); process.cwd=()=>${JSON.stringify(host.cwd)}; const {registry}=require(${JSON.stringify(join(dirname(core), "lib/coreBundle.js"))}).registry; console.log(JSON.stringify(registry.findExecutable('chromium-headless-shell').executablePath()));`;
+   const oracle = spawnSync(process.execPath, ["-e", code], { env: childEnv, encoding: "utf8", windowsHide: true });
+   assert.equal(oracle.status, 0, oracle.stderr);
+   const expected = JSON.parse(oracle.stdout) as string;
+   host.fs = { ...fs, stat: (async path => {
+    if (String(path) === expected && usable) return { isFile: () => true };
+    throw Object.assign(new Error("missing fixture"), { code: "ENOENT" });
+   }) as typeof fs.stat };
+   const result = await resolveComponent(host, "browser");
+   assert.equal(result.usable, usable, `${platform} ${arch}: ${name}: ${expected}`);
+   if (usable) assert.equal(result.path, expected, `${platform} ${arch}: ${name}`);
+  }
+ });
+});
+
+// Optional upstream oracle. CHECK_TEST_VERAPDF_LAUNCHERS contains the unmodified 1.30.2 launchers.
+test("Windows Java lookup agrees with the installed veraPDF batch launcher", { skip: process.platform !== "win32" || !process.env.CHECK_TEST_VERAPDF_LAUNCHERS }, async t => {
+ const host = await fixture(t); host.run = componentHost().run;
+ const source = join(host.home, "Java.cs"), system = join(host.env.PATH!, "java.exe");
+ await fs.mkdir(dirname(system), { recursive: true });
+ await fs.writeFile(source, `using System; using System.Reflection; class Java { static void Main() { Console.WriteLine(Assembly.GetExecutingAssembly().Location); Console.WriteLine(Assembly.GetExecutingAssembly().Location.Contains("old-java") ? "openjdk 11.0.28" : "openjdk 17.0.20.1"); } }`);
+ const compiled = spawnSync(join(process.env.SystemRoot!, "Microsoft.NET/Framework64/v4.0.30319/csc.exe"), ["/nologo", `/out:${system}`, source], { encoding: "utf8", windowsHide: true });
+ assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+ const wrapper = join(process.env.CHECK_TEST_VERAPDF_LAUNCHERS!, "verapdf.bat"), override = join(host.home, "override-java.exe");
+ const old = join(host.home, "old-java.exe");
+ await fs.copyFile(system, override); await fs.copyFile(system, old);
+ const base = { ...process.env, ...host.env, VERAPDF: wrapper, OS: "Windows_NT" };
+ for (const VERAPDF_JAVA of [undefined, "", override, old, "missing-java"]) for (const JAVACMD of [undefined, "", override, old, "missing-java"]) for (const JAVA_HOME of [undefined, "", host.home, "missing-home"]) {
+  host.env = { ...base, VERAPDF_JAVA, JAVACMD, JAVA_HOME };
+  const real = spawnSync(join(process.env.SystemRoot!, "System32/cmd.exe"), ["/d", "/s", "/c", `""${wrapper}" --version"`], { env: host.env, encoding: "utf8", windowsHide: true, windowsVerbatimArguments: true });
+  const expected = real.stdout.split(/\r?\n/).find(line => line.endsWith(".exe"));
+  const result = await resolveComponent(host, "java");
+  if (expected) { assert.equal(result.path, expected); assert.equal(result.usable, expected !== old); }
+  else { assert.notEqual(real.status, 0, real.stdout); assert.equal(result.usable, false); }
+ }
+});
+
+
+test("POSIX Java home and OS discovery match veraPDF 1.30.2", async t => {
+ for (const platform of ["linux", "darwin"]) await t.test(platform, async t => {
+  const host = await fixture(t, platform), { join, dirname } = host.path;
+  const home = join(host.home, "ibm"), ibm = join(home, "jre/sh/java"), standard = join(home, "bin/java");
+  for (const path of [ibm, standard]) { await host.fs.mkdir(dirname(path), { recursive: true }); await host.fs.writeFile(path, "Java", { mode: 0o700 }); }
+  host.env.JAVA_HOME = home;
+  assert.equal((await resolveComponent(host, "java")).path, ibm);
+  host.env.JAVACMD = standard;
+  assert.equal((await resolveComponent(host, "java")).path, standard);
+  delete host.env.JAVA_HOME; delete host.env.JAVACMD;
+  const access = host.fs.access;
+  host.fs = { ...host.fs, access: (async (path, mode) => {
+   if (path === "/etc/gentoo-release" && platform === "linux" || path === "/usr/libexec/java_home" && platform === "darwin") return;
+   return access(path, mode);
+  }) as typeof fs.access };
+  const run = host.run;
+  host.run = async (file, args, env) => file === "java-config" || file === "/usr/libexec/java_home" ? { stdout: home, stderr: "", code: 0 } : run(file, args, env);
+  const java = await resolveComponent(host, "java");
+  assert.equal(java.path, ibm); assert.equal(java.source, "system"); assert.equal(java.usable, true);
+  host.run = async () => ({ stdout: "", stderr: "discovery failed", code: 1 });
+  assert.equal((await resolveComponent(host, "java")).usable, false);
+ });
+});
+
+test("POSIX Java lookup agrees with the installed veraPDF shell launcher", { skip: !process.env.CHECK_TEST_VERAPDF_LAUNCHERS || process.platform === "win32" && !process.env.CHECK_TEST_POSIX_SHELL }, async t => {
+ const host = await fixture(t, "linux"), { join, dirname } = host.path;
+ const shell = process.env.CHECK_TEST_POSIX_SHELL || "/bin/sh";
+ const nativeRoot = await host.fs.realpath(host.home);
+ const unixPath = (path: string) => {
+  if (process.platform !== "win32") return path;
+  const result = spawnSync(shell, ["-c", 'cygpath -u "$1"', "cygpath", path], { encoding: "utf8", windowsHide: true });
+  assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+ };
+ const unixRoot = unixPath(nativeRoot), wrapper = unixPath(join(process.env.CHECK_TEST_VERAPDF_LAUNCHERS!, "verapdf"));
+ const goodHome = join(host.home, "good"), oldHome = join(host.home, "old"), good = join(goodHome, "bin/java"), old = join(oldHome, "bin/java"), system = join(host.env.PATH!, "java");
+ for (const path of [good, old, system]) {
+  await host.fs.mkdir(dirname(path), { recursive: true });
+  await host.fs.writeFile(path, `#!/bin/sh\nprintf '%s\\n' "$0"\necho 'openjdk ${path === old ? "11.0.28" : "17.0.20.1"}'\n`, { mode: 0o700 });
+ }
+ host.run = async file => ({ stdout: file === old ? "openjdk 11.0.28" : "openjdk 17.0.20.1", stderr: "", code: 0 });
+ const base = { ...host.env };
+ const unixValue = (value: string | undefined) => value?.replace(host.home, unixRoot);
+ for (const VERAPDF_JAVA of [undefined, "", old]) for (const JAVACMD of [undefined, "", good, old, join(host.home, "missing-java")]) for (const JAVA_HOME of [undefined, "", goodHome, oldHome, join(host.home, "missing-home")]) {
+  host.env = { ...base, VERAPDF_JAVA, JAVACMD, JAVA_HOME, VERAPDF: wrapper };
+  const env = { ...process.env, VERAPDF_JAVA: unixValue(VERAPDF_JAVA), JAVACMD: unixValue(JAVACMD), JAVA_HOME: unixValue(JAVA_HOME), PATH: unixValue(base.PATH) + ":" + (process.platform === "win32" ? "/usr/bin:/bin" : process.env.PATH) };
+  const real = spawnSync(shell, [wrapper, "--version"], { env, encoding: "utf8", windowsHide: true });
+  const selected = real.stdout.split(/\r?\n/).find(line => line.startsWith(unixRoot));
+  const result = await resolveComponent(host, "java");
+  if (selected) { assert.equal(result.path, selected.replace(unixRoot, host.home)); assert.equal(result.usable, selected !== unixValue(old)); }
+  else { assert.notEqual(real.status, 0, real.stdout); assert.equal(result.usable, false); }
+ }
 });
