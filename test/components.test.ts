@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, posix } from "node:path";
+import { basename, dirname, join, resolve, posix } from "node:path";
 import test from "node:test";
 import { checkPdfAccessibility } from "../src/pdf-accessibility.ts";
 import { componentHost, componentDirectory, componentManifest, componentsDirectory, doctorCli, resolveComponent, writeInventory, veraPdfCommand, type ComponentHost, type ComponentId } from "../src/components.ts";
@@ -578,4 +578,22 @@ test("POSIX Java discovery falls back to PATH when the launcher gets no home", a
    assert.match(result.reason!, /Java home discovery/);
   }
  });
+});
+
+test("setup browser archive filenames match the installed Playwright download table on every target", async () => {
+ const require = createRequire(import.meta.url);
+ const core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
+ // Playwright's registry reads its own download table. A fresh process applies each host target.
+ const code = `const {registry} = require(${JSON.stringify(join(dirname(core), "lib/coreBundle.js"))}).registry;
+ console.log(JSON.stringify(registry.executables().filter(x => ['chromium-headless-shell','ffmpeg','winldd'].includes(x.name)).flatMap(x => x.downloadURLs?.length ? [x.downloadURLs.at(-1)] : [])));`;
+ for (const [platform, arch, target] of [
+  ["win32", "x64", "win64"], ["darwin", "arm64", "mac15-arm64"], ["darwin", "x64", "mac15"],
+  ["linux", "x64", "ubuntu24.04-x64"], ["linux", "arm64", "ubuntu24.04-arm64"],
+ ]) {
+  const installer = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: target! } });
+  assert.equal(installer.status, 0, installer.stderr);
+  const requested = (JSON.parse(installer.stdout) as string[]).map(url => basename(new URL(url).pathname)).sort();
+  const browser = (await componentManifest({ platform: platform!, arch: arch! })).find(c => c.id === "browser")!;
+  assert.deepEqual(browser.archives.map(a => basename(new URL(a.url).pathname)).sort(), requested, target);
+ }
 });

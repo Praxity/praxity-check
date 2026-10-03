@@ -62,11 +62,11 @@ function safeEntryPath(root: string, fileName: string): string {
 function isSymlink(entry: yauzl.Entry): boolean {
     return ((entry.externalFileAttributes >>> 16) & S_IFMT) === S_IFLNK;
 }
-export async function extractZip(zipPath: string, root: string, limits: Limits = {}, files: typeof import("node:fs/promises") = nodeFs): Promise<void> {
+export async function extractZip(zipPath: string | Buffer, root: string, limits: Limits = {}, files: typeof import("node:fs/promises") = nodeFs): Promise<void> {
     const maxTotalBytes = limits.maxTotalBytes ?? MAX_TOTAL_BYTES;
     const maxEntries = limits.maxEntries ?? MAX_ENTRIES;
     const maxRatio = limits.maxRatio ?? MAX_RATIO;
-    const zipBytes = limits.component ? await files.readFile(zipPath) : undefined;
+    const zipBytes = Buffer.isBuffer(zipPath) ? zipPath : limits.component ? await files.readFile(zipPath) : undefined;
     if (zipBytes && zipBytes.length > maxBytes)
         throw new UnsafeArchiveError("Component archive exceeds download limit");
     const seen = new Set<string>();
@@ -75,7 +75,7 @@ export async function extractZip(zipPath: string, root: string, limits: Limits =
         if (zipBytes)
             yauzl.fromBuffer(zipBytes, { lazyEntries: true, autoClose: true }, callback);
         else
-            yauzl.open(zipPath, { lazyEntries: true, autoClose: true }, callback);
+            yauzl.open(zipPath as string, { lazyEntries: true, autoClose: true }, callback);
     });
     let entries = 0;
     let totalBytes = 0;
@@ -194,6 +194,12 @@ async function tarArchive(compressed: Buffer, root: string, files: typeof nodeFs
         target: string;
     }[] = [];
     let pax: Record<string, string> = {}, longName: string | undefined, longLink: string | undefined, count = 0, ended = false;
+    let expandedBytes = 0;
+    const charge = (size: number) => {
+        expandedBytes += size;
+        if (expandedBytes > maxBytes)
+            throw new UnsafeArchiveError(`archive expands beyond ${maxBytes} bytes`);
+    };
     for (let offset = 0; offset + 512 <= bytes.length;) {
         const header = bytes.subarray(offset, offset + 512);
         offset += 512;
@@ -255,6 +261,7 @@ async function tarArchive(compressed: Buffer, root: string, files: typeof nodeFs
         }
         if (type !== "0" && type !== "")
             throw new Error(`Unsupported tar entry type: ${type}`);
+        charge(data.length);
         await files.mkdir(dirname(path), { recursive: true });
         await files.writeFile(path, data, { flag: "wx", mode: tarNumber(header.subarray(100, 108)) & 0o777 });
     }
@@ -267,10 +274,13 @@ async function tarArchive(compressed: Buffer, root: string, files: typeof nodeFs
         for (let index = links.length - 1; index >= 0; index--) {
             const link = links[index]!;
             try {
-                if (!(await files.lstat(link.target)).isFile())
+                const target = await files.lstat(link.target);
+                if (!target.isFile())
                     throw new Error(`Archive link target is not a file: ${link.target}`);
+                // Materialized links consume disk space just like ordinary extracted files.
+                charge(target.size);
                 await files.mkdir(dirname(link.path), { recursive: true });
-                await files.copyFile(link.target, link.path);
+                await files.copyFile(link.target, link.path, nodeFs.constants.COPYFILE_EXCL);
                 links.splice(index, 1);
                 progress = true;
             }
@@ -283,10 +293,11 @@ async function tarArchive(compressed: Buffer, root: string, files: typeof nodeFs
             throw new Error("Archive contains unresolved or cyclic links");
     }
 }
-export async function extractComponentArchive(path: string, root: string, files: typeof nodeFs, validateOnly = false) {
-    const bytes = await files.readFile(path);
+export async function extractComponentArchive(archive: string | { name: string; bytes: Buffer }, root: string, files: typeof nodeFs, validateOnly = false) {
+    const path = typeof archive === "string" ? archive : archive.name;
+    const bytes = typeof archive === "string" ? await files.readFile(archive) : archive.bytes;
     if (path.endsWith(".zip"))
-        await extractZip(path, resolve(root), { maxTotalBytes: maxBytes, component: true, validateOnly }, files);
+        await extractZip(bytes, resolve(root), { maxTotalBytes: maxBytes, component: true, validateOnly }, files);
     else if (path.endsWith(".tar.gz") && !validateOnly)
         await tarArchive(bytes, resolve(root), files);
     else

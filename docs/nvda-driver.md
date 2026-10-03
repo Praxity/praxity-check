@@ -192,3 +192,5 @@ the local fixture in `test/fixtures/nvda-driver` and needs no external site.
 PDF facts and renders use bundled PDFium wasm. PDF/UA validation requires
 veraPDF and Java. Run `praxity-check doctor pdf` to check those components,
 or `node src/cli.ts doctor pdf` from source.
+Run `praxity-check setup pdf` to install them after consent, or
+`node src/cli.ts setup pdf` from source.

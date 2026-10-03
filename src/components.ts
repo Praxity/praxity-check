@@ -138,7 +138,7 @@ export async function componentManifest(host: Pick<ComponentHost, "platform" | "
  if (browser.revision !== "1234" || browser.playwright !== "1.62.1") throw new Error("Playwright changed; update the verified browser archive pins before setup.");
  browserTarget(host.platform, host.arch);
  const shell = browserArchives[host.platform === "win32" ? 0 : host.platform === "darwin" ? host.arch === "arm64" ? 1 : 2 : host.arch === "x64" ? 3 : 4]!;
- const ffmpeg = browserArchives[host.platform === "win32" ? 5 : host.platform === "darwin" ? 6 : host.arch === "x64" ? 7 : 8]!;
+ const ffmpeg = browserArchives[host.platform === "win32" ? 5 : host.platform === "darwin" ? host.arch === "arm64" ? 10 : 6 : host.arch === "x64" ? 7 : 8]!;
  const archives: Record<ComponentId, Archive[]> = {
   browser: [shell, ffmpeg, ...(host.platform === "win32" ? [browserArchives[9]!] : [])],
   java: [{ url: new URL(java.file, runtimePins.java.url).href, sha256: java.sha256, size: java.size }],
@@ -308,7 +308,7 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
   return { id, usable: true, source, path, version, pinned: version === null ? null : version === component.version, inventory, ...(classpath ? { classpath } : {}) };
  }
  if (value !== undefined) {
-  if (!value.trim()) throw new Error(`${id} executable must not be empty`);
+  if (!value.trim()) throw new Error(`${id} executable must not be empty${selectionName ? `; fix or clear ${selectionName}` : ""}`);
   const path = await executablePath(host, value, "explicit");
   const result = path ? await found(path, "explicit", "unmanaged") : { ...missing("unmanaged", value), source: "explicit" as const };
   if (id === "java" && !result.usable && selectionName)
@@ -457,5 +457,10 @@ const browserArchives: Archive[] = [
     "url": "https://cdn.playwright.dev/builds/winldd/1007/winldd-win64.zip",
     "sha256": "0069f0d11d4ad6df068a068c003d22fe7dbec192a47bba64b2e115e9c8ce41d8",
     "size": 128684
+    },
+    {
+        "url": "https://cdn.playwright.dev/builds/ffmpeg/1011/ffmpeg-mac-arm64.zip",
+        "sha256": "7d77eb0d44b59acc4065faa2476c0df1a242cc904c346f820626818c953c5277",
+        "size": 1097141
   }
 ];

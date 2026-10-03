@@ -17,7 +17,7 @@ export type SetupOptions = {
     list?: boolean;
     selectors?: string[];
 };
-export async function downloadVerified(input: Pick<Archive, "url" | "sha256">, path: string, { fs, fetchFile }: Pick<SetupHost, "fs" | "fetchFile">) {
+export async function downloadVerified(input: Pick<Archive, "url" | "sha256">, path: string, { fs, fetchFile }: Pick<SetupHost, "fs" | "fetchFile">, options: { offline?: boolean } = {}) {
     let bytes: Buffer;
     try {
         bytes = await fs.readFile(path);
@@ -25,18 +25,20 @@ export async function downloadVerified(input: Pick<Archive, "url" | "sha256">, p
     catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT")
             throw error;
+        if (options.offline)
+            throw error;
         const response = await fetchFile(input.url);
         if (!response.ok)
             throw new Error(`Download failed (${response.status}): ${input.url}`);
         bytes = Buffer.from(await response.arrayBuffer());
-        // No caller can execute or extract an unverified saved file.
+        // Save only verified bytes. Consumers use this buffer, since the saved path can change.
         if (createHash("sha256").update(bytes).digest("hex") !== input.sha256)
             throw new Error(`SHA-256 mismatch: ${input.url}`);
         await fs.writeFile(path, bytes, { flag: "wx" });
     }
     if (createHash("sha256").update(bytes).digest("hex") !== input.sha256)
         throw new Error(`SHA-256 mismatch: ${path}`);
-    return path;
+    return bytes;
 }
 export function setupHost(overrides: Partial<SetupHost> = {}): SetupHost {
     const host: SetupHost = { ...componentHost(), fetchFile: fetch, confirm: async () => false, print: console.log, manifest: componentManifest,
@@ -122,6 +124,11 @@ export async function setup(options: SetupOptions, host: SetupHost) {
         selected.forEach(component => host.print(setupDescription(component)));
         return { installed: [], refused: [], reused: [] };
     }
+    if (selected.some(component => component.id === "java")) {
+        const java = await resolveComponent(host, "java");
+        if (java.source === "explicit" && !java.usable)
+            throw new Error(java.reason);
+    }
     const result: {
         installed: ComponentId[];
         refused: ComponentId[];
@@ -131,6 +138,9 @@ export async function setup(options: SetupOptions, host: SetupHost) {
         host.print(setupDescription(component));
         const destination = componentDirectory(host, component);
         if (await checkInventory(destination, component, host) === "intact") {
+            const installed = await resolveComponent(host, component.id);
+            if (!installed.usable)
+                throw new Error(installed.reason);
             host.print(`${component.id}: already installed`);
             result.reused.push(component.id);
             continue;
@@ -162,16 +172,14 @@ export async function setup(options: SetupOptions, host: SetupHost) {
             const archives = new Map<string, Buffer>();
             for (const archive of component.archives) {
                 const name = basename(new URL(archive.url).pathname), path = options.from ? join(resolve(options.from), name) : join(work, name);
-                // Offline means no network adapter call, even when an archive is missing.
-                if (options.from)
-                    await host.fs.readFile(path);
-                await downloadVerified(archive, path, host);
+                const bytes = await downloadVerified(archive, path, host, { offline: !!options.from });
+                const verified = { name, bytes };
                 if (component.id === "browser") {
-                    await extractComponentArchive(path, join(work, "validate"), host.fs, true);
-                    archives.set(name, await host.fs.readFile(path));
+                    await extractComponentArchive(verified, join(work, "validate"), host.fs, true);
+                    archives.set(name, bytes);
                 }
                 else
-                    await extractComponentArchive(path, component.id === "java" ? payload : work, host.fs);
+                    await extractComponentArchive(verified, component.id === "java" ? payload : work, host.fs);
             }
             if (component.id === "browser")
                 await host.installBrowser(payload, archives);

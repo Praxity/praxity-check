@@ -21,6 +21,14 @@ test("operator instructions require doctor for component availability", async ()
 	}
 });
 
+test("operator instructions explain setup for optional components", async () => {
+	for (const path of ["skill/SKILL.md", "docs/nvda-driver.md"]) {
+		const text = await readFile(join(repository, path), "utf8");
+		assert.match(text, /setup pdf/, path);
+		if (path === "skill/SKILL.md") assert.match(text, /setup html/, path);
+	}
+});
+
 async function scratch(t) {
 	const directory = await mkdtemp(join(tmpdir(), "standalone check "));
 	t.after(() => rm(directory, { recursive: true, force: true }));

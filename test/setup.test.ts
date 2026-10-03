@@ -245,10 +245,10 @@ test("download verifier preserves the original hash, cache and HTTP failure guar
     const { host, root } = await fixture(t), bytes = Buffer.from("Synthetic official archive"), path = join(root, "verified.zip");
     const pin = { url: "https://official.example/payload.zip", sha256: "e92c343da0eb439f6014bec5c00f840772e33b5399c0ec0d9b84ae62399286f1" };
     host.fetchFile = async () => new Response(bytes);
-    assert.equal(await downloadVerified(pin, path, host), path);
+    assert.deepEqual(await downloadVerified(pin, path, host), bytes);
     assert.deepEqual(await fs.readFile(path), bytes);
     host.fetchFile = async () => { throw new Error("Cached bytes must not download"); };
-    assert.equal(await downloadVerified(pin, path, host), path);
+    assert.deepEqual(await downloadVerified(pin, path, host), bytes);
     await fs.writeFile(path, "corrupt cached bytes");
     await assert.rejects(downloadVerified(pin, path, host), /SHA-256 mismatch/);
     assert.equal(await fs.readFile(path, "utf8"), "corrupt cached bytes");
@@ -264,4 +264,116 @@ test("setup rejects unknown selectors and incomplete options", async (t) => {
     const { host } = await fixture(t);
     await assert.rejects(setupCli(["--from"], host), /incomplete/);
     await assert.rejects(setupCli(["unknown"], host), /Unknown setup/);
+});
+
+for (const offline of [true, false]) {
+    for (const [platform, id] of [["win32", "java"], ["linux", "java"], ["win32", "browser"]] as const) {
+        test(`setup installs verified bytes despite ${offline ? "offline" : "downloaded"} ${platform} ${id} archive replacement`, async t => {
+            const { host, manifest, archiveBytes, root } = await fixture(t, platform);
+            const component = manifest.find(c => c.id === id)!, archive = component.archives[0]!;
+            const name = basename(archive.url), original = archiveBytes.get(archive.url)!;
+            const entry = id === "browser" ? component.entryPoint.split("/").slice(1).join("/") : component.entryPoint;
+            const replacement = (name.endsWith(".tar.gz") ? tar : zip)([{ name: entry, data: "unverified replacement" }]);
+            const from = join(root, "offline");
+            if (offline) {
+                await fs.mkdir(from);
+                await fs.writeFile(join(from, name), original);
+            }
+            let reads = 0;
+            host.fs = { ...fs,
+                readFile: (async (path: string, ...args: unknown[]) => {
+                    const bytes = await (fs.readFile as Function)(path, ...args);
+                    if (offline && basename(String(path)) === name && ++reads === 2)
+                        await fs.writeFile(path, replacement);
+                    return bytes;
+                }) as typeof fs.readFile,
+                writeFile: (async (path: string, data: Buffer, ...args: unknown[]) => {
+                    await (fs.writeFile as Function)(path, !offline && basename(String(path)) === name ? replacement : data, ...args);
+                }) as typeof fs.writeFile,
+            };
+            const result = await setup({ yes: true, selectors: [id], ...(offline ? { from } : {}) }, host);
+            assert.deepEqual(result.installed, [id]);
+            const installed = await resolveComponent(host, id);
+            assert.equal(installed.inventory, "intact");
+            assert.equal(await fs.readFile(installed.path!, "utf8"), id === "java" ? "fixture Java" : "fixture");
+        });
+    }
+}
+
+test("tar link copies count toward the expanded byte limit before copying", async t => {
+    const { root } = await fixture(t);
+    // The filesystem adapter avoids allocating hundreds of MiB in this regression test.
+    for (const type of ["1", "2"]) {
+        for (const count of [511, 512, 600]) {
+            let copies = 0;
+            const files = { ...fs, copyFile: async () => {
+                if (++copies > 511) throw new Error("Copied beyond the byte budget");
+            } };
+            const path = join(root, `links-${type}-${count}.tar.gz`);
+            await fs.writeFile(path, tar([
+                { name: "base", data: "x".repeat(1024 * 1024) },
+                ...Array.from({ length: count }, (_, index) => ({ name: `link-${index}`, type, link: "base" })),
+            ]));
+            const extracted = extractComponentArchive(path, join(root, `links-${type}-${count}`), files);
+            if (count === 511) await assert.doesNotReject(extracted);
+            else await assert.rejects(extracted, /expands beyond/);
+        }
+    }
+});
+
+test("component ZIP and tar archives cap entries at 20000", async t => {
+    const { root } = await fixture(t);
+    const files = { ...fs, mkdir: async () => undefined, writeFile: async () => {} } as typeof fs;
+    for (const format of ["zip", "tar.gz"]) {
+        for (const count of [20000, 20001]) {
+            const bytes = (format === "zip" ? zip : tar)(Array.from({ length: count }, (_, i) => ({ name: `file-${i}`, data: "" })));
+            const extracted = extractComponentArchive({ name: `entries.${format}`, bytes }, join(root, `entries-${format}-${count}`), files, format === "zip");
+            if (count === 20000) await assert.doesNotReject(extracted);
+            else await assert.rejects(extracted, /more than 20000 entries|too many.*entries/i);
+        }
+    }
+});
+
+test("setup rejects unusable explicit Java before downloads even with a managed JRE", async t => {
+    for (const variable of ["JAVA_HOME", "JAVACMD", "VERAPDF_JAVA"]) {
+        for (const installed of [false, true]) {
+            const { host, root } = await fixture(t);
+            if (installed) await setup({ yes: true, selectors: ["java"] }, host);
+            const home = join(root, "old-java"), executable = join(home, "bin", "java.exe");
+            await fs.mkdir(dirname(executable), { recursive: true });
+            await fs.writeFile(executable, "old explicit Java");
+            host.env[variable] = variable === "JAVA_HOME" ? home : executable;
+            const run = host.run;
+            host.run = (file, args, env) => file === executable
+                ? Promise.resolve({ stdout: 'java version "11.0.28"', stderr: "", code: 0 }) : run(file, args, env);
+            host.fetchFile = async () => { throw new Error("Downloaded despite an unusable override"); };
+            await assert.rejects(setup({ yes: true, selectors: ["pdf", "html"] }, host), new RegExp(`${variable}.*[Ff]ix or clear ${variable}`));
+        }
+    }
+});
+
+test("setup diagnoses missing, failing and empty explicit Java selections", async t => {
+    for (const failure of ["missing", "failed probe", "empty"]) {
+        const { host, root } = await fixture(t);
+        const executable = join(root, "java.exe");
+        host.env.javacmd = failure === "empty" ? "" : executable;
+        if (failure === "failed probe") {
+            await fs.writeFile(executable, "failing Java");
+            host.run = async () => ({ stdout: "openjdk 17.0.20.1+1", stderr: "startup failed", code: 1 });
+        }
+        host.fetchFile = async () => { throw new Error("Must not download"); };
+        await assert.rejects(setup({ yes: true, selectors: ["java"] }, host), /[Ff]ix or clear JAVACMD/);
+        assert.deepEqual((await setup({ list: true, selectors: ["java"] }, host)).installed, []);
+    }
+});
+
+test("setup cannot report reuse when intact components fail their probes", async t => {
+    for (const id of ["java", "verapdf", "browser"] as const) {
+        const { host } = await fixture(t);
+        await setup({ yes: true }, host);
+        const installed = await resolveComponent(host, id), run = host.run;
+        host.run = async (file, args, env) => (id === "verapdf" ? args.includes("-classpath") : file === installed.path)
+            ? { stdout: "", stderr: "startup failed", code: 1 } : run(file, args, env);
+        await assert.rejects(setup({ yes: true, selectors: [id] }, host), /did not report a version successfully/);
+    }
 });
