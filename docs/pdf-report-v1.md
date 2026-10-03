@@ -168,3 +168,14 @@ Review observations remain unverified when they disappear.
 Reports and bundles can contain private content and local paths. Review them
 before sharing. Generated CLI reports include feedback.schemaVersion "feedback-1"
 as described in the shared report schema guide.
+
+## Component provenance
+
+HTML reports add optional `environment.components`; PDF reports add optional
+`components`. These are compatible extensions of HTML v4 and PDF pdf-2. Older
+reports remain readable. Each entry records `id`, `version`, `path`, `source`
+(`setup`, `explicit`, `system`, or null when missing), `usable`, `pinned` and
+`inventory` (`intact`, `damaged`, `absent`, or `unmanaged`). An unknown observed
+version is null. Missing components retain not-run coverage and a setup command;
+they never establish a clean result. Only components used or required for the
+selected operation appear in its report.

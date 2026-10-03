@@ -1,10 +1,10 @@
 import { access, cp, mkdir, open, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { browserDefinition, browserTarget } from "../src/components.ts";
 import { javaEnvironment } from "../src/verapdf-runtime.ts";
 import { validateWindowsJava, windowsJavaPins } from "./prepare-windows-java.mjs";
 
@@ -15,12 +15,6 @@ const run = (file, args, options = {}) => {
 	if (result.status !== 0) throw new Error(`${file} exited ${result.status}: ${result.stderr}`);
 	return (result.stdout + result.stderr).trim();
 };
-
-function browserTarget(platform, arch) {
-	if (platform === "darwin" && arch === "arm64") return { directory: "chrome-headless-shell-mac-arm64", executable: "chrome-headless-shell" };
-	if (platform === "win32" && arch === "x64") return { directory: "chrome-headless-shell-win64", executable: "chrome-headless-shell.exe" };
-	throw new Error(`Runtime assembly supports macOS arm64 and Windows x64 only; received ${platform} ${arch}`);
-}
 
 async function windowsExecutable(path) {
 	const executable = await open(path, "r");
@@ -38,19 +32,15 @@ async function windowsExecutable(path) {
 
 export async function browserRuntime(cache, { platform = process.platform, arch = process.arch } = {}) {
 	const target = browserTarget(platform, arch);
-	const require = createRequire(import.meta.url);
-	const core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
-	const metadata = JSON.parse(await readFile(join(dirname(core), "browsers.json"), "utf8"));
-	const browser = metadata.browsers.find(item => item.name === "chromium-headless-shell");
-	if (!browser?.revision || !browser.browserVersion) throw new Error("Playwright metadata must include the Chromium headless-shell revision and version");
-	const directory = `chromium_headless_shell-${browser.revision}`;
+	const browser = await browserDefinition();
+	const directory = browser.directory;
 	const runtime = join(cache, directory, target.directory);
 	const executable = join(runtime, target.executable);
 	if (!(await stat(executable)).isFile()) throw new Error(`Browser executable must be a regular file: ${executable}`);
 	await readFile(join(runtime, "LICENSE.headless_shell"));
 	await readFile(join(runtime, "ABOUT"));
 	if (platform === "win32") await windowsExecutable(executable);
-	return { ...browser, directory, playwright: JSON.parse(await readFile(core, "utf8")).version };
+	return browser;
 }
 
 function within(path, directory) {

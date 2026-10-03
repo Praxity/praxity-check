@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { execFileSync } from "node:child_process";
 import ts from "typescript";
+import { componentLauncher } from "../src/components.ts";
 import { browserRuntime } from "./prepare-runtimes.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -84,7 +85,7 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 	for (const name of Object.keys(pkg.dependencies)) await dependency(name, root);
 	if (values.dependencies) await cp(resolve(values.dependencies), join(output, "dependencies"), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE, filter: path => !/\.(map|log)$/i.test(path) });
 	await writeFile(join(output, "THIRD-PARTY-NOTICES.md"), notices.join("\n\n") + "\n");
-	await writeFile(join(output, platform === "win32" ? "bin/praxity-check.cmd" : "bin/praxity-check"), launcher(platform), { mode: 0o755 });
+	await writeFile(join(output, platform === "win32" ? "bin/praxity-check.cmd" : "bin/praxity-check"), componentLauncher(platform), { mode: 0o755 });
 	const payload = [];
 	async function inventory(directory) {
 		for (const name of (await readdir(directory)).sort()) {
@@ -119,34 +120,6 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 	return output;
 }
 
-function launcher(platform) {
-if (platform === "win32") return `@echo off\r
-setlocal DisableDelayedExpansion\r
-for %%I in ("%~dp0..") do set "CHECK_DIR=%%~fI"\r
-set "PLAYWRIGHT_BROWSERS_PATH=%CHECK_DIR%\\dependencies\\browsers"\r
-if exist "%CHECK_DIR%\\dependencies\\java\\bin\\java.exe" (\r
-  set "JAVA_HOME=%CHECK_DIR%\\dependencies\\java"\r
-  set "JAVACMD=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
-  if exist "%CHECK_DIR%\\dependencies\\verapdf\\bin\\*.jar" (\r
-    set "VERAPDF=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
-    set "VERAPDF_JAVA=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
-    set "VERAPDF_CLASSPATH=%CHECK_DIR%\\dependencies\\verapdf\\bin\\*"\r
-  )\r
-)\r
-"%CHECK_DIR%\\runtime\\node.exe" "%CHECK_DIR%\\lib\\cli.js" %*\r
-exit /b %errorlevel%\r
-`;
-return `#!/bin/sh
-set -eu
-CHECK_DIR="$(CDPATH= cd -- "\${0%/*}/.." && pwd)"
-export PLAYWRIGHT_BROWSERS_PATH="$CHECK_DIR/dependencies/browsers"
-if [ -x "$CHECK_DIR/dependencies/bin/verapdf" ]; then export VERAPDF="$CHECK_DIR/dependencies/bin/verapdf"; fi
-if [ -x "$CHECK_DIR/dependencies/java/bin/java" ]; then
-  export JAVA_HOME="$CHECK_DIR/dependencies/java"
-fi
-exec "$CHECK_DIR/runtime/node" "$CHECK_DIR/lib/cli.js" "$@"
-`;
-}
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 	const { values } = parseArgs({ options: Object.fromEntries(["node", "dependencies", "output", "platform", "arch"].map(name => [name, { type: "string" }])) });

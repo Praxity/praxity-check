@@ -105,7 +105,7 @@ export function htmlFeedback(report: AuditReport): Feedback {
 	return feedback;
 }
 
-type PdfSource = Omit<Awaited<ReturnType<typeof checkPdf>>, "feedback"> & { inferenceReviews?: AcceptedPdfReview["normalized"][] };
+type PdfSource = Omit<Awaited<ReturnType<typeof checkPdf>>, "feedback" | "components"> & { inferenceReviews?: AcceptedPdfReview["normalized"][] };
 const HUMAN_RULES = new Set(["pdfua.conformance", "assistive.technology", "visual.review", "physical.print"]);
 function pdfDomains(rule: string, selected: CheckDomain[]): CheckDomain[] {
 	if (rule.startsWith("pdfua") || rule === "assistive.technology") return ["accessibility"];

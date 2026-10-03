@@ -6,6 +6,7 @@ import { extractPdfFacts } from "./pdf-facts.ts";
 import { pdfFeedback, type Feedback } from "./feedback.ts";
 import { evaluatePdfPrint } from "./pdf-print.ts";
 import { checkPdfAccessibility } from "./pdf-accessibility.ts";
+import type { ComponentResolution } from "./components.ts";
 
 import { normalizePdfPolicy, parseChecks, parseTier, selectChecks, type PdfOptions } from "./selection.ts";
 
@@ -35,6 +36,7 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 			document: { kind: "pdf" as const, path: resolve(path), sha256, bytes: extraction.document.bytes }, policy, selection,
 			machineStatus: extraction.machineStatus, evidence: extraction.evidence,
 			pdfuaValidation: undefined as Awaited<ReturnType<typeof checkPdfAccessibility>>["validator"] | undefined,
+			components: [] as ComponentResolution[],
 			facts: extraction.facts,
 			evaluations: [...extraction.evaluations] as { rule: string; outcome: Outcome; reason: string }[], findings: [] as Issue[], needsReview: [] as Issue[],
 		};
@@ -79,6 +81,7 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 		if (accessibility && policy.pdfua !== "off") {
 			const validation = await checkPdfAccessibility(snapshot, { profile: policy.pdfua === "ua2" ? "ua2" : "ua1", executable: policy.veraPdfPath });
 			report.pdfuaValidation = validation.validator;
+			report.components = validation.components;
 			report.evidence.push(...validation.evidence);
 			report.evaluations.push(...validation.evaluations);
 			if (validation.machineStatus === "incomplete") report.machineStatus = "incomplete";

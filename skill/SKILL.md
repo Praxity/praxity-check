@@ -42,9 +42,10 @@ prepare a new bundle. PDF preparation also needs `--checks accessibility` or
 `--checks design`. Manual HTML preparation exits `0` when it prepared a page,
 or `2` when it could not prepare any, and never exits `1`.
 
-The Windows x64 artifact supplies headless Chromium for HTML checks and review
-preparation. It includes PDFium extraction and rendering, but omits Java and veraPDF. PDF/UA checks therefore
-report incomplete with exit `2` when the validator is absent. PDF image review uses bundled PDFium. Headed browsers
-and screen-reader assets are also absent. On macOS arm64, PDF/UA validation depends on
-the supplied dependency payload. The root file `capabilities.json` lists the
-files and tools. Its entries are not proof that a check can run.
+Run `praxity-check doctor html` before HTML checks or review preparation,
+and `praxity-check doctor pdf` before PDF/UA checks. Doctor exits `0` when
+the required components report usable versions, otherwise `1`.
+PDF facts, renders and image review use bundled PDFium. PDF/UA requires
+veraPDF and Java. Missing components leave checks incomplete with exit `2`.
+The root file `capabilities.json` lists package files; use doctor to check
+component availability.

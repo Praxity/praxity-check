@@ -13,6 +13,14 @@ import { syntheticPdfUa } from "./package-pdf-fixture.mjs";
 const windows = process.platform === "win32";
 const repository = fileURLToPath(new URL("../", import.meta.url));
 
+test("operator instructions require doctor for component availability", async () => {
+	for (const path of ["skill/SKILL.md", "docs/nvda-driver.md"]) {
+		const text = await readFile(join(repository, path), "utf8");
+		assert.match(text, /doctor pdf/, path);
+		assert.doesNotMatch(text, /supplies headless Chromium|supplied dependency payload|Windows packages can include those runtimes/, path);
+	}
+});
+
 async function scratch(t) {
 	const directory = await mkdtemp(join(tmpdir(), "standalone check "));
 	t.after(() => rm(directory, { recursive: true, force: true }));
