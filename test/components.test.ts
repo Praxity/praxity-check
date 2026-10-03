@@ -25,7 +25,7 @@ async function fixture(t: test.TestContext, platform = process.platform as strin
    return (fn as Function)(...args);
   };
  } }) : fs;
- const host = componentHost({ env: {}, platform, arch, home, cwd: home, fs: files,
+ const host = componentHost({ env: {}, platform, arch, home, cwd: home, cpuModels: [arch === "arm64" ? "Apple" : "Intel"], osRelease: "24.0.0", fs: files,
   ...(foreignPosix ? { path: posix } : {}),
   run: async (file, args) => ({ stdout: args.includes("-classpath") ? "veraPDF 1.30.2" : file.includes("java") ? "openjdk 17.0.20.1+1" : file.includes("verapdf") || file.endsWith(".jar") ? "veraPDF 1.30.2" : "Chromium 151.0.7922.34", stderr: "", code: 0 }) });
  if (platform === "darwin") {
@@ -333,8 +333,11 @@ test("validator flags always bypass direct Java and empty flags still fail", asy
 // Ask the installed registry itself, in a new process so it rereads each environment.
 test("browser lookup matches the installed Playwright registry on every runtime target", async t => {
  const require = createRequire(import.meta.url), core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
- for (const [platform, arch] of [["win32", "x64"], ["win32", "arm64"], ["darwin", "x64"], ["darwin", "arm64"], ["linux", "x64"], ["linux", "arm64"]]) await t.test(`${platform} ${arch}`, async t => {
-  const host = await fixture(t); host.platform = platform!; host.arch = arch!;
+ for (const [platform, arch, cpu, release] of [
+  ["win32", "x64"], ["win32", "arm64"], ["darwin", "x64"], ["darwin", "arm64"], ["linux", "x64"], ["linux", "arm64"],
+  ["darwin", "x64", "Apple", "24.0.0"], ["darwin", "x64", "Apple", "19.0.0"],
+ ]) await t.test(`${platform} ${arch}${cpu ? ` ${cpu} ${release}` : ""}`, async t => {
+  const host = await fixture(t); host.platform = platform!; host.arch = arch!; host.cpuModels = [cpu ?? (arch === "arm64" ? "Apple" : "Intel")]; host.osRelease = release ?? "24.0.0";
   const base = { ...host.env, LOCALAPPDATA: join(host.home, "local"), XDG_CACHE_HOME: join(host.home, "xdg") };
   const cache = join(host.home, "cache"), caller = join(host.home, "caller");
   const cases: [string, NodeJS.ProcessEnv, boolean][] = [
@@ -361,7 +364,7 @@ test("browser lookup matches the installed Playwright registry on every runtime 
    const childEnv = { ...process.env };
    for (const key of Object.keys(childEnv)) if (/^(PLAYWRIGHT_|npm_config_(playwright_|init_cwd)|npm_package_config_(playwright_|init_cwd)|INIT_CWD|LOCALAPPDATA|XDG_CACHE_HOME)/i.test(key)) delete childEnv[key];
    Object.assign(childEnv, host.env);
-   const code = `const os=require('os'); os.platform=()=>${JSON.stringify(platform)}; os.arch=()=>${JSON.stringify(arch)}; os.homedir=()=>${JSON.stringify(host.home)}; os.release=()=>'24.0.0'; os.cpus=()=>[{model:${JSON.stringify(arch === "arm64" ? "Apple" : "Intel")}}]; Object.defineProperty(process,'platform',{value:${JSON.stringify(platform)}}); process.cwd=()=>${JSON.stringify(host.cwd)}; const {registry}=require(${JSON.stringify(join(dirname(core), "lib/coreBundle.js"))}).registry; console.log(JSON.stringify(registry.findExecutable('chromium-headless-shell').executablePath()));`;
+   const code = `const os=require('os'); os.platform=()=>${JSON.stringify(platform)}; os.arch=()=>${JSON.stringify(arch)}; os.homedir=()=>${JSON.stringify(host.home)}; os.release=()=>${JSON.stringify(host.osRelease)}; os.cpus=()=>${JSON.stringify(host.cpuModels.map(model => ({ model })))}; Object.defineProperty(process,'platform',{value:${JSON.stringify(platform)}}); process.cwd=()=>${JSON.stringify(host.cwd)}; const {registry}=require(${JSON.stringify(join(dirname(core), "lib/coreBundle.js"))}).registry; console.log(JSON.stringify(registry.findExecutable('chromium-headless-shell').executablePath()));`;
    const oracle = spawnSync(process.execPath, ["-e", code], { env: childEnv, encoding: "utf8", windowsHide: true });
    assert.equal(oracle.status, 0, oracle.stderr);
    const expected = JSON.parse(oracle.stdout) as string;
@@ -450,4 +453,33 @@ test("POSIX Java lookup agrees with the installed veraPDF shell launcher", { ski
   if (selected) { assert.equal(result.path, selected.replace(unixRoot, host.home)); assert.equal(result.usable, selected !== unixValue(old)); }
   else { assert.notEqual(real.status, 0, real.stdout); assert.equal(result.usable, false); }
  }
+});
+
+
+test("runtime browser overrides do not change verified download entry points", async () => {
+ const target = { platform: "darwin", arch: "arm64" };
+ const pinned = (await componentManifest(target)).find(c => c.id === "browser")!;
+ const withOverrides = (await componentManifest(componentHost({ ...target, env: { PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: "win64" } }))).find(c => c.id === "browser")!;
+ assert.equal(withOverrides.entryPoint, pinned.entryPoint);
+ assert.deepEqual(withOverrides.archives, pinned.archives);
+});
+
+
+test("POSIX Java discovery falls back to PATH when the launcher gets no home", async t => {
+ for (const platform of ["linux", "darwin"]) await t.test(platform, async t => {
+  const host = await fixture(t, platform), path = host.path.join(host.env.PATH!, "java");
+  await host.fs.mkdir(host.path.dirname(path), { recursive: true }); await host.fs.writeFile(path, "Java", { mode: 0o700 });
+  const access = host.fs.access;
+  host.fs = { ...host.fs, access: (async (path, mode) => {
+   if (path === "/etc/gentoo-release" || path === "/usr/libexec/java_home") return;
+   return access(path, mode);
+  }) as typeof fs.access };
+  for (const code of [0, 1, null]) {
+   host.run = async (file) => file === "java-config" || file === "/usr/libexec/java_home"
+    ? { stdout: "", stderr: "no Java home", code } : { stdout: "openjdk 17.0.20.1", stderr: "", code: 0 };
+   const result = await resolveComponent(host, "java");
+   assert.equal(result.path, path); assert.equal(result.usable, true); assert.equal(result.source, "system");
+   assert.match(result.reason!, /Java home discovery/);
+  }
+ });
 });
