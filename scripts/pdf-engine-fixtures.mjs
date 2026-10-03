@@ -91,4 +91,24 @@ for (const subtype of ["Stamp", "Ink", "FreeText", "Widget"]) for (const [name, 
   "<< /Type /Annot /Subtype /"+subtype+" /Rect [0 0 200 300] /AP << /N 7 0 R >> /F "+flags+" >>", appearance
  ], "/Annots [6 0 R]"));
 }
+for (const rotation of [90,180,270]) for (const flags of [4,12,20,28]) {
+ const pageAttrs="/Annots [6 0 R] /CropBox [10 20 190 280] /Rotate "+rotation;
+ const attrs="/Rect [100 140 190 180] /F "+flags+" /Contents (Appearance text) /DA (/Helvetica 12 Tf 0 g)";
+ await writeFile(join(output,"annotation-rotation-missing-"+rotation+"-"+flags+".pdf"),simple("","",[
+  "<< /Type /Annot /Subtype /FreeText "+attrs+" >>"
+ ],pageAttrs));
+ const saved=stream("BT /F1 12 Tf 2 25 Td (Form text) Tj ET","/Type /XObject /Subtype /Form /BBox [0 0 90 40] /Resources << /Font << /F1 4 0 R >> >>");
+ for(const subtype of ["FreeText","Stamp","Ink","Widget"]) await writeFile(join(output,"annotation-rotation-"+subtype.toLowerCase()+"-"+rotation+"-"+flags+".pdf"),simple("","",[
+  "<< /Type /Annot /Subtype /"+subtype+" "+attrs+" /AP << /N 7 0 R >> >>",saved
+ ],pageAttrs));
+}
+for (const rotation of [90,180,270]) await writeFile(join(output,"annotation-rotation-shared-"+rotation+".pdf"),simple("BT /F1 12 Tf 20 100 Td (Hello) Tj ET","",[
+ "<< /Type /Annot /Subtype /Stamp /Rect [100 140 190 180] /F 20 /AP << /N 9 0 R >> >>",
+ "<< /Type /Annot /Subtype /Stamp /Rect [20 40 110 80] /F 4 /AP << /N 9 0 R >> >>",
+ "<< /Type /Annot /Subtype /Stamp /Rect [100 140 190 180] /F 2 /AP << /N 9 0 R >> >>",
+ stream("BT /F1 12 Tf 2 25 Td (Form text) Tj ET","/Type /XObject /Subtype /Form /BBox [0 0 90 40] /Matrix [2 0 0 0.5 7 9] /Resources << /Font << /F1 4 0 R >> >>"),
+ "<< /Type /Annot /Subtype /Link /Rect [20 80 180 120] /F 4 /Border [0 0 0] >>",
+ "<< /Type /Annot /Subtype /Widget /Rect [100 80 190 120] /F 28 /AS /On /AP << /N << /On 9 0 R >> >> >>",
+ "<< /Type /Annot /Subtype /Popup /Rect [100 140 190 180] /F 20 /AP << /N 9 0 R >> >>"
+],"/Annots [6 0 R 7 0 R 8 0 R 10 0 R 11 0 R 12 0 R] /CropBox [10 20 190 280] /Rotate "+rotation));
 console.log("Generated original PDF engine fixtures in "+output);

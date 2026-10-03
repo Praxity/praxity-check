@@ -16,6 +16,45 @@ function ink(png:Buffer) {
 	for(let y=0;y<height;y++)for(let x=0;x<width;x++){const at=y*(width*3+1)+1+x*3;if(Math.min(raw[at]!,raw[at+1]!,raw[at+2]!)<250)pixels++;}
 	return pixels;
 }
+for (const rotation of [90,180,270]) test("NoRotate annotation word and span boxes contain rendered ink at page rotation "+rotation,async()=>{
+ for(const appearance of ["missing","freetext","stamp","ink","widget"]) for(const flags of [20,28,12,4]) {
+  const name="annotation-rotation-"+appearance+"-"+rotation+"-"+flags;
+  await use(name,async e=>{
+   const page=(await e.facts("pages"))[0]!;
+   assert.deepEqual(page.boxes.CropBox,[10,20,190,280]);assert.equal(page.rotation,rotation);
+   const words=await e.facts("words");
+   assert.deepEqual(words.map(w=>w.text),appearance==="missing"?["Appearance","text"]:["Form","text"],name);
+   for(const word of words) {
+    const [left,top,width,height]=word.rect as [number,number,number,number];
+    for(const dpi of flags&8?[72,144,288]:[144]) assert.ok(ink(await e.renderPage(1,{dpi,rect:{left,top,width,height}}))>0,name+" "+dpi+" dpi "+JSON.stringify(word));
+    // NoRotate retains a horizontal text baseline in the displayed page.
+    if(flags&16) assert.ok(width>height,name+" "+JSON.stringify(word));
+   }
+   const spans=await e.pageSpans(1);
+   assert.deepEqual([spans.width,spans.height],[page.width,page.height]);
+   assert.equal(spans.spans.map(s=>s.text.trim()).join(" "),appearance==="missing"?"Appearance text":"Form text",name);
+   for(const {left,top,width,height} of spans.spans) assert.ok(ink(await e.renderPage(1,{dpi:144,rect:{left,top,width,height}}))>0,name+" span");
+   assert.deepEqual(await e.facts("fonts"),[{name:"Helvetica",embedded:false,pages:[1]}]);
+  });
+ }
+});
+test("NoRotate compensation preserves shared saved appearances, selected states and ordinary page text",async()=>{
+ for(const rotation of [90,180,270]) await use("annotation-rotation-shared-"+rotation,async e=>{
+  const before=await e.renderPage(1,{height:1600});
+  const words=await e.facts("words");
+  assert.equal(words.filter(w=>w.text==="Hello").length,1);
+  assert.equal(words.filter(w=>w.text==="Form").length,3);
+  assert.equal(words.filter(w=>w.text==="text").length,3);
+  for(const word of words) {
+   const [left,top,width,height]=word.rect as [number,number,number,number];
+   assert.ok(ink(await e.renderPage(1,{dpi:144,rect:{left,top,width,height}}))>0,rotation+" "+JSON.stringify(word));
+  }
+  assert.deepEqual(await e.facts("words"),words);
+  assert.equal((await e.pageSpans(1)).spans.filter(s=>s.text==="Form text").length,3);
+  assert.deepEqual(await e.facts("fonts"),[{name:"Helvetica",embedded:false,pages:[1]}]);
+  assert.deepEqual(await e.renderPage(1,{height:1600}),before);
+ });
+});
 test("unembedded standard-14 fonts render with ink; overviews and 144 dpi crops have requested dimensions",async()=>{
 	await use("used-font-control",async e=>{
 		assert.deepEqual(await e.facts("fonts"),[{name:"Helvetica",embedded:false,pages:[1]}]);

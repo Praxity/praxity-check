@@ -57,6 +57,8 @@ NUL, replacement values and non-text controls are omitted with review diagnostic
 Extraction includes visible annotation appearances, flattened in a separate copy
 with the original effective page boxes preserved. Supported missing normal
 appearances, including FreeText, are generated on that copy before flattening.
+NoRotate appearance instances receive the renderer's inverse page rotation
+around the annotation's top-left corner, so extracted rectangles match rendering.
 Generation failures leave fonts, images and words untested and reject design spans.
 The original document is used for rendering. AcroForm appearance state is
 initialized to include field values and button captions without saved

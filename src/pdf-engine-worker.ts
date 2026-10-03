@@ -41,6 +41,7 @@ function utf16(get: (buffer: number, size: number) => number) {
 function checked(ok: boolean | number, what: string) { if (!ok) throw new Error(`PDFium could not read ${what}`); }
 let document = 0, analysisDocument = 0, sourceBuffer = 0;
 let extractionFailure: Error | undefined;
+const extractionAnnotationTransforms = new Map<number, (Matrix | undefined)[]>();
 const formEnvironments = new Map<number, number>();
 // Match normal display rendering, including the explicit widget rendering below.
 // Invisible applies to unknown subtypes; PDFium still renders known subtypes.
@@ -74,6 +75,7 @@ function extractionDocument() {
 				// No document, page or JavaScript action is invoked.
 				if (environment) { p.FORM_OnAfterLoadPage(page, environment); p.FORM_OnBeforeClosePage(page, environment); }
 				const count = p.FPDFPage_GetAnnotCount(page);
+				const transforms: (Matrix | undefined)[] = [];
 				for (let j = 0; j < count; j++) {
 					const annot = p.FPDFPage_GetAnnot(page, j); checked(annot, "extraction annotation");
 					try {
@@ -86,6 +88,10 @@ function extractionDocument() {
 							// A borderless Link deliberately succeeds without painting an appearance.
 							if (p.FPDFAnnot_GetSubtype(annot) !== 2) checked(p.EPDFAnnot_HasAppearanceStream(annot, 0), `generated annotation appearance on page ${i + 1}`);
 						}
+						// Flatten emits appearance forms in annotation order, excluding Popup and empty appearances.
+						if (p.FPDFAnnot_GetSubtype(annot) !== 16 && !(p.FPDFAnnot_GetFlags(annot) & 1) && p.EPDFAnnot_HasAppearanceStream(annot, 0)) {
+							transforms.push(original.rotation && (p.FPDFAnnot_GetFlags(annot) & 16) ? noRotateTransform(annot, original.rotation) : undefined);
+						}
 					} finally { p.FPDFPage_CloseAnnot(annot); }
 				}
 				if (count) {
@@ -95,6 +101,7 @@ function extractionDocument() {
 					checked(p.FPDFPage_Flatten(page, 0), "visible annotation appearances");
 					setBoxes(page, original.boxes);
 				}
+				if (transforms.some(Boolean)) extractionAnnotationTransforms.set(i + 1, transforms);
 			}
 			finally { p.FPDF_ClosePage(page); }
 		}
@@ -124,7 +131,11 @@ function withPage<T>(number: number, run: (page: number) => T, extraction = fals
 	if (!Number.isSafeInteger(number) || number < 1 || number > p.FPDF_GetPageCount(document)) throw new Error("PDF page outside document");
 	const doc = extraction ? extractionDocument() : document, environment = formEnvironment(doc);
 	const page = p.FPDF_LoadPage(doc, number - 1); checked(page, `page ${number}`);
-	try { if (environment) p.FORM_OnAfterLoadPage(page, environment); return run(page); }
+	try {
+		if (environment) p.FORM_OnAfterLoadPage(page, environment);
+		if (extraction) compensateAnnotationRotation(page, number);
+		return run(page);
+	}
 	finally { if (environment) p.FORM_OnBeforeClosePage(page, environment); p.FPDF_ClosePage(page); }
 }
 function setBoxes(page: number, boxes: PdfPage["boxes"]) {
@@ -160,6 +171,33 @@ function matrix(object: number): Matrix {
 }
 function multiply(a: Matrix, b: Matrix): Matrix {
 	return [a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1], a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3], a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]];
+}
+function noRotateTransform(annot: number, rotation: number): Matrix {
+	const ptr = alloc(16);
+	try {
+		checked(p.FPDFAnnot_GetRect(annot, ptr), "NoRotate annotation rectangle");
+		const [l, t, r, b] = Array.from(new Float32Array(memory.HEAPU8.buffer, ptr, 4)) as [number, number, number, number];
+		const left = Math.min(l, r), top = Math.max(t, b);
+		// Match CPDF_Annot's renderer: counter page rotation around the PDF top-left.
+		const [c, s] = (rotation === 90 ? [0, 1] : rotation === 180 ? [-1, 0] : [0, -1]) as [number, number];
+		return [c, s, -s, c, left - c*left + s*top, top - s*left - c*top];
+	} finally { free(ptr); }
+}
+function compensateAnnotationRotation(page: number, number: number) {
+	const transforms = extractionAnnotationTransforms.get(number);
+	if (!transforms) return;
+	// Flatten appends one form containing the appearance instances. Reapply on each
+	// reopened extraction page; editing an instance preserves shared streams and page text.
+	const form = p.FPDFPage_GetObject(page, p.FPDFPage_CountObjects(page) - 1);
+	if (!form || p.FPDFPageObj_GetType(form) !== 5 || p.FPDFFormObj_CountObjects(form) !== transforms.length) throw new Error("PDFium could not match flattened annotation appearances for NoRotate compensation");
+	const ptr = alloc(24);
+	try {
+		for (let i = 0; i < transforms.length; i++) {
+			const transform = transforms[i]; if (!transform) continue;
+			new Float32Array(memory.HEAPU8.buffer, ptr, 6).set(transform);
+			checked(p.FPDFPageObj_TransformF(p.FPDFFormObj_GetObject(form, i), ptr), "NoRotate appearance compensation");
+		}
+	} finally { free(ptr); }
 }
 function objects(page: number, visit: (object: number, transform: Matrix) => void, annotations: boolean) {
 	let visited = 0;
