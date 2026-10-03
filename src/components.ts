@@ -131,20 +131,22 @@ async function componentDefinitions(host: Pick<ComponentHost, "platform" | "arch
  ];
 }
 
-export async function componentManifest(host: Pick<ComponentHost, "platform" | "arch">): Promise<Component[]> {
+export async function componentManifest(host: Pick<ComponentHost, "platform" | "arch"> & Partial<Pick<ComponentHost, "cpuModels" | "osRelease" | "env">>): Promise<Component[]> {
  const java = javaTargets[`${host.platform}-${host.arch}`];
  if (!java) throw new Error(`Unsupported components target: ${host.platform} ${host.arch}`);
  const browser = await browserDefinition();
  if (browser.revision !== "1234" || browser.playwright !== "1.62.1") throw new Error("Playwright changed; update the verified browser archive pins before setup.");
- browserTarget(host.platform, host.arch);
- const shell = browserArchives[host.platform === "win32" ? 0 : host.platform === "darwin" ? host.arch === "arm64" ? 1 : 2 : host.arch === "x64" ? 3 : 4]!;
- const ffmpeg = browserArchives[host.platform === "win32" ? 5 : host.platform === "darwin" ? host.arch === "arm64" ? 10 : 6 : host.arch === "x64" ? 7 : 8]!;
+ // The installer ignores environment overrides and detects Apple's CPU even under Rosetta.
+ const target = browserLayout(host.platform, host.arch, undefined, host.osRelease, host.cpuModels);
+ if (!target) throw new Error(`Unsupported browser target: ${host.platform} ${host.arch}`);
+ const shell = browserArchives[host.platform === "win32" ? 0 : host.platform === "darwin" ? target.arch === "arm64" ? 1 : 2 : target.arch === "x64" ? 3 : 4]!;
+ const ffmpeg = browserArchives[host.platform === "win32" ? 5 : host.platform === "darwin" ? target.arch === "arm64" ? 10 : 6 : target.arch === "x64" ? 7 : 8]!;
  const archives: Record<ComponentId, Archive[]> = {
   browser: [shell, ffmpeg, ...(host.platform === "win32" ? [browserArchives[9]!] : [])],
   java: [{ url: new URL(java.file, runtimePins.java.url).href, sha256: java.sha256, size: java.size }],
   verapdf: [{ ...runtimePins.veraPDF, size: 32923960 }],
  };
- return (await componentDefinitions({ platform: host.platform, arch: host.arch })).map(component => ({ ...component, archives: archives[component.id] }));
+ return (await componentDefinitions({ ...host, env: {} })).map(component => ({ ...component, archives: archives[component.id] }));
 }
 
 export function componentDirectory(host: Pick<ComponentHost, "env" | "platform" | "home"> & Partial<Pick<ComponentHost, "path">>, component: Pick<Component, "id" | "version">) {
@@ -395,10 +397,10 @@ function browserLayout(platform: string, arch: string, override?: string, osRele
  // Playwright uses Apple CPU models on macOS 11+, including x64 Node under Rosetta.
  if (!override && platform === "darwin" && cpuModels)
   arch = Number(osRelease?.split(".")[0] ?? 20) >= 20 && cpuModels.some(model => model.includes("Apple")) ? "arm64" : "x64";
- if (platform === "darwin" && ["x64", "arm64"].includes(arch)) return { directory: `chrome-headless-shell-mac-${arch}`, executable: "chrome-headless-shell" };
- if (platform === "linux" && arch === "x64") return { directory: "chrome-headless-shell-linux64", executable: "chrome-headless-shell" };
- if (platform === "linux" && arch === "arm64") return { directory: "chrome-linux", executable: "headless_shell" };
- if (platform === "win32") return { directory: "chrome-headless-shell-win64", executable: "chrome-headless-shell.exe" };
+ if (platform === "darwin" && ["x64", "arm64"].includes(arch)) return { arch, directory: `chrome-headless-shell-mac-${arch}`, executable: "chrome-headless-shell" };
+ if (platform === "linux" && arch === "x64") return { arch, directory: "chrome-headless-shell-linux64", executable: "chrome-headless-shell" };
+ if (platform === "linux" && arch === "arm64") return { arch, directory: "chrome-linux", executable: "headless_shell" };
+ if (platform === "win32") return { arch: "x64", directory: "chrome-headless-shell-win64", executable: "chrome-headless-shell.exe" };
  return null;
 }
 export function browserTarget(platform: string, arch: string) {

@@ -553,7 +553,7 @@ test("POSIX Java lookup agrees with the installed veraPDF shell launcher", { ski
 
 
 test("runtime browser overrides do not change verified download entry points", async () => {
- const target = { platform: "darwin", arch: "arm64" };
+ const target = { platform: "darwin", arch: "arm64", cpuModels: ["Apple M1"], osRelease: "24.0.0" };
  const pinned = (await componentManifest(target)).find(c => c.id === "browser")!;
  const withOverrides = (await componentManifest(componentHost({ ...target, env: { PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: "win64" } }))).find(c => c.id === "browser")!;
  assert.equal(withOverrides.entryPoint, pinned.entryPoint);
@@ -580,20 +580,31 @@ test("POSIX Java discovery falls back to PATH when the launcher gets no home", a
  });
 });
 
-test("setup browser archive filenames match the installed Playwright download table on every target", async () => {
+test("setup browser archive filenames match the installed Playwright download table on every target", async t => {
  const require = createRequire(import.meta.url);
  const core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
  // Playwright's registry reads its own download table. A fresh process applies each host target.
- const code = `const {registry} = require(${JSON.stringify(join(dirname(core), "lib/coreBundle.js"))}).registry;
- console.log(JSON.stringify(registry.executables().filter(x => ['chromium-headless-shell','ffmpeg','winldd'].includes(x.name)).flatMap(x => x.downloadURLs?.length ? [x.downloadURLs.at(-1)] : [])));`;
- for (const [platform, arch, target] of [
-  ["win32", "x64", "win64"], ["darwin", "arm64", "mac15-arm64"], ["darwin", "x64", "mac15"],
-  ["linux", "x64", "ubuntu24.04-x64"], ["linux", "arm64", "ubuntu24.04-arm64"],
- ]) {
-  const installer = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env: { ...process.env, PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: target! } });
+ const registryCode = `const {registry} = require(${JSON.stringify(join(dirname(core), "lib/coreBundle.js"))}).registry;
+ console.log(JSON.stringify({urls: registry.executables().filter(x => ['chromium-headless-shell','ffmpeg','winldd'].includes(x.name)).flatMap(x => x.downloadURLs?.length ? [x.downloadURLs.at(-1)] : []), executable: registry.findExecutable('chromium-headless-shell').executablePath()}));`;
+ for (const [name, platform, arch, cpu, osRelease, override] of [
+  ["Windows", "win32", "x64", "Intel", "10.0.0"],
+  ["Apple Silicon", "darwin", "arm64", "Apple M1", "24.0.0"],
+  ["Intel Mac", "darwin", "x64", "Intel", "24.0.0"],
+  ["Rosetta", "darwin", "x64", "Apple M1", "24.0.0"],
+  ["Linux x64", "linux", "x64", "Intel", "6.0.0", "ubuntu24.04-x64"],
+  ["Linux arm64", "linux", "arm64", "ARM", "6.0.0", "ubuntu24.04-arm64"],
+ ]) await t.test(name!, async () => {
+  const code = `const os=require('os'); os.platform=()=>${JSON.stringify(platform)}; os.arch=()=>${JSON.stringify(arch)}; os.release=()=>${JSON.stringify(osRelease)}; os.cpus=()=>[{model:${JSON.stringify(cpu)}}]; Object.defineProperty(process,'platform',{value:${JSON.stringify(platform)}});\n${registryCode}`;
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (/^(PLAYWRIGHT_|npm_config_playwright_|npm_package_config_playwright_)/i.test(key)) delete env[key];
+  if (override) env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE = override;
+  const installer = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env, windowsHide: true });
   assert.equal(installer.status, 0, installer.stderr);
-  const requested = (JSON.parse(installer.stdout) as string[]).map(url => basename(new URL(url).pathname)).sort();
-  const browser = (await componentManifest({ platform: platform!, arch: arch! })).find(c => c.id === "browser")!;
-  assert.deepEqual(browser.archives.map(a => basename(new URL(a.url).pathname)).sort(), requested, target);
- }
+  const oracle = JSON.parse(installer.stdout) as { urls: string[]; executable: string };
+  const requested = oracle.urls.map(url => basename(new URL(url).pathname)).sort();
+  const host = componentHost({ platform: platform!, arch: arch!, cpuModels: [cpu!], osRelease: osRelease!, env: {} });
+  const browser = (await componentManifest(host)).find(c => c.id === "browser")!;
+  assert.deepEqual(browser.archives.map(a => basename(new URL(a.url).pathname)).sort(), requested);
+  assert.equal(browser.entryPoint, oracle.executable.split(/[\\/]/).slice(-3).join("/"));
+ });
 });
