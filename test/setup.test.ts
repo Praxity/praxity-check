@@ -75,7 +75,7 @@ async function fixture(t: test.TestContext, platform = "win32", arch = "x64") {
     const root = await fs.mkdtemp(join(tmpdir(), "setup fixtures "));
     t.after(() => fs.rm(root, { recursive: true, force: true }));
     const printed: string[] = [], archiveBytes = new Map<string, Buffer>();
-    const host = setupHost({ platform, arch, home: root, env: { CHECK_COMPONENTS_DIR: join(root, "components"), PATH: "" }, print: line => printed.push(line),
+    const host = setupHost({ platform, arch, cpuModels: [arch === "arm64" ? "Apple" : "Intel"], osRelease: "24.0.0", home: root, env: { CHECK_COMPONENTS_DIR: join(root, "components"), PATH: "" }, print: line => printed.push(line),
         fetchFile: async (url) => new Response(Uint8Array.from(archiveBytes.get(url)!)), confirm: async () => true });
     const manifest = await componentManifest(host);
     for (const component of manifest) {
