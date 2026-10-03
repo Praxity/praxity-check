@@ -42,6 +42,11 @@ export function javaEnvironment(env: NodeJS.ProcessEnv, platform = process.platf
 	return Object.fromEntries(Object.entries(env).filter(([key]) => !blocked.has(platform === "win32" ? key.toUpperCase() : key)));
 }
 
+// Preserve main's validator policy: POSIX wrappers consume inherited JVM options.
+export function veraPdfEnvironment(env: NodeJS.ProcessEnv, platform: string): NodeJS.ProcessEnv {
+ return platform === "win32" ? javaEnvironment(env, "win32") : env;
+}
+
 
 // Check's original pdf-accessibility.ts and package launchers select direct Java only on Windows.
 // An executable flag always selects a wrapper. Empty environment values mean no selection.
@@ -166,6 +171,23 @@ export function componentDirectory(host: Pick<ComponentHost, "env" | "platform" 
 }
 
 const inventoryName = ".inventory.json";
+class ComponentAccessError extends Error {
+ readonly path: string;
+ readonly source: ComponentResolution["source"];
+ readonly inventory: ComponentResolution["inventory"];
+ constructor(path: string, source: ComponentResolution["source"], inventory: ComponentResolution["inventory"], error: NodeJS.ErrnoException) {
+  super(`${error.code}: ${error.message}`, { cause: error });
+  this.path = path; this.source = source; this.inventory = inventory;
+ }
+}
+
+function filesystemFailure(error: unknown, path: string, source: ComponentResolution["source"], inventory: ComponentResolution["inventory"]): never {
+ const failure = error as NodeJS.ErrnoException;
+ if (["EACCES", "EPERM", "EIO", "ELOOP", "EBUSY", "ENAMETOOLONG", "EMFILE", "ENFILE", "ESTALE", "ETIMEDOUT"].includes(failure.code ?? ""))
+  throw new ComponentAccessError(failure.path ?? path, source, inventory, failure);
+ throw error;
+}
+
 export async function fileInventory(root: string, fs: typeof nodeFs, path = nodePath) {
  const { join } = path;
  if ((await fs.lstat(root)).isSymbolicLink()) throw new Error("Component root is a symlink");
@@ -195,7 +217,7 @@ export async function checkInventory(root: string, component: Component, host: C
  const { join } = host.path;
  let raw: string;
  try { if ((await host.fs.lstat(join(root, inventoryName))).isSymbolicLink()) return "damaged"; raw = await host.fs.readFile(join(root, inventoryName), "utf8"); }
- catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return "absent"; throw e; }
+ catch (e) { if (["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "")) return "absent"; filesystemFailure(e, join(root, inventoryName), "setup", "damaged"); }
  try {
   const record = JSON.parse(raw);
   if (record.schemaVersion !== 1 || record.id !== component.id || record.version !== component.version || record.platform !== host.platform || record.arch !== host.arch) return "damaged";
@@ -203,7 +225,7 @@ export async function checkInventory(root: string, component: Component, host: C
   if (!actual[component.entryPoint] || !record.files || typeof record.files !== "object") return "damaged";
   const keys = Object.keys(actual).sort();
   return JSON.stringify(keys) === JSON.stringify(Object.keys(record.files).sort()) && keys.every(key => actual[key] === record.files[key]) ? "intact" : "damaged";
- } catch (e) { if (e instanceof SyntaxError || (e as NodeJS.ErrnoException).code === "ENOENT" || (e instanceof Error && /symlink|non-regular/.test(e.message))) return "damaged"; throw e; }
+ } catch (e) { if (e instanceof SyntaxError || ["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "") || (e instanceof Error && /symlink|non-regular/.test(e.message))) return "damaged"; filesystemFailure(e, root, "setup", "damaged"); }
 }
 
 // Playwright packages/utils/env.ts: only undefined falls through to npm aliases.
@@ -230,8 +252,9 @@ function browserCache(host: ComponentHost) {
 async function exists(host: ComponentHost, path: string, executable = false) {
  try { await host.fs.access(path, executable ? nodeFsConstants.X_OK : nodeFsConstants.F_OK); return true; }
  catch (error) {
-  if (["ENOENT", "ENOTDIR", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
-  throw error;
+  // These optional launcher predicates fall through when the candidate is inaccessible.
+  if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
+  filesystemFailure(error, path, "system", "unmanaged");
  }
 }
 
@@ -243,12 +266,12 @@ async function posixJavaHome(host: ComponentHost, home: string) {
  return await exists(host, ibm, true) ? ibm : host.path.join(home, "bin", "java");
 }
 
-async function executablePath(host: ComponentHost, value: string) {
+async function executablePath(host: ComponentHost, value: string, source: ComponentResolution["source"] = "system") {
  const { join, resolve } = host.path;
  const candidates = /[\\/]/.test(value) ? [resolve(host.cwd, value)] : (variable(host, "PATH") ?? "").split(host.platform === "win32" ? ";" : ":").filter(Boolean).flatMap(dir => host.platform === "win32" ? [join(dir, value), ...[".exe", ".cmd", ".bat"].map(ext => join(dir, value + ext))] : [join(dir, value)]);
  for (const path of candidates) {
   try { if ((await host.fs.stat(path)).isFile()) return path; }
-  catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT" && (e as NodeJS.ErrnoException).code !== "ENOTDIR") throw e; }
+  catch (e) { if (!["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "")) filesystemFailure(e, path, source, "unmanaged"); }
  }
  return null;
 }
@@ -257,6 +280,7 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
  const { join } = host.path;
  const component = (await componentDefinitions(host)).find(item => item.id === id)!;
  const missing = (inventory: ComponentResolution["inventory"] = "absent", path: string | null = null): ComponentResolution => ({ id, usable: false, source: null, path, version: null, pinned: null, inventory, reason: `${id === "browser" ? "Browser" : id === "java" ? "Java 17 or newer" : "veraPDF"} is ${inventory === "damaged" ? "damaged" : "not installed"}; checks not run. Run check setup ${component.checks.join(" ")}.` });
+ try {
  let value = explicit;
  let selectionName = explicit === undefined ? undefined : "the executable argument";
  let classpath: string | undefined;
@@ -287,17 +311,18 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
   let version: string | null = null;
   // Validation obtains veraPDF's version from its JSON, so wrappers need no version command.
   if (!version && !(id === "verapdf" && options.probeVersion === false)) {
-   const result = await host.run(probeTool, classpath ? veraPdfJavaArgs(classpath, ["--version"]) : ["--version"], javaEnvironment(host.env, host.platform as NodeJS.Platform));
+   const result = await host.run(probeTool, classpath ? veraPdfJavaArgs(classpath, ["--version"]) : ["--version"],
+    id === "verapdf" ? veraPdfEnvironment(host.env, host.platform) : javaEnvironment(host.env, host.platform as NodeJS.Platform));
    const output = result.stdout + "\n" + result.stderr;
    version = id === "java" ? output.match(/Temurin-([\d.]+\+\d+)/)?.[1] ?? output.match(/(?:openjdk|java)\s+(?:version\s+)?"?([\d.]+(?:\+\d+)?)/i)?.[1] ?? null : id === "verapdf" ? output.match(/veraPDF\s+([\d.]+)/)?.[1] ?? null : output.match(/(?:Chromium|Chrome[^\r\n]*?)\s+([\d.]+)/)?.[1] ?? null;
-   if (result.code !== 0 || !version) return { ...missing(inventory, path), source, version, reason: `${id} did not report a version successfully; checks not run. Run check setup ${component.checks.join(" ")}.` };
+   if (result.code !== 0 || !version) return { ...missing(inventory, path), source, version, reason: `${id} did not report a version successfully: ${output.trim() || `exit ${result.code}`}; checks not run. Run check setup ${component.checks.join(" ")}.` };
    if (id === "java" && (!version || Number(version.split(".")[0]) < 17 || result.code !== 0)) return { ...missing(inventory, path), source, version, pinned: false };
   }
   return { id, usable: true, source, path, version, pinned: version === null ? null : version === component.version, inventory, ...(classpath ? { classpath } : {}) };
  }
  if (value !== undefined) {
   if (!value.trim()) throw new Error(`${id} executable must not be empty`);
-  const path = await executablePath(host, value);
+  const path = await executablePath(host, value, "explicit");
   const result = path ? await found(path, "explicit", "unmanaged") : { ...missing("unmanaged", value), source: "explicit" as const };
   if (id === "java" && !result.usable && selectionName)
    result.reason = `Java selected by ${selectionName} at ${value} is unusable${result.version ? ` (version ${result.version})` : ""}. Fix or clear ${selectionName} to use Java 17 or newer; setup cannot replace an explicit selection.`;
@@ -346,12 +371,17 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
  }
  // Existing developer Playwright caches remain usable without requiring setup.
  if (id === "browser") {
-  const path = await executablePath(host, join(browserCache(host), component.entryPoint));
+  const path = await executablePath(host, join(browserCache(host), component.entryPoint), "explicit");
   if (path) return { ...await found(path, "explicit", "unmanaged"), ...(inventory === "damaged" ? { inventory } : {}) };
  }
  const result = missing(inventory, inventory === "damaged" ? managed : null);
  if (discoveryDiagnostic) result.reason = `${discoveryDiagnostic} ${result.reason}`;
  return result;
+ } catch (error) {
+  if (!(error instanceof ComponentAccessError)) throw error;
+  return { ...missing(error.inventory, error.path), source: error.source,
+   reason: `${id} at ${error.path} could not be accessed: ${error.message}; checks not run. Run check setup ${component.checks.join(" ")}.` };
+ }
 }
 
 export async function doctor(host: ComponentHost, checks = ["pdf", "html"]) {

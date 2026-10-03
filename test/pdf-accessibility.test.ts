@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { checkPdfAccessibility, parseVeraPdf } from "../src/pdf-accessibility.ts";
 import { javaEnvironment } from "../src/verapdf-runtime.ts";
-import { componentHost } from "../src/components.ts";
+import { componentHost, doctorCli } from "../src/components.ts";
 
 function payload(failed = false) {
 	return { report: { buildInformation: { releaseDetails: [{ id: "core", version: "1.30.2" }] },
@@ -49,6 +49,51 @@ class Wrapper {
 		assert.equal(result.components[0]?.source, "explicit");
 		assert.equal(result.components[0]?.version, "1.30.2");
 	 }
+	}
+});
+
+test("doctor and validation use the same JVM environment for veraPDF wrappers", async t => {
+	const root = await mkdtemp(join(tmpdir(), "verapdf-environment-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const wrapper = join(root, process.platform === "win32" ? "verapdf.exe" : "verapdf");
+	const java = join(root, process.platform === "win32" ? "java.exe" : "java");
+	await writeFile(join(root, "validation.json"), JSON.stringify(payload()));
+	if (process.platform === "win32") {
+		const source = join(root, "Wrapper.cs");
+		await writeFile(source, `using System;
+using System.IO;
+class Wrapper {
+ static int Main(string[] args) {
+  if (AppDomain.CurrentDomain.FriendlyName == "java.exe") { Console.Write("openjdk 17.0.20.1+1"); return 0; }
+  foreach (string key in new [] { "CLASSPATH_PREFIX", "JAVA_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS" })
+   if (Environment.GetEnvironmentVariable(key) != null) { Console.Error.Write("Invalid JVM environment: " + key); return 2; }
+  Console.Write(Array.IndexOf(args, "--version") >= 0 ? "veraPDF 1.30.2" : File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "validation.json")));
+  return 0;
+ }
+}`);
+		const compiler = join(process.env.SystemRoot!, "Microsoft.NET/Framework64/v4.0.30319/csc.exe");
+		const compiled = spawnSync(compiler, ["/nologo", `/out:${wrapper}`, source], { encoding: "utf8", windowsHide: true });
+		assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+		await copyFile(wrapper, java);
+	} else {
+		await writeFile(java, `#!${process.execPath}\nconsole.log('openjdk 17.0.20.1+1');\n`, { mode: 0o700 });
+		await writeFile(wrapper, `#!${process.execPath}
+for (const key of ['CLASSPATH_PREFIX', 'JAVA_OPTS', 'JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS'])
+ if (process.env[key] !== undefined) { console.error('Invalid JVM environment: ' + key); process.exit(2); }
+process.stdout.write(process.argv.includes('--version') ? 'veraPDF 1.30.2' : ${JSON.stringify(JSON.stringify(payload()))});
+`, { mode: 0o700 });
+	}
+	for (const platform of ["linux", "darwin", "win32"]) for (const key of ["CLASSPATH_PREFIX", "JAVA_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"]) {
+		const host = componentHost({ platform, env: { ...javaEnvironment(process.env, "win32"),
+			CHECK_COMPONENTS_DIR: join(root, "components"), VERAPDF: wrapper, JAVACMD: java, [key]: "invalid" } });
+		const printed: string[] = [], usable = platform === "win32";
+		assert.equal(await doctorCli(["pdf", "--json"], host, text => printed.push(text)), usable ? 0 : 1, `${platform} ${key}`);
+		const validator = JSON.parse(printed[0]!).components.find((item: { id: string }) => item.id === "verapdf");
+		assert.equal(validator.usable, usable);
+		const result = await checkPdfAccessibility("unused.pdf", { profile: "ua1" }, host);
+		assert.equal(result.machineStatus, usable ? "complete" : "incomplete");
+		assert.equal(result.evaluations[0]?.outcome, usable ? "passed" : "untested");
+		if (!usable) assert.match(result.evidence[0]!.stderr, /Invalid JVM environment/);
 	}
 });
 

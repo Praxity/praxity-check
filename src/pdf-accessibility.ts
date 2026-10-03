@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { componentHost, windowsJavaPins, javaEnvironment, resolveComponent, veraPdfCommand, veraPdfJavaArgs, type ComponentHost } from "./components.ts";
+import { componentHost, windowsJavaPins, veraPdfEnvironment, resolveComponent, veraPdfCommand, veraPdfJavaArgs, type ComponentHost } from "./components.ts";
 
 const exec = promisify(execFile);
 type Profile = "ua1" | "ua2";
@@ -98,10 +98,10 @@ export function parseVeraPdf(raw: string, profile: Profile) {
 	return { findings, coverage, machineCompliant: result.compliant, version, passedRules, failedRules, passedChecks, failedChecks };
 }
 
-async function run(tool: string, args: string[]): Promise<Evidence> {
+async function run(tool: string, args: string[], env: NodeJS.ProcessEnv): Promise<Evidence> {
 	try {
 		const { stdout, stderr } = await exec(tool, args, { encoding: "utf8", timeout: 120_000, maxBuffer: 32 * 1024 * 1024,
-			...(process.platform === "win32" ? { env: javaEnvironment(process.env) } : {}) });
+			env });
 		return { tool, args, stdout, stderr, exitCode: 0 };
 	} catch (error) {
 		const e = error as Error & { code?: string | number; stdout?: string; stderr?: string };
@@ -118,7 +118,7 @@ export async function checkPdfAccessibility(snapshot: string, options: { profile
 	const command = component.source === "setup" && component.classpath && java?.usable
 		? { tool: java.path!, args: veraPdfJavaArgs(component.classpath, args) }
 		: veraPdfCommand(host.env, host.platform as NodeJS.Platform, options.executable, args);
-	const evidence: Evidence = component.usable ? await run(command.tool, command.args)
+	const evidence: Evidence = component.usable ? await run(command.tool, command.args, veraPdfEnvironment(host.env, host.platform))
 		: { tool: component.path ?? "verapdf", args, stdout: "", stderr: "", exitCode: null, error: `ENOENT: ${component.reason}` };
 	const output = { evidence: [evidence], machineStatus: "complete" as "complete" | "incomplete",
 		components: [component, ...(java ? [java] : [])],

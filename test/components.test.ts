@@ -129,6 +129,58 @@ test("missing PDF component produces not-run coverage and an actionable reason",
  assert.equal(result.validator.machineCompliant, undefined);
 });
 
+test("inaccessible validators retain PDF not-run evidence and doctor diagnostics", async t => {
+ for (const code of ["EACCES", "EPERM"]) await t.test(code, async t => {
+  const host = await fixture(t), denied = host.path.join(host.home, "verapdf");
+  host.env.VERAPDF = denied;
+  const stat = host.fs.stat;
+  host.fs = { ...host.fs, stat: (async (path, ...args) => {
+   if (path === denied) throw Object.assign(new Error("Permission denied"), { code });
+   return stat(path, ...args);
+  }) as typeof fs.stat };
+  const result = await checkPdfAccessibility("unused.pdf", { profile: "ua1" }, host);
+  assert.equal(result.machineStatus, "incomplete");
+  assert.equal(result.evaluations[0]?.outcome, "untested");
+  assert.equal(result.validator.machineCompliant, undefined);
+  assert.equal(result.components[0]!.path, denied);
+  assert.match(result.evaluations[0]!.reason, new RegExp(`${code}.*Permission denied.*checks not run.*check setup pdf`));
+  const printed: string[] = [];
+  assert.equal(await doctorCli(["pdf", "--json"], host, text => printed.push(text)), 1);
+  const validator = JSON.parse(printed[0]!).components.find((item: { id: string }) => item.id === "verapdf");
+  assert.equal(validator.path, denied);
+  assert.equal(validator.source, "explicit");
+  assert.match(validator.reason, /Permission denied/);
+ });
+});
+
+test("managed component access failures preserve their location in doctor", async t => {
+ for (const operation of ["lstat", "readFile", "readdir"] as const) await t.test(operation, async t => {
+  const host = await fixture(t);
+  const executable = await install(host, "browser");
+  const component = (await componentManifest(host)).find(item => item.id === "browser")!;
+  const root = componentDirectory(host, component);
+  const denied = operation === "readdir" ? root : host.path.join(root, ".inventory.json");
+  const fn = host.fs[operation];
+  host.fs = { ...host.fs, [operation]: async (path: string, ...args: unknown[]) => {
+   if (path === denied) throw Object.assign(new Error("Permission denied"), { code: "EACCES", path: denied });
+   return (fn as Function)(path, ...args);
+  } };
+  const result = await resolveComponent(host, "browser");
+  assert.equal(result.usable, false, executable);
+  assert.equal(result.inventory, "damaged");
+  assert.equal(result.source, "setup");
+  assert.equal(result.path, denied);
+  assert.match(result.reason!, /EACCES.*Permission denied.*check setup html/);
+  assert.equal(await doctorCli(["html"], host, () => {}), 1);
+ });
+});
+
+test("component discovery propagates unexpected filesystem failures", async t => {
+ const host = await fixture(t);
+ host.fs = { ...host.fs, stat: async () => { throw new Error("unexpected adapter failure"); } };
+ await assert.rejects(resolveComponent(host, "verapdf", host.path.join(host.home, "verapdf")), /unexpected adapter failure/);
+});
+
 test("doctor CLI returns 1 and missing HTML checks save not-run coverage", async t => {
  const host = await fixture(t), target = join(host.home, "course"), report = join(host.home, "report.json");
  await fs.mkdir(target); await fs.writeFile(join(target, "index.html"), "<html><title>Test</title></html>");
