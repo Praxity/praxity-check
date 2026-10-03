@@ -112,6 +112,7 @@ export interface AuditReport {
 		confidence: Record<Finding["confidence"], number>;
 		rule: Record<string, number>;
 		needsReview: number;
+		checksNotRun: { checks: number; pages: number };
 	};
 	network: {
 		allowed: boolean;
@@ -378,6 +379,9 @@ export function createReport(
 		["praxity-check", { source: "praxity-check" as const, version: packageJson.version }],
 		...rules.map((rule) => [rule.source, { source: rule.source, version: rule.rulesetVersion }] as const),
 	]).values()].sort((a, b) => a.source.localeCompare(b.source));
+	// Whole-page and skipped-state markers describe coverage at a different scale.
+	const checksNotRun = evaluations.filter((evaluation) =>
+		evaluation.type === "check" && evaluation.check !== "page-audit" && !evaluation.check.startsWith("scenario:"));
 	const confidence: AuditReport["counts"]["confidence"] = { high: 0, medium: 0, low: 0 };
 	const rule: Record<string, number> = {};
 
@@ -410,7 +414,10 @@ export function createReport(
 			changes: { resolved },
 		} : {}),
 		notes,
-		counts: { confidence, rule, needsReview: needsReview.length },
+		counts: {
+			confidence, rule, needsReview: needsReview.length,
+			checksNotRun: { checks: checksNotRun.length, pages: new Set(checksNotRun.map((check) => check.page)).size },
+		},
 		network: {
 			allowed: allowNetwork,
 			blockedRequestCount: blockedRequests.length,
@@ -452,6 +459,9 @@ export function humanSummary(report: AuditReport, minConfidence: Confidence = "h
 		report.projectUrl,
 		"",
 		`Checked ${count("page", report.pages.filter((page) => page.audited).length)}.${report.redirectStubs.length > 0 ? ` Skipped ${count("page", report.redirectStubs.length)} that only redirect elsewhere.` : ""}`,
+		...(report.counts.checksNotRun.checks > 0
+			? [`Checks not run: ${report.counts.checksNotRun.checks} on ${count("page", report.counts.checksNotRun.pages)}.`]
+			: []),
 		`${issueCount}${report.needsReview.length > 0 ? ` ${count("possible issue", report.needsReview.length)} to review.` : ""}`,
 	];
 

@@ -4,6 +4,7 @@ import test from "node:test";
 import type { Finding, ReviewItem } from "../src/checks.ts";
 import {
 	type AuditEnvironment,
+	type PageAudit,
 	CREDITS_URL,
 	createReport,
 	humanSummary,
@@ -81,6 +82,49 @@ test("needs-review evidence never becomes a finding or a withheld finding", () =
 	assert.match(summary, /Page: page\.html\n  Element: button/);
 	assert.match(summary, /Basis: WCAG 1\.4\.3/);
 	assert.match(summary, /1 issue found at medium confidence or higher\. 1 possible issue to review\./);
+});
+
+test("not-run counts use structured evaluations and separate pages and skipped states", () => {
+	const discovered = ["first.html", "second.html", "failed.html"].map((file) => ({
+		file, url: `http://127.0.0.1/${file}`,
+	}));
+	const untested = (check: string, page: string, state = "initial") => ({
+		type: "check" as const, check, page, state, outcome: "untested" as const, reason: "check fixture failed",
+	});
+	const audits: PageAudit[] = discovered.map((page) => ({
+		page, audited: page.file !== "failed.html", triage: { ok: page.file !== "failed.html", reason: "navigation failed" },
+		findings: [], notes: ["An unrelated note that does not describe check execution."],
+	}));
+	audits[0]!.untested = [
+		untested("keyboardWalk", "first.html"),
+		untested("keyboardWalk", "first.html"),
+		untested("keyboardWalk", "first.html", "lesson-open"),
+		untested("focusIndicators", "first.html", "dark"),
+		untested("reflow", "first.html"),
+		untested("scenario:skipped", "first.html", "skipped"),
+	];
+	audits[1]!.untested = [
+		untested("keyboardWalk", "second.html"), untested("reflow", "second.html"), untested("textSpacing", "second.html"),
+	];
+	audits[2]!.untested = [
+		untested("page-audit", "failed.html"), untested("scenario:skipped", "failed.html", "skipped"),
+	];
+	const report = createReport("course", false, { pages: discovered, stubs: [] }, audits, [], false, ENVIRONMENT, []);
+	assert.deepEqual(JSON.parse(JSON.stringify(report)).counts.checksNotRun, { checks: 7, pages: 2 });
+	const summary = humanSummary(report);
+	assert.match(summary, /Checked 2 pages\.\nChecks not run: 7 on 2 pages\.\n0 high-confidence issues found\./);
+	assert.match(summary, /Pages not checked: 1 page\./);
+	assert.match(summary, /States not checked: 2 states\./);
+	assert.deepEqual(report.evaluations.find((entry) => entry.type === "check" && entry.check === "textSpacing"),
+		untested("textSpacing", "second.html"));
+});
+
+test("schema v4 baselines accept reports with and without not-run counts", () => {
+	const report = createReport("course", false, { pages: [], stubs: [] }, [], [], false, ENVIRONMENT, []);
+	assert.deepEqual(report.counts.checksNotRun, { checks: 0, pages: 0 });
+	assert.equal(report.schemaVersion, 4);
+	const { checksNotRun, ...legacyCounts } = report.counts;
+	assert.deepEqual(parseBaseline({ ...report, counts: legacyCounts }), parseBaseline(report));
 });
 
 test("summary names the confidence threshold and separates mixed-confidence rule groups", () => {

@@ -51,6 +51,9 @@ deliberately malicious HTML.
 
 For HTML, the terminal summary names the confidence threshold used for its issue count.
 It groups repeated focus coverage notes by behaviour and counts affected pages.
+When checks do not run, it prints `Checks not run: 7 on 2 pages` beside the
+checked-page count. JSON retains the counts and each check's reason, even when
+no findings reach the threshold.
 Add `--json report.json` to save every issue, every possible issue to review,
 and coverage notes for each page and state, with evidence. The `--min-confidence`
 option controls which findings are shown and which make the command exit with an error.
