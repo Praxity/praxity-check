@@ -7,26 +7,8 @@ import { javaEnvironment, veraPdfJavaArgs, veraPdfMainClass } from "../src/verap
 import { validateWindowsPayload } from "./windows-pe.mjs";
 import { downloadVerified } from "./download-verified.mjs";
 
-export const windowsJavaPins = Object.freeze({
-	java: {
-		version: "17.0.20.1+1", directory: "jdk-17.0.20.1+1-jre",
-		url: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jre_x64_windows_hotspot_17.0.20.1_1.zip",
-		sha256: "bc21a93923103cdaac93ee337b0ae4365e739fde36df823dd456bc67c8a9d352",
-		checksumUrl: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jre_x64_windows_hotspot_17.0.20.1_1.zip.sha256.txt",
-		sourceUrl: "https://github.com/adoptium/jdk17u/tree/jdk-17.0.20.1%2B1",
-	},
-	veraPDF: {
-		version: "1.30.2", directory: "verapdf-greenfield-1.30.2",
-		url: "https://software.verapdf.org/rel/1.30/verapdf-greenfield-1.30.2-installer.zip",
-		sha256: "6cc6341cb1af644044054b81f00a6590a7918abb18f762243de115258bcad838",
-		sourceUrl: "https://github.com/veraPDF/veraPDF-apps/tree/7d9b5c3f709846ab83f86ca1a538b24eac2d3f72",
-	},
-	licenses: [
-		{ name: "LICENSE.GPL", url: "https://raw.githubusercontent.com/veraPDF/veraPDF-apps/7d9b5c3f709846ab83f86ca1a538b24eac2d3f72/LICENSE.GPL", sha256: "d62f065830aa3739cc031156b9690805c7b2e811b4a178c8b4acd8725d561c94" },
-		{ name: "LICENSE.MPL", url: "https://raw.githubusercontent.com/veraPDF/veraPDF-apps/7d9b5c3f709846ab83f86ca1a538b24eac2d3f72/LICENSE.MPL", sha256: "af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e" },
-	],
-});
-
+export { windowsJavaPins } from "../src/components.ts";
+import { windowsJavaPins } from "../src/components.ts";
 const run = (file, args) => execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: javaEnvironment(process.env, "win32"), timeout: 120_000 }).trim();
 const powershellLiteral = value => "'" + value.replaceAll("'", "''") + "'";
 

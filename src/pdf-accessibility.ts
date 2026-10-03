@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { javaEnvironment, veraPdfJavaArgs } from "./verapdf-runtime.ts";
+import { javaEnvironment, veraPdfCommand } from "./components.ts";
 
 const exec = promisify(execFile);
 type Profile = "ua1" | "ua2";
@@ -112,14 +112,9 @@ async function run(tool: string, args: string[]): Promise<Evidence> {
 export async function checkPdfAccessibility(snapshot: string, options: { profile: Profile; executable?: string }) {
 	const profile = options.profile;
 	if (profile !== "ua1" && profile !== "ua2") throw new Error("PDF/UA profile must be ua1 or ua2");
-	const executable = options.executable ?? process.env.VERAPDF ?? "verapdf";
-	if (!executable.trim()) throw new Error("veraPDF executable must not be empty");
 	const args = ["--flavour", profile, "--format", "json", "--maxfailuresdisplayed", "-1", snapshot];
-	const bundledJava = process.platform === "win32" && options.executable === undefined
-		&& (!process.env.VERAPDF || process.env.VERAPDF === process.env.VERAPDF_JAVA) ? process.env.VERAPDF_JAVA : undefined;
-	const evidence = bundledJava
-		? await run(bundledJava, veraPdfJavaArgs(process.env.VERAPDF_CLASSPATH ?? "", args))
-		: await run(executable, args);
+	const command = veraPdfCommand(process.env, process.platform, options.executable, args);
+	const evidence = await run(command.tool, command.args);
 	const output = { evidence: [evidence], machineStatus: "complete" as "complete" | "incomplete",
 		validator: { name: "veraPDF", profile, version: undefined as string | undefined, machineCompliant: undefined as boolean | undefined, coverage: undefined as ReturnType<typeof parseVeraPdf>["coverage"] | undefined },
 		evaluations: [] as { rule: string; outcome: "passed" | "failed" | "untested"; reason: string }[], findings: [] as Finding[], needsReview: [] as Finding[] };
