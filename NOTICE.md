@@ -68,3 +68,12 @@ are retained in notices/pdfium and copied into standalone artifacts.
 The component notice index identifies source URLs and hashes.
 This software includes work of the FreeType Project, www.freetype.org.
 PDFium includes standard-font substitutes originally copyright Foxit Software.
+
+## Separately installed components
+
+Check packages do not include the browser, Java or veraPDF. `check setup`
+downloads these from upstream after consent. Chromium headless shell retains
+its BSD licence and bundled notices; Playwright also installs FFmpeg under
+LGPL-2.1+ and Windows Winldd. Temurin Java is GPL-2.0 with the Classpath Exception.
+veraPDF is available under GPL-3.0+ or MPL-2.0+. Their notices remain in the
+installed files. See [component archives](docs/offline-components.md).

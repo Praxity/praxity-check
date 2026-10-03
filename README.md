@@ -70,7 +70,7 @@ Requirements: Node 22.18+ and pnpm 11.5.3.
 git clone https://github.com/Praxity/praxity-check.git
 cd praxity-check
 pnpm install --frozen-lockfile
-pnpm exec playwright install chromium
+node src/cli.ts setup
 node src/cli.ts check /absolute/path/to/site/dist --min-confidence medium
 ```
 
@@ -141,7 +141,7 @@ limits described in the [PDF report guide](docs/pdf-report-v1.md#optional-infere
 pnpm check check handout.pdf --json pdf-report.json --min-image-ppi 150 --paper-size A4
 ```
 
-PDFium is installed with Check. Install veraPDF with its Java runtime separately. Select veraPDF with
+PDFium is installed with Check. Run `node src/cli.ts setup pdf` for veraPDF and Java. Select an existing veraPDF with
 `--verapdf /path/to/verapdf`, `VERAPDF`, or PATH. PDF checks run the PDF/UA-1
 machine profile by default and retain detailed failed-rule/object evidence.
 Use `--pdfua ua2` for PDF/UA-2, or explicitly choose `--pdfua off` for
@@ -246,87 +246,15 @@ The artifact contains compiled Check code, Node, runtime package dependencies an
 notices. It can move independently of the source checkout. This does not publish
 a package. Keep the artifact on its build platform and architecture.
 
-Optional `--dependencies /path/to/reviewed-runtimes` copies that directory into the
-artifact. It must include `NOTICE.md`; retain all applicable dependency notices.
-Use `bin/` for the veraPDF launcher, `java/` for a Java runtime,
-and `browsers/` for Playwright's matching browser installation. Native shared
-libraries must also be relocatable. Homebrew executables alone are not sufficient.
-The package launcher sets these paths without downloading tools.
+The package includes Node, Check, npm dependencies and PDFium. Browser, Java and
+veraPDF are installed separately with `bin/praxity-check setup` after consent.
+Launchers start Node and preserve explicit component variables. The old
+`--dependencies` packaging option is rejected. Runtime assembly scripts have
+been removed.
 
-`capabilities.json` records requirements, not successful capability tests. Without
-the validator runtime, PDF/UA checks report incomplete evidence and HTML checks report
-the missing browser. PDF and HTML need different runtimes; test the operations you
-intend to distribute from a fresh directory without development tools on PATH.
-
-Rubato can stage this prebuilt artifact with `stage-rubato-tools.mjs --check`. Check
-implementation remains in this repository; Rubato only copies the artifact and
-provides a launcher. Desktop-local tools are not installed in remote environments.
-
-### Prepare macOS arm64 runtimes
-
-PDFium and its wasm are included with the package dependencies. For PDF/UA
-validation and HTML checks, assemble veraPDF, Java and Playwright's matching
-Chromium headless shell:
-
-```sh
-node scripts/prepare-runtimes.mjs --verapdf /path/to/verapdf \
-  --java /path/to/jdk-home --browsers /path/to/playwright-cache \
-  --supplemental-notices /path/to/notices --output /new/path/dependencies
-node scripts/package.mjs --node /path/to/node-distribution \
-  --dependencies /new/path/dependencies --output /new/path/check
-```
-
-Each output directory must be new. Java native library relocation uses Xcode
-command-line tools and installed Homebrew libraries. It rewrites copied Mach-O
-load paths and ad-hoc signs copied binaries. Original installations remain intact.
-Missing licences, unresolved libraries, filename collisions and conflicting runtime
-versions stop preparation. When an installed dependency lacks its licence text,
-supply the original text and provenance under `supplemental-notices/<package>/`.
-veraPDF input must contain its project licence files as well as its installed jars.
-
-Runtime assembly checks the installed Playwright metadata and copies its matching
-Chromium headless shell. It supplies headless Check operations; it does not include a general browser UI.
-Revalidate actual PDF and HTML operations when changing any runtime version.
-
-These scripts prepare local prototype artifacts. Clean-machine and older-macOS
-compatibility, distribution source obligations, Developer ID signing and notarization
-remain separate release work.
-
-### Prepare Windows x64 runtimes
-
-Set the following variables to external work, Node distribution and browser cache
-directories. Each output must be new.
-
-```powershell
-node scripts/prepare-windows-java.mjs --work "$build/java-build" --output "$build/java-verapdf"
-node scripts/prepare-runtimes.mjs --platform win32 --arch x64 --java "$build/java-verapdf/java" --verapdf "$build/java-verapdf/verapdf" --browsers "$browserCache" --output "$build/dependencies"
-node scripts/package.mjs --platform win32 --arch x64 --node "$nodeDist" --dependencies "$build/dependencies" --output "$build/check"
-$env:CHECK_NODE_DIST = $nodeDist
-$env:CHECK_ARTIFACT = "$build/check"
-$env:CHECK_REQUIRE_PDF = '1'
-$env:CHECK_WINDOWS_JAVA_RUNTIME = "$build/java-verapdf"
-node --test scripts/package.test.mjs scripts/prepare-runtimes.test.mjs scripts/prepare-windows-java.test.mjs scripts/windows-pe.test.mjs
-```
-
-The launcher selects bundled Java and veraPDF jars. Windows invokes Java directly
-with a classpath and removes inherited Java options. Browser-only assembly needs
-only --browsers. PDF extraction and rendering work with an empty PATH.
-
-The scripts check PE imports, including delay loads. Each DLL outside the runtime
-must be a Windows system DLL. The Java proof verifies the official runtime version
-and PE imports. The package proof moves Check into a path with spaces. It checks
-PDF/UA pass and failure exit codes, manual review page images and
-`prepare-review --design-evidence` detail crops.
-
-The package keeps PDFium's wrapper, wasm, licence and component notices. Java,
-veraPDF and browser files retain their own notices. Clean-machine compatibility,
-platform signing and release review remain separate checks.
-
-Java and veraPDF downloads are pinned official releases. Their legal files and
-source links remain in the artifact. Source links alone do not fulfil source
-obligations. Java and the libraries in veraPDF's jar need a separate review.
-Review licence terms and source needs before sharing a release.
-Test that release on a clean machine too. Check keeps its PolyForm Perimeter licence.
+`capabilities.json` records package files and component requirements. Its file
+hashes describe the package contents; run `doctor` to check installed components.
+Test the artifact on its build platform and architecture.
 
 ### Compare PDF engines during development
 
@@ -359,3 +287,40 @@ and `$XDG_DATA_HOME/praxity-check/components` on Linux. Linux defaults to
 `~/.local/share/praxity-check/components`. `CHECK_COMPONENTS_DIR` overrides the
 folder. Each component version has its own folder and file-hash inventory.
 Changed, missing, extra or linked files invalidate that inventory.
+
+## Install optional components
+
+Run `node src/cli.ts setup` from source, or `praxity-check setup` in a standalone
+package. It displays each component's purpose, version, download size, licence
+and upstream URLs, then asks before installing it. Setup downloads components only after consent.
+PDF facts and rendering use
+bundled PDFium and need no setup. PDF/UA needs veraPDF and Java; HTML audits need
+the Playwright browser. Refusing a component leaves those checks not run.
+
+`setup --yes pdf html` consents to both check groups. You can name `browser`,
+`java` or `verapdf` instead. veraPDF also selects Java for its headless installer.
+An existing Java 17 or newer is reused. `setup --list` displays the same facts
+without prompts, downloads or filesystem changes.
+
+For offline installation, download the archives for your target from the
+[archive list](docs/offline-components.md), then run `setup --from /path/to/archives`.
+Add `--yes` to consent in scripts. Offline setup never downloads missing files.
+It verifies the same SHA-256 pins before extraction. Browser installation uses
+Playwright's own installer with the verified archives, including FFmpeg and
+Windows Winldd. Linux still needs Playwright's operating-system libraries;
+install those with `pnpm exec playwright install-deps chromium` from a development
+checkout or your distribution's packages.
+
+Installations publish only after extraction, version validation and inventory
+creation finish. Older versions remain beside new versions. An interrupted
+install has no usable version folder. Doctor checks every file hash and detects
+extra files, missing files and symlinks. If a version folder is damaged or
+incomplete, move that folder outside the components directory and rerun setup.
+No component download occurs during `check` or `doctor`.
+
+Explicit `--verapdf`, `VERAPDF`, `VERAPDF_JAVA`, `VERAPDF_CLASSPATH`,
+`JAVACMD`, `JAVA_HOME` and `PLAYWRIGHT_BROWSERS_PATH` retain precedence over
+setup. An intact setup installation takes precedence over Java or veraPDF on
+PATH. Existing Playwright developer caches remain usable and are reported as
+explicit. Missing components give a setup command and incomplete coverage,
+with check exit code 2.

@@ -20,6 +20,7 @@ import { parseChecks, parseTier, validateHtmlSelection, type SelectionOptions } 
 const USAGE = `Usage:
   praxity-check check <folder|zip|pdf> [options]
   praxity-check doctor [pdf|html] [--json]
+  praxity-check setup [--yes] [pdf|html|browser|java|verapdf] [--from <folder>] [--list]
   praxity-check compare-pdf <before.json> <after.json> [--json]
   praxity-check prepare-review <folder|zip> [--allow-network] [--output <new-directory>]
   praxity-check prepare-review <pdf> --tier inference --checks accessibility|design [--focus visual|usability] [--output <new-directory>] [--pages 1,3] [--audience <text>] [--use <text>]

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { componentHost, windowsJavaPins, veraPdfEnvironment, resolveComponent, veraPdfCommand, veraPdfJavaArgs, type ComponentHost } from "./components.ts";
+import { componentHost, runtimePins, veraPdfEnvironment, resolveComponent, veraPdfCommand, veraPdfJavaArgs, type ComponentHost } from "./components.ts";
 
 const exec = promisify(execFile);
 type Profile = "ua1" | "ua2";
@@ -130,7 +130,7 @@ export async function checkPdfAccessibility(snapshot: string, options: { profile
 		if (evidence.exitCode !== Number(!result.machineCompliant)) throw new Error("veraPDF exit code contradicts validation result");
 		output.validator.version = result.version;
 		component.version = result.version;
-		component.pinned = result.version === windowsJavaPins.veraPDF.version;
+		component.pinned = result.version === runtimePins.veraPDF.version;
 		output.validator.machineCompliant = result.machineCompliant;
 		output.findings = result.findings;
 		output.validator.coverage = result.coverage;

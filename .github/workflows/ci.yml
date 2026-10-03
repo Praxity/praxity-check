@@ -42,3 +42,55 @@ jobs:
           test "$defect_code" -eq 1
           node src/cli.ts check /tmp/praxity-check-smoke/clean --min-confidence medium >/tmp/praxity-check-clean.txt
           node src/cli.ts prepare-review bench/interaction-review/tabs >/tmp/praxity-check-review.md
+
+  windows-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm typecheck
+      - name: PDF and component tests
+        run: node --test test/pdf*.test.ts test/components.test.ts test/setup.test.ts
+      - name: Build and test the standalone Windows package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nodeExe = (Get-Command node).Source
+          $nodeDist = Join-Path $env:RUNNER_TEMP 'check-node'
+          New-Item -ItemType Directory $nodeDist | Out-Null
+          Copy-Item $nodeExe "$nodeDist/node.exe"
+          $version = & $nodeExe -p 'process.version'
+          Invoke-WebRequest "https://raw.githubusercontent.com/nodejs/node/$version/LICENSE" -OutFile "$nodeDist/LICENSE"
+          $env:CHECK_NODE_DIST = $nodeDist
+          corepack pnpm test:package
+          if ($LASTEXITCODE -ne 0) { throw 'Package tests failed' }
+          node scripts/package.mjs --platform win32 --arch x64 --node $nodeDist --output "$env:RUNNER_TEMP/check"
+          if ($LASTEXITCODE -ne 0) { throw 'Package build failed' }
+      - name: Install components and prove the package with only Node on PATH
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifact = "$env:RUNNER_TEMP/check"
+          $nodeExe = "$artifact/runtime/node.exe"
+          $env:CHECK_COMPONENTS_DIR = "$env:RUNNER_TEMP/check-components"
+          foreach ($name in @('JAVA_HOME', 'JAVACMD', 'VERAPDF', 'VERAPDF_JAVA', 'VERAPDF_CLASSPATH', 'PLAYWRIGHT_BROWSERS_PATH')) {
+            Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+          }
+          $originalPath = $env:PATH
+          try {
+            $env:PATH = "$artifact/runtime"
+            & "$artifact/bin/praxity-check.cmd" setup --yes pdf html
+            if ($LASTEXITCODE -ne 0) { throw 'Setup failed' }
+            & "$artifact/bin/praxity-check.cmd" doctor --json
+            if ($LASTEXITCODE -ne 0) { throw 'Doctor failed' }
+            & "$artifact/bin/praxity-check.cmd" check test/fixtures/pdf-facts.pdf --checks accessibility --tier deterministic --json "$env:RUNNER_TEMP/pdf-report.json"
+            if ($LASTEXITCODE -ne 1) { throw 'PDF fixture must report accessibility findings' }
+          } finally { $env:PATH = $originalPath }
+          $env:CHECK_ARTIFACT = $artifact
+          corepack pnpm test:package
+          if ($LASTEXITCODE -ne 0) { throw 'Installed-component package proof failed' }
