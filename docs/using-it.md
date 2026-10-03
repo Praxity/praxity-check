@@ -6,7 +6,7 @@ Install once with Node 22.18+ and pnpm 11.5.3:
 git clone https://github.com/Praxity/praxity-check.git
 cd praxity-check
 pnpm install --frozen-lockfile
-pnpm exec playwright install chromium
+node src/cli.ts setup
 ```
 
 Then run it from any project. The target is a folder or zip, resolved from the
@@ -533,3 +533,43 @@ and `$XDG_DATA_HOME/praxity-check/components` on Linux. Linux defaults to
 `~/.local/share/praxity-check/components`. `CHECK_COMPONENTS_DIR` overrides the
 folder. Each component version has its own folder and file-hash inventory.
 Changed, missing, extra or linked files invalidate that inventory.
+
+## Install optional components
+
+Run `node src/cli.ts setup` from source, or `praxity-check setup` in a standalone
+package. It displays each component's purpose, version, download size, licence
+and upstream URLs, then asks before installing it. Setup downloads components only after consent.
+PDF facts and rendering use
+bundled PDFium and need no setup. PDF/UA needs veraPDF and Java; HTML audits need
+the Playwright browser. Refusing a component leaves those checks not run.
+
+`setup --yes pdf html` consents to both check groups. You can name `browser`,
+`java` or `verapdf` instead. veraPDF also selects Java for its headless installer.
+An existing Java 17 or newer is reused. `setup --list` displays the same facts
+without prompts, downloads or filesystem changes.
+
+Setup exits 0 when the selected components are usable, or 1 with reasons when
+the requested checks remain unavailable. `setup --list` exits 0.
+
+For offline installation, download the archives for your target from the
+[archive list](offline-components.md), then run `setup --from /path/to/archives`.
+Add `--yes` to consent in scripts. Offline setup never downloads missing files.
+It verifies the same SHA-256 pins before extraction. Browser installation uses
+Playwright's own installer with the verified archives, including FFmpeg and
+Windows Winldd. Linux still needs Playwright's operating-system libraries;
+install those with `pnpm exec playwright install-deps chromium` from a development
+checkout or your distribution's packages.
+
+Installations publish only after extraction, version validation and inventory
+creation finish. Older versions remain beside new versions. An interrupted
+install has no usable version folder. Doctor checks every file hash and detects
+extra files, missing files and symlinks. If a version folder is damaged or
+incomplete, move that folder outside the components directory and rerun setup.
+No component download occurs during `check` or `doctor`.
+
+Explicit `--verapdf`, `VERAPDF`, `VERAPDF_JAVA`, `VERAPDF_CLASSPATH`,
+`JAVACMD`, `JAVA_HOME` and `PLAYWRIGHT_BROWSERS_PATH` retain precedence over
+setup. An intact setup installation takes precedence over Java or veraPDF on
+PATH. Existing Playwright developer caches remain usable and are reported as
+explicit. Missing components give a setup command and incomplete coverage,
+with check exit code 2.

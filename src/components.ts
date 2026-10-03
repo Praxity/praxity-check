@@ -8,7 +8,7 @@ import { homedir, cpus, release } from "node:os";
 import { createRequire } from "node:module";
 import * as nodePath from "node:path";
 import { dirname, join, resolve } from "node:path";
-export const windowsJavaPins = Object.freeze({
+export const runtimePins = Object.freeze({
 	java: {
 		version: "17.0.20.1+1", directory: "jdk-17.0.20.1+1-jre",
 		url: "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.20.1%2B1/OpenJDK17U-jre_x64_windows_hotspot_17.0.20.1_1.zip",
@@ -27,24 +27,22 @@ export const windowsJavaPins = Object.freeze({
 		{ name: "LICENSE.MPL", url: "https://raw.githubusercontent.com/veraPDF/veraPDF-apps/7d9b5c3f709846ab83f86ca1a538b24eac2d3f72/LICENSE.MPL", sha256: "af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e" },
 	],
 });
-
-// The Java launcher is shared by Windows preparation and PDF validation.
+// Headless installation and PDF validation use the same Java launcher arguments.
 export const veraPdfMainClass = "org.verapdf.apps.GreenfieldCliWrapper";
-
 export function veraPdfJavaArgs(classpath: string, args: string[]): string[] {
-	if (!classpath.trim()) throw new Error("veraPDF Java classpath must not be empty");
+    if (!classpath.trim())
+        throw new Error("veraPDF Java classpath must not be empty");
 	return ["-Dfile.encoding=UTF8", "--add-exports=java.base/sun.security.pkcs=ALL-UNNAMED", "-classpath", classpath,
 		veraPdfMainClass, ...args];
 }
-
 export function javaEnvironment(env: NodeJS.ProcessEnv, platform = process.platform): NodeJS.ProcessEnv {
 	const blocked = new Set(["CLASSPATH_PREFIX", "JAVA_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"]);
 	return Object.fromEntries(Object.entries(env).filter(([key]) => !blocked.has(platform === "win32" ? key.toUpperCase() : key)));
 }
 
 // Preserve main's validator policy: POSIX wrappers consume inherited JVM options.
-export function veraPdfEnvironment(env: NodeJS.ProcessEnv, platform: string): NodeJS.ProcessEnv {
- return platform === "win32" ? javaEnvironment(env, "win32") : env;
+export function veraPdfEnvironment(env: NodeJS.ProcessEnv, platform: string, directJava = false): NodeJS.ProcessEnv {
+ return platform === "win32" || directJava ? javaEnvironment(env, platform as NodeJS.Platform) : env;
 }
 
 
@@ -63,46 +61,17 @@ export function veraPdfCommand(env: NodeJS.ProcessEnv, platform: NodeJS.Platform
  if (!tool.trim()) throw new Error("veraPDF executable must not be empty");
  return { tool, args: selection.direct ? veraPdfJavaArgs(selection.classpath ?? "", args) : args };
 }
-
-export function componentLauncher(platform: string) {
-if (platform === "win32") return `@echo off\r
-setlocal DisableDelayedExpansion\r
-for %%I in ("%~dp0..") do set "CHECK_DIR=%%~fI"\r
-set "PLAYWRIGHT_BROWSERS_PATH=%CHECK_DIR%\\dependencies\\browsers"\r
-if exist "%CHECK_DIR%\\dependencies\\java\\bin\\java.exe" (\r
-  set "JAVA_HOME=%CHECK_DIR%\\dependencies\\java"\r
-  set "JAVACMD=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
-  if exist "%CHECK_DIR%\\dependencies\\verapdf\\bin\\*.jar" (\r
-    set "VERAPDF=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
-    set "VERAPDF_JAVA=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
-    set "VERAPDF_CLASSPATH=%CHECK_DIR%\\dependencies\\verapdf\\bin\\*"\r
-  )\r
-)\r
-"%CHECK_DIR%\\runtime\\node.exe" "%CHECK_DIR%\\lib\\cli.js" %*\r
-exit /b %errorlevel%\r
-`;
-return `#!/bin/sh
-set -eu
-CHECK_DIR="$(CDPATH= cd -- "\${0%/*}/.." && pwd)"
-export PLAYWRIGHT_BROWSERS_PATH="$CHECK_DIR/dependencies/browsers"
-if [ -x "$CHECK_DIR/dependencies/bin/verapdf" ]; then export VERAPDF="$CHECK_DIR/dependencies/bin/verapdf"; fi
-if [ -x "$CHECK_DIR/dependencies/java/bin/java" ]; then
-  export JAVA_HOME="$CHECK_DIR/dependencies/java"
-fi
-exec "$CHECK_DIR/runtime/node" "$CHECK_DIR/lib/cli.js" "$@"
-`;
-}
-
-
 export async function browserDefinition() {
  const require = createRequire(import.meta.url);
  const core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
  const metadata = JSON.parse(await readFile(join(dirname(core), "browsers.json"), "utf8"));
- const browser = metadata.browsers.find((item: { name: string }) => item.name === "chromium-headless-shell");
- if (!browser?.revision || !browser.browserVersion) throw new Error("Playwright metadata must include the Chromium headless-shell revision and version");
+    const browser = metadata.browsers.find((item: {
+        name: string;
+    }) => item.name === "chromium-headless-shell");
+    if (!browser?.revision || !browser.browserVersion)
+        throw new Error("Playwright metadata must include the Chromium headless-shell revision and version");
  return { ...browser, directory: `chromium_headless_shell-${browser.revision}`, playwright: JSON.parse(await readFile(core, "utf8")).version };
 }
-
 export type ComponentId = "browser" | "java" | "verapdf";
 export type Archive = { url: string; sha256: string; size: number };
 export type Component = { id: ComponentId; version: string; purpose: string; license: string; checks: string[]; archives: Archive[]; entryPoint: string };
@@ -114,8 +83,17 @@ export function componentHost(overrides: Partial<ComponentHost> = {}): Component
  const exec = promisify(execFile);
  return { env: process.env, platform: process.platform, arch: process.arch, home: homedir(), cwd: process.cwd(), cpuModels: cpus().map(cpu => cpu.model), osRelease: release(), path: nodePath, fs: nodeFs,
   run: async (file, args, env) => {
-   try { const result = await exec(file, args, { env, encoding: "utf8", timeout: 120_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true }); return { ...result, code: 0 }; }
-   catch (error) { const e = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string }; return { stdout: e.stdout ?? "", stderr: e.stderr ?? e.message, code: typeof e.code === "number" ? e.code : null }; }
+            try {
+                const result = await exec(file, args, { env, encoding: "utf8", timeout: 120000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+                return { ...result, code: 0 };
+            }
+            catch (error) {
+                const e = error as NodeJS.ErrnoException & {
+                    stdout?: string;
+                    stderr?: string;
+                };
+                return { stdout: e.stdout ?? "", stderr: e.stderr ?? e.message, code: typeof e.code === "number" ? e.code : null };
+            }
   }, ...overrides };
 }
 
@@ -130,11 +108,14 @@ export function componentsDirectory(host: Pick<ComponentHost, "env" | "platform"
  if (host.platform === "darwin") return join(host.home, "Library", "Application Support", "Praxity Check", "components");
  return join(host.env.XDG_DATA_HOME ?? join(host.home, ".local", "share"), "praxity-check", "components");
 }
-
 // Each hash was checked against Adoptium's adjacent .sha256.txt release asset.
 // Source: https://github.com/adoptium/temurin17-binaries/releases/tag/jdk-17.0.20.1%2B1
-const javaTargets: Record<string, { file: string; sha256: string; size: number }> = {
- "win32-x64": { file: "OpenJDK17U-jre_x64_windows_hotspot_17.0.20.1_1.zip", sha256: windowsJavaPins.java.sha256, size: 43780109 },
+const javaTargets: Record<string, {
+    file: string;
+    sha256: string;
+    size: number;
+}> = {
+    "win32-x64": { file: "OpenJDK17U-jre_x64_windows_hotspot_17.0.20.1_1.zip", sha256: runtimePins.java.sha256, size: 43780109 },
  "darwin-arm64": { file: "OpenJDK17U-jre_aarch64_mac_hotspot_17.0.20.1_1.tar.gz", sha256: "190480874ccceb358cbc840393207f77ac3e63a4c5f8129d0e23e9518b96ad05", size: 42722113 },
  "darwin-x64": { file: "OpenJDK17U-jre_x64_mac_hotspot_17.0.20.1_1.tar.gz", sha256: "333cb81123c36568586646c73c8fa2326dab8badc43f5ea388a90fff59c9df27", size: 37635516 },
  "linux-x64": { file: "OpenJDK17U-jre_x64_linux_hotspot_17.0.20.1_1.tar.gz", sha256: "0b2b640e3046b64c8ec504de0ab9d91bb5610182bda21fad454681ce54d45a62", size: 46640574 },
@@ -145,31 +126,32 @@ async function componentDefinitions(host: Pick<ComponentHost, "platform" | "arch
  const browser = await browserDefinition(), target = browserLayout(host.platform, host.arch, variable({ env: host.env ?? {}, platform: host.platform }, "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE"), host.osRelease, host.cpuModels);
  return [
   { id: "browser", version: browser.browserVersion, purpose: "HTML accessibility audits and interaction evidence", license: "BSD and bundled notices; FFmpeg LGPL-2.1+", checks: ["html"], archives: [], entryPoint: target ? `${browser.directory}/${target.directory}/${target.executable}` : "" },
-  { id: "java", version: windowsJavaPins.java.version, purpose: "Run the veraPDF PDF/UA validator", license: "GPL-2.0 with Classpath Exception", checks: ["pdf"], archives: [], entryPoint: `${windowsJavaPins.java.directory}/${host.platform === "darwin" ? "Contents/Home/" : ""}bin/java${host.platform === "win32" ? ".exe" : ""}` },
-  { id: "verapdf", version: windowsJavaPins.veraPDF.version, purpose: "PDF/UA-1 and PDF/UA-2 machine validation", license: "GPL-3.0+ or MPL-2.0+", checks: ["pdf"], archives: [], entryPoint: `payload/bin/cli-${windowsJavaPins.veraPDF.version}.jar` },
+  { id: "java", version: runtimePins.java.version, purpose: "Run the veraPDF PDF/UA validator", license: "GPL-2.0 with Classpath Exception", checks: ["pdf"], archives: [], entryPoint: `${runtimePins.java.directory}/${host.platform === "darwin" ? "Contents/Home/" : ""}bin/java${host.platform === "win32" ? ".exe" : ""}` },
+  { id: "verapdf", version: runtimePins.veraPDF.version, purpose: "PDF/UA-1 and PDF/UA-2 machine validation", license: "GPL-3.0+ or MPL-2.0+", checks: ["pdf"], archives: [], entryPoint: `payload/bin/cli-${runtimePins.veraPDF.version}.jar` },
  ];
 }
 
-export async function componentManifest(host: Pick<ComponentHost, "platform" | "arch">): Promise<Component[]> {
+export async function componentManifest(host: Pick<ComponentHost, "platform" | "arch"> & Partial<Pick<ComponentHost, "cpuModels" | "osRelease" | "env">>): Promise<Component[]> {
  const java = javaTargets[`${host.platform}-${host.arch}`];
  if (!java) throw new Error(`Unsupported components target: ${host.platform} ${host.arch}`);
  const browser = await browserDefinition();
  if (browser.revision !== "1234" || browser.playwright !== "1.62.1") throw new Error("Playwright changed; update the verified browser archive pins before setup.");
- browserTarget(host.platform, host.arch);
- const shell = browserArchives[host.platform === "win32" ? 0 : host.platform === "darwin" ? host.arch === "arm64" ? 1 : 2 : host.arch === "x64" ? 3 : 4]!;
- const ffmpeg = browserArchives[host.platform === "win32" ? 5 : host.platform === "darwin" ? 6 : host.arch === "x64" ? 7 : 8]!;
+ // The installer ignores environment overrides and detects Apple's CPU even under Rosetta.
+ const target = browserLayout(host.platform, host.arch, undefined, host.osRelease, host.cpuModels);
+ if (!target) throw new Error(`Unsupported browser target: ${host.platform} ${host.arch}`);
+ const shell = browserArchives[host.platform === "win32" ? 0 : host.platform === "darwin" ? target.arch === "arm64" ? 1 : 2 : target.arch === "x64" ? 3 : 4]!;
+ const ffmpeg = browserArchives[host.platform === "win32" ? 5 : host.platform === "darwin" ? target.arch === "arm64" ? 10 : 6 : target.arch === "x64" ? 7 : 8]!;
  const archives: Record<ComponentId, Archive[]> = {
   browser: [shell, ffmpeg, ...(host.platform === "win32" ? [browserArchives[9]!] : [])],
-  java: [{ url: new URL(java.file, windowsJavaPins.java.url).href, sha256: java.sha256, size: java.size }],
-  verapdf: [{ ...windowsJavaPins.veraPDF, size: 32923960 }],
+  java: [{ url: new URL(java.file, runtimePins.java.url).href, sha256: java.sha256, size: java.size }],
+  verapdf: [{ ...runtimePins.veraPDF, size: 32923960 }],
  };
- return (await componentDefinitions({ platform: host.platform, arch: host.arch })).map(component => ({ ...component, archives: archives[component.id] }));
+ return (await componentDefinitions({ ...host, env: {} })).map(component => ({ ...component, archives: archives[component.id] }));
 }
 
 export function componentDirectory(host: Pick<ComponentHost, "env" | "platform" | "home"> & Partial<Pick<ComponentHost, "path">>, component: Pick<Component, "id" | "version">) {
  return (host.path ?? nodePath).join(componentsDirectory(host), component.id, component.version);
 }
-
 const inventoryName = ".inventory.json";
 class ComponentAccessError extends Error {
  readonly path: string;
@@ -191,38 +173,45 @@ function filesystemFailure(error: unknown, path: string, source: ComponentResolu
 export async function fileInventory(root: string, fs: typeof nodeFs, path = nodePath) {
  const { join } = path;
  if ((await fs.lstat(root)).isSymbolicLink()) throw new Error("Component root is a symlink");
- const files: Record<string, string> = {};
+ const files: Record<string, string> = Object.create(null);
  async function walk(directory: string, prefix = "") {
   for (const name of (await fs.readdir(directory)).sort()) {
-   if (!prefix && name === inventoryName) continue;
+            if (!prefix && name === inventoryName)
+                continue;
    const path = join(directory, name), info = await fs.lstat(path);
-   if (info.isSymbolicLink()) throw new Error(`Component contains a symlink: ${prefix}${name}`);
-   if (info.isDirectory()) await walk(path, `${prefix}${name}/`);
-   else if (info.isFile()) files[`${prefix}${name}`] = createHash("sha256").update(await fs.readFile(path)).digest("hex");
-   else throw new Error(`Component contains a non-regular file: ${prefix}${name}`);
+            if (info.isSymbolicLink())
+                throw new Error(`Component contains a symlink: ${prefix}${name}`);
+            if (info.isDirectory())
+                await walk(path, `${prefix}${name}/`);
+            else if (info.isFile())
+                files[`${prefix}${name}`] = createHash("sha256").update(await fs.readFile(path)).digest("hex");
+            else
+                throw new Error(`Component contains a non-regular file: ${prefix}${name}`);
   }
  }
  await walk(root);
  return files;
 }
-
 export async function writeInventory(root: string, component: Component, host: ComponentHost) {
  const { join } = host.path;
  const files = await fileInventory(root, host.fs, host.path);
  if (!files[component.entryPoint]) throw new Error(`Component entry point missing: ${component.entryPoint}`);
  await host.fs.writeFile(join(root, inventoryName), JSON.stringify({ schemaVersion: 1, id: component.id, version: component.version, platform: host.platform, arch: host.arch, files }, null, 2), { flag: "wx" });
 }
-
 export async function checkInventory(root: string, component: Component, host: ComponentHost): Promise<"intact" | "damaged" | "absent"> {
  const { join } = host.path;
  let raw: string;
- try { if ((await host.fs.lstat(join(root, inventoryName))).isSymbolicLink()) return "damaged"; raw = await host.fs.readFile(join(root, inventoryName), "utf8"); }
+ try { if (!(await host.fs.lstat(join(root, inventoryName))).isFile()) return "damaged"; raw = await host.fs.readFile(join(root, inventoryName), "utf8"); }
  catch (e) { if (["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "")) return "absent"; filesystemFailure(e, join(root, inventoryName), "setup", "damaged"); }
  try {
   const record = JSON.parse(raw);
-  if (record.schemaVersion !== 1 || record.id !== component.id || record.version !== component.version || record.platform !== host.platform || record.arch !== host.arch) return "damaged";
+        if (!record || typeof record !== "object" || Array.isArray(record))
+            return "damaged";
+        if (record.schemaVersion !== 1 || record.id !== component.id || record.version !== component.version || record.platform !== host.platform || record.arch !== host.arch)
+            return "damaged";
   const actual = await fileInventory(root, host.fs, host.path);
-  if (!actual[component.entryPoint] || !record.files || typeof record.files !== "object") return "damaged";
+        if (!actual[component.entryPoint] || !record.files || typeof record.files !== "object" || Array.isArray(record.files) || Object.values(record.files).some(value => typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)))
+            return "damaged";
   const keys = Object.keys(actual).sort();
   return JSON.stringify(keys) === JSON.stringify(Object.keys(record.files).sort()) && keys.every(key => actual[key] === record.files[key]) ? "intact" : "damaged";
  } catch (e) { if (e instanceof SyntaxError || ["ENOENT", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "") || (e instanceof Error && /symlink|non-regular/.test(e.message))) return "damaged"; filesystemFailure(e, root, "setup", "damaged"); }
@@ -276,7 +265,7 @@ async function executablePath(host: ComponentHost, value: string, source: Compon
  return null;
 }
 
-export async function resolveComponent(host: ComponentHost, id: ComponentId, explicit?: string, options: { probeVersion?: boolean; validatorExecutable?: string } = {}): Promise<ComponentResolution> {
+export async function resolveComponent(host: ComponentHost, id: ComponentId, explicit?: string, options: { probeVersion?: boolean; validatorExecutable?: string; javaPurpose?: "installer" } = {}): Promise<ComponentResolution> {
  const { join } = host.path;
  const component = (await componentDefinitions(host)).find(item => item.id === id)!;
  const missing = (inventory: ComponentResolution["inventory"] = "absent", path: string | null = null): ComponentResolution => ({ id, usable: false, source: null, path, version: null, pinned: null, inventory, reason: `${id === "browser" ? "Browser" : id === "java" ? "Java 17 or newer" : "veraPDF"} is ${inventory === "damaged" ? "damaged" : "not installed"}; checks not run. Run check setup ${component.checks.join(" ")}.` });
@@ -297,9 +286,9 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
    selectionName = key;
    break;
   }
-  // A wrapper chooses its own Java; an unrelated managed JRE cannot replace that choice.
-  wrapperJava = options.validatorExecutable !== undefined || !!validator.value && !validator.direct;
-  if (!wrapperJava && !validator.direct) {
+  // Runtime wrappers choose their own Java. The managed installer can use the managed JRE.
+  wrapperJava = options.javaPurpose !== "installer" && (options.validatorExecutable !== undefined || !!validator.value && !validator.direct);
+  if (options.javaPurpose !== "installer" && !wrapperJava && !validator.direct) {
    const definition = (await componentDefinitions(host)).find(item => item.id === "verapdf")!;
    wrapperJava = await checkInventory(componentDirectory(host, definition), definition, host) !== "intact"
     && !!await executablePath(host, "verapdf");
@@ -312,7 +301,7 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
   // Validation obtains veraPDF's version from its JSON, so wrappers need no version command.
   if (!version && !(id === "verapdf" && options.probeVersion === false)) {
    const result = await host.run(probeTool, classpath ? veraPdfJavaArgs(classpath, ["--version"]) : ["--version"],
-    id === "verapdf" ? veraPdfEnvironment(host.env, host.platform) : javaEnvironment(host.env, host.platform as NodeJS.Platform));
+    id === "verapdf" ? veraPdfEnvironment(host.env, host.platform, !!classpath) : javaEnvironment(host.env, host.platform as NodeJS.Platform));
    const output = result.stdout + "\n" + result.stderr;
    version = id === "java" ? output.match(/Temurin-([\d.]+\+\d+)/)?.[1] ?? output.match(/(?:openjdk|java)\s+(?:version\s+)?"?([\d.]+(?:\+\d+)?)/i)?.[1] ?? null : id === "verapdf" ? output.match(/veraPDF\s+([\d.]+)/)?.[1] ?? null : output.match(/(?:Chromium|Chrome[^\r\n]*?)\s+([\d.]+)/)?.[1] ?? null;
    if (result.code !== 0 || !version) return { ...missing(inventory, path), source, version, reason: `${id} did not report a version successfully: ${output.trim() || `exit ${result.code}`}; checks not run. Run check setup ${component.checks.join(" ")}.` };
@@ -321,7 +310,7 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
   return { id, usable: true, source, path, version, pinned: version === null ? null : version === component.version, inventory, ...(classpath ? { classpath } : {}) };
  }
  if (value !== undefined) {
-  if (!value.trim()) throw new Error(`${id} executable must not be empty`);
+  if (!value.trim()) throw new Error(`${id} executable must not be empty${selectionName ? `; fix or clear ${selectionName}` : ""}`);
   const path = await executablePath(host, value, "explicit");
   const result = path ? await found(path, "explicit", "unmanaged") : { ...missing("unmanaged", value), source: "explicit" as const };
   if (id === "java" && !result.usable && selectionName)
@@ -383,16 +372,15 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
    reason: `${id} at ${error.path} could not be accessed: ${error.message}; checks not run. Run check setup ${component.checks.join(" ")}.` };
  }
 }
-
 export async function doctor(host: ComponentHost, checks = ["pdf", "html"]) {
  if (checks.some(check => !["pdf", "html"].includes(check))) throw new Error("Doctor checks: pdf, html");
  const manifest = await componentDefinitions(host);
  const components = await Promise.all(manifest.map(item => resolveComponent(host, item.id)));
  return { components, exitCode: components.every(item => !manifest.find(def => def.id === item.id)!.checks.some(check => checks.includes(check)) || item.usable) ? 0 : 1 };
 }
-
 export async function doctorCli(args: string[], host = componentHost(), print: (text: string) => void = console.log): Promise<number> {
- if (args.some(arg => arg.startsWith("-") && arg !== "--json")) throw new Error("Doctor options: --json, pdf, html");
+    if (args.some(arg => arg.startsWith("-") && arg !== "--json"))
+        throw new Error("Doctor options: --json, pdf, html");
  const checks = args.filter(arg => arg !== "--json");
  const result = await doctor(host, checks.length ? checks : undefined);
  print(args.includes("--json") ? JSON.stringify(result, null, 2) : result.components.map(item => `${item.id}: ${item.usable ? "found" : "missing"} | ${item.path ?? "no location"} | version ${item.version ?? "unknown"} | pinned ${item.pinned ?? "unknown"} | inventory ${item.inventory} | ${item.source ?? "missing"}${item.reason ? " | " + item.reason : ""}`).join("\n"));
@@ -409,10 +397,10 @@ function browserLayout(platform: string, arch: string, override?: string, osRele
  // Playwright uses Apple CPU models on macOS 11+, including x64 Node under Rosetta.
  if (!override && platform === "darwin" && cpuModels)
   arch = Number(osRelease?.split(".")[0] ?? 20) >= 20 && cpuModels.some(model => model.includes("Apple")) ? "arm64" : "x64";
- if (platform === "darwin" && ["x64", "arm64"].includes(arch)) return { directory: `chrome-headless-shell-mac-${arch}`, executable: "chrome-headless-shell" };
- if (platform === "linux" && arch === "x64") return { directory: "chrome-headless-shell-linux64", executable: "chrome-headless-shell" };
- if (platform === "linux" && arch === "arm64") return { directory: "chrome-linux", executable: "headless_shell" };
- if (platform === "win32") return { directory: "chrome-headless-shell-win64", executable: "chrome-headless-shell.exe" };
+ if (platform === "darwin" && ["x64", "arm64"].includes(arch)) return { arch, directory: `chrome-headless-shell-mac-${arch}`, executable: "chrome-headless-shell" };
+ if (platform === "linux" && arch === "x64") return { arch, directory: "chrome-headless-shell-linux64", executable: "chrome-headless-shell" };
+ if (platform === "linux" && arch === "arm64") return { arch, directory: "chrome-linux", executable: "headless_shell" };
+ if (platform === "win32") return { arch: "x64", directory: "chrome-headless-shell-win64", executable: "chrome-headless-shell.exe" };
  return null;
 }
 export function browserTarget(platform: string, arch: string) {
@@ -420,7 +408,6 @@ export function browserTarget(platform: string, arch: string) {
  if (!target) throw new Error(`Runtime assembly supports macOS arm64 and Windows x64 only; received ${platform} ${arch}`);
  return target;
 }
-
 // SHA-256 measured from the official archives selected by Playwright 1.62.1.
 const browserArchives: Archive[] = [
   {
@@ -472,5 +459,10 @@ const browserArchives: Archive[] = [
     "url": "https://cdn.playwright.dev/builds/winldd/1007/winldd-win64.zip",
     "sha256": "0069f0d11d4ad6df068a068c003d22fe7dbec192a47bba64b2e115e9c8ce41d8",
     "size": 128684
+    },
+    {
+        "url": "https://cdn.playwright.dev/builds/ffmpeg/1011/ffmpeg-mac-arm64.zip",
+        "sha256": "7d77eb0d44b59acc4065faa2476c0df1a242cc904c346f820626818c953c5277",
+        "size": 1097141
   }
 ];

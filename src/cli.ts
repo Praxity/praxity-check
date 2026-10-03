@@ -16,7 +16,17 @@ try {
 			pdf = !zip && (extname(target).toLowerCase() === ".pdf" || header.includes(Buffer.from("%PDF-")));
 		} finally { await file.close(); }
 	}
-	if (args[0] === "doctor") {
+	if (args[0] === "setup") {
+		const { setupCli, setupHost } = await import("./setup.ts");
+		const { createInterface } = await import("node:readline/promises");
+		const host = setupHost({ confirm: async component => {
+			if (!process.stdin.isTTY) throw new Error("Interactive setup requires a terminal; use --yes to consent in scripts.");
+			const terminal = createInterface({ input: process.stdin, output: process.stdout });
+			try { return /^y(?:es)?$/i.test((await terminal.question(`Install ${component.id}? [y/N] `)).trim()); }
+			finally { terminal.close(); }
+		} });
+		process.exitCode = await setupCli(args.slice(1), host);
+	} else if (args[0] === "doctor") {
 		const { doctorCli } = await import("./components.ts");
 		process.exitCode = await doctorCli(args.slice(1));
 	} else if (args[0] === "compare-pdf") {

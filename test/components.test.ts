@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, posix } from "node:path";
+import { basename, dirname, join, resolve, posix } from "node:path";
 import test from "node:test";
 import { checkPdfAccessibility } from "../src/pdf-accessibility.ts";
 import { componentHost, componentDirectory, componentManifest, componentsDirectory, doctorCli, resolveComponent, writeInventory, veraPdfCommand, type ComponentHost, type ComponentId } from "../src/components.ts";
@@ -48,7 +48,6 @@ async function install(host: ComponentHost, id: ComponentId) {
  await writeInventory(root, component, host);
  return path;
 }
-
 test("components use platform data folders and explicit overrides", () => {
  assert.equal(componentsDirectory({ env: {}, platform: "darwin", home: "/user" }), join("/user", "Library/Application Support/Praxity Check/components"));
  assert.equal(componentsDirectory({ env: {}, platform: "linux", home: "/user" }), join("/user", ".local/share/praxity-check/components"));
@@ -56,12 +55,12 @@ test("components use platform data folders and explicit overrides", () => {
  assert.equal(componentsDirectory({ env: { LOCALAPPDATA: "/local" }, platform: "win32", home: "/user" }), join("/local", "Praxity/Check/components"));
  assert.equal(componentsDirectory({ env: { CHECK_COMPONENTS_DIR: "/chosen" }, platform: "linux", home: "/user" }), resolve("/chosen"));
 });
-
-test("explicit beats setup, setup beats system, and damaged files never count as intact", async t => {
+test("explicit beats setup, setup beats system, and damaged files never count as intact", async (t) => {
  const host = await fixture(t);
  const managed = await install(host, "java");
  const system = join(host.env.PATH!, host.platform === "win32" ? "java.exe" : "java");
- await fs.mkdir(dirname(system), { recursive: true }); await fs.writeFile(system, "system runtime");
+    await fs.mkdir(dirname(system), { recursive: true });
+    await fs.writeFile(system, "system runtime");
  assert.equal((await resolveComponent(host, "java")).source, "setup");
  assert.equal((await resolveComponent(host, "java", system)).source, "explicit");
  host.env.JAVACMD = system;
@@ -69,35 +68,63 @@ test("explicit beats setup, setup beats system, and damaged files never count as
  delete host.env.JAVACMD;
  await fs.writeFile(managed, "changed DLL or executable");
  const fallback = await resolveComponent(host, "java");
- assert.equal(fallback.inventory, "damaged"); assert.equal(fallback.source, "system");
+    assert.equal(fallback.inventory, "damaged");
+    assert.equal(fallback.source, "system");
  await fs.rm(system);
  const missing = await resolveComponent(host, "java");
- assert.equal(missing.usable, false); assert.equal(missing.inventory, "damaged"); assert.match(missing.reason!, /Run check setup pdf/);
+    assert.equal(missing.usable, false);
+    assert.equal(missing.inventory, "damaged");
+    assert.match(missing.reason!, /Run check setup pdf/);
 });
-
-test("inventories reject missing, extra and symlink files; interrupted installs are absent", async t => {
+test("inventories reject missing, extra and symlink files; interrupted installs are absent", async (t) => {
  const host = await fixture(t), path = await install(host, "verapdf");
  assert.equal((await resolveComponent(host, "verapdf")).usable, false, "A jar needs Java");
  await install(host, "java");
  assert.equal((await resolveComponent(host, "verapdf")).usable, true);
  await fs.writeFile(join(dirname(path), "injected.jar"), "extra");
  assert.equal((await resolveComponent(host, "verapdf")).inventory, "damaged");
- await fs.rm(join(dirname(path), "injected.jar")); await fs.rm(path);
+    await fs.rm(join(dirname(path), "injected.jar"));
+    await fs.rm(path);
  assert.equal((await resolveComponent(host, "verapdf")).inventory, "damaged");
  const browser = (await componentManifest(host)).find(c => c.id === "browser")!;
  const interrupted = join(componentDirectory(host, browser), browser.entryPoint);
- await fs.mkdir(dirname(interrupted), { recursive: true }); await fs.writeFile(interrupted, "partial");
+    await fs.mkdir(dirname(interrupted), { recursive: true });
+    await fs.writeFile(interrupted, "partial");
  assert.equal((await resolveComponent(host, "browser")).inventory, "absent");
 });
+test("doctor rejects an explicit component that cannot start", async (t) => {
+    const host = await fixture(t), path = join(host.home, "broken-verapdf");
+    await fs.writeFile(path, "not executable");
+    host.env.VERAPDF = path;
+    host.run = async () => ({ stdout: "", stderr: "Cannot start", code: null });
+    assert.equal((await resolveComponent(host, "verapdf")).usable, false);
+    assert.equal(await doctorCli(["pdf"], host, () => { }), 1);
+});
 
-test("system Java below 17 cannot satisfy PDF checks", async t => {
+test("an intact managed Java inventory also needs a usable executable", async (t) => {
+    const host = await fixture(t);
+    await install(host, "java");
+    host.run = async () => ({ stdout: "", stderr: "Permission denied", code: null });
+    const java = await resolveComponent(host, "java");
+    assert.equal(java.inventory, "intact");
+    assert.equal(java.usable, false);
+});
+
+test("inventory detects extra files whose names match Object prototype properties", async (t) => {
+    const host = await fixture(t);
+    await install(host, "java");
+    const component = (await componentManifest(host)).find(c => c.id === "java")!;
+    await fs.writeFile(join(componentDirectory(host, component), "__proto__"), "unexpected file");
+    assert.equal((await resolveComponent(host, "java")).inventory, "damaged");
+});
+test("system Java below 17 cannot satisfy PDF checks", async (t) => {
  const host = await fixture(t), path = join(host.env.PATH!, host.platform === "win32" ? "java.exe" : "java");
- await fs.mkdir(dirname(path), { recursive: true }); await fs.writeFile(path, "old java");
+    await fs.mkdir(dirname(path), { recursive: true });
+    await fs.writeFile(path, "old java");
  host.run = async () => ({ stdout: 'java version "11.0.28"', stderr: "", code: 0 });
  assert.equal((await resolveComponent(host, "java")).usable, false);
 });
-
-test("a linked managed component root is damaged", async t => {
+test("a linked managed component root is damaged", async (t) => {
  const host = await fixture(t);
  await install(host, "java");
  const component = (await componentManifest(host)).find(c => c.id === "java")!;
@@ -106,25 +133,40 @@ test("a linked managed component root is damaged", async t => {
  await fs.symlink(moved, managed, host.platform === "win32" ? "junction" : "dir");
  assert.equal((await resolveComponent(host, "java")).inventory, "damaged");
 });
-
-test("doctor text and JSON share facts and exit codes for selected checks", async t => {
+test("malformed inventory metadata is damaged", async (t) => {
+    const host = await fixture(t);
+    await install(host, "java");
+    const component = (await componentManifest(host)).find(c => c.id === "java")!;
+    const inventory = join(componentDirectory(host, component), ".inventory.json");
+    for (const value of ["null", "{}", "[]", "{broken"]) {
+        await fs.writeFile(inventory, value);
+        assert.equal((await resolveComponent(host, "java")).inventory, "damaged");
+    }
+});
+test("doctor text and JSON share facts and exit codes for selected checks", async (t) => {
  const host = await fixture(t), printed: string[] = [];
  assert.equal(await doctorCli(["pdf"], host, text => printed.push(text)), 1);
  assert.match(printed[0]!, /verapdf: missing.*check setup pdf/);
- await install(host, "java"); await install(host, "verapdf");
+    await install(host, "java");
+    await install(host, "verapdf");
  assert.equal(await doctorCli(["--json", "pdf"], host, text => printed.push(text)), 0);
  const json = JSON.parse(printed[1]!);
- assert.equal(json.components.find((c: { id: string }) => c.id === "java").source, "setup");
- assert.equal(json.components.find((c: { id: string }) => c.id === "java").pinned, true);
- assert.equal(await doctorCli([], host, () => {}), 1);
- await install(host, "browser"); assert.equal(await doctorCli([], host, () => {}), 0);
+    assert.equal(json.components.find((c: {
+        id: string;
+    }) => c.id === "java").source, "setup");
+    assert.equal(json.components.find((c: {
+        id: string;
+    }) => c.id === "java").pinned, true);
+    assert.equal(await doctorCli([], host, () => { }), 1);
+    await install(host, "browser");
+    assert.equal(await doctorCli([], host, () => { }), 0);
  await assert.rejects(doctorCli(["other"], host), /Doctor checks/);
 });
-
-test("missing PDF component produces not-run coverage and an actionable reason", async t => {
+test("missing PDF component produces not-run coverage and an actionable reason", async (t) => {
  const host = await fixture(t);
  const result = await checkPdfAccessibility("unused.pdf", { profile: "ua1" }, host);
- assert.equal(result.machineStatus, "incomplete"); assert.equal(result.evaluations[0]?.outcome, "untested");
+    assert.equal(result.machineStatus, "incomplete");
+    assert.equal(result.evaluations[0]?.outcome, "untested");
  assert.match(result.evaluations[0]!.reason, /checks not run.*Run check setup pdf/);
  assert.equal(result.validator.machineCompliant, undefined);
 });
@@ -183,10 +225,12 @@ test("component discovery propagates unexpected filesystem failures", async t =>
 
 test("doctor CLI returns 1 and missing HTML checks save not-run coverage", async t => {
  const host = await fixture(t), target = join(host.home, "course"), report = join(host.home, "report.json");
- await fs.mkdir(target); await fs.writeFile(join(target, "index.html"), "<html><title>Test</title></html>");
+    await fs.mkdir(target);
+    await fs.writeFile(join(target, "index.html"), "<html><title>Test</title></html>");
  const env = { ...process.env, ...host.env, PLAYWRIGHT_BROWSERS_PATH: join(host.home, "missing-browser") };
  const doctor = spawnSync(process.execPath, [resolve("src/cli.ts"), "doctor", "html", "--json"], { env, encoding: "utf8" });
- assert.equal(doctor.status, 1, doctor.stderr); assert.equal(JSON.parse(doctor.stdout).exitCode, 1);
+    assert.equal(doctor.status, 1, doctor.stderr);
+    assert.equal(JSON.parse(doctor.stdout).exitCode, 1);
  const check = spawnSync(process.execPath, [resolve("src/cli.ts"), "check", target, "--json", report], { env, encoding: "utf8" });
  assert.equal(check.status, 2, check.stderr);
  const result = JSON.parse(await fs.readFile(report, "utf8"));
@@ -509,7 +553,7 @@ test("POSIX Java lookup agrees with the installed veraPDF shell launcher", { ski
 
 
 test("runtime browser overrides do not change verified download entry points", async () => {
- const target = { platform: "darwin", arch: "arm64" };
+ const target = { platform: "darwin", arch: "arm64", cpuModels: ["Apple M1"], osRelease: "24.0.0" };
  const pinned = (await componentManifest(target)).find(c => c.id === "browser")!;
  const withOverrides = (await componentManifest(componentHost({ ...target, env: { PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: "win64" } }))).find(c => c.id === "browser")!;
  assert.equal(withOverrides.entryPoint, pinned.entryPoint);
@@ -533,5 +577,34 @@ test("POSIX Java discovery falls back to PATH when the launcher gets no home", a
    assert.equal(result.path, path); assert.equal(result.usable, true); assert.equal(result.source, "system");
    assert.match(result.reason!, /Java home discovery/);
   }
+ });
+});
+
+test("setup browser archive filenames match the installed Playwright download table on every target", async t => {
+ const require = createRequire(import.meta.url);
+ const core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
+ // Playwright's registry reads its own download table. A fresh process applies each host target.
+ const registryCode = `const {registry} = require(${JSON.stringify(join(dirname(core), "lib/coreBundle.js"))}).registry;
+ console.log(JSON.stringify({urls: registry.executables().filter(x => ['chromium-headless-shell','ffmpeg','winldd'].includes(x.name)).flatMap(x => x.downloadURLs?.length ? [x.downloadURLs.at(-1)] : []), executable: registry.findExecutable('chromium-headless-shell').executablePath()}));`;
+ for (const [name, platform, arch, cpu, osRelease, override] of [
+  ["Windows", "win32", "x64", "Intel", "10.0.0"],
+  ["Apple Silicon", "darwin", "arm64", "Apple M1", "24.0.0"],
+  ["Intel Mac", "darwin", "x64", "Intel", "24.0.0"],
+  ["Rosetta", "darwin", "x64", "Apple M1", "24.0.0"],
+  ["Linux x64", "linux", "x64", "Intel", "6.0.0", "ubuntu24.04-x64"],
+  ["Linux arm64", "linux", "arm64", "ARM", "6.0.0", "ubuntu24.04-arm64"],
+ ]) await t.test(name!, async () => {
+  const code = `const os=require('os'); os.platform=()=>${JSON.stringify(platform)}; os.arch=()=>${JSON.stringify(arch)}; os.release=()=>${JSON.stringify(osRelease)}; os.cpus=()=>[{model:${JSON.stringify(cpu)}}]; Object.defineProperty(process,'platform',{value:${JSON.stringify(platform)}});\n${registryCode}`;
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (/^(PLAYWRIGHT_|npm_config_playwright_|npm_package_config_playwright_)/i.test(key)) delete env[key];
+  if (override) env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE = override;
+  const installer = spawnSync(process.execPath, ["-e", code], { encoding: "utf8", env, windowsHide: true });
+  assert.equal(installer.status, 0, installer.stderr);
+  const oracle = JSON.parse(installer.stdout) as { urls: string[]; executable: string };
+  const requested = oracle.urls.map(url => basename(new URL(url).pathname)).sort();
+  const host = componentHost({ platform: platform!, arch: arch!, cpuModels: [cpu!], osRelease: osRelease!, env: {} });
+  const browser = (await componentManifest(host)).find(c => c.id === "browser")!;
+  assert.deepEqual(browser.archives.map(a => basename(new URL(a.url).pathname)).sort(), requested);
+  assert.equal(browser.entryPoint, oracle.executable.split(/[\\/]/).slice(-3).join("/"));
  });
 });

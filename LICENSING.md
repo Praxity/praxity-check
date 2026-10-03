@@ -57,4 +57,6 @@ separately invoked model reviewer.
 Check's licence does not replace the terms of its dependencies.
 PDFium's wasm and the MIT wrapper are distributed with their own licences.
 Their licence and component notices are in notices/pdfium.
-Java, veraPDF and browsers retain separate terms when included in an artifact.
+Check does not redistribute the browser, Java or veraPDF. `check setup` downloads
+them from their upstream projects after consent; their own licence terms apply.
+See [component archives](docs/offline-components.md) for licences, URLs and hashes.

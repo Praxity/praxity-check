@@ -21,6 +21,14 @@ test("operator instructions require doctor for component availability", async ()
 	}
 });
 
+test("operator instructions explain setup for optional components", async () => {
+	for (const path of ["skill/SKILL.md", "docs/nvda-driver.md"]) {
+		const text = await readFile(join(repository, path), "utf8");
+		assert.match(text, /setup pdf/, path);
+		if (path === "skill/SKILL.md") assert.match(text, /setup html/, path);
+	}
+});
+
 async function scratch(t) {
 	const directory = await mkdtemp(join(tmpdir(), "standalone check "));
 	t.after(() => rm(directory, { recursive: true, force: true }));
@@ -71,7 +79,8 @@ function run(launcher, args, root, inherited = {}) {
 	const env = windows
 		? { PATH: join(root, "empty PATH"), SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root, USERPROFILE: root }
 		: { PATH: join(root, "empty PATH"), HOME: root, TMPDIR: root };
-	Object.assign(env, inherited);
+	if (process.env.CHECK_COMPONENTS_DIR) env.CHECK_COMPONENTS_DIR = process.env.CHECK_COMPONENTS_DIR;
+ Object.assign(env, inherited);
 	if (windows) {
 		// Node cannot execFile a .cmd. The absolute system shell is the only external launcher tool.
 		const command = `"${launcher}" ${args.map(arg => `"${arg}"`).join(" ")}`;
@@ -94,7 +103,7 @@ async function proveWindowsPdf(launcher, root) {
 	await writeFile(input, source);
 	const output = join(root, "PDF UA passing report.json");
 	const passing = run(launcher, ["check", input, "--tier", "deterministic", "--checks", "accessibility", "--json", output], root, {
-		VERAPDF: join(root, "external veraPDF.bat"), JAVA_TOOL_OPTIONS: "-javaagent:missing.jar", JDK_JAVA_OPTIONS: "--invalid-option",
+		JAVA_TOOL_OPTIONS: "-javaagent:missing.jar", JDK_JAVA_OPTIONS: "--invalid-option",
 		_JAVA_OPTIONS: "-invalid-option", JAVA_OPTS: "-invalid-option", CLASSPATH_PREFIX: join(root, "external classpath"),
 	});
 	assert.equal(passing.status, 0, passing.stderr || passing.stdout || String(passing.error));
@@ -177,6 +186,9 @@ async function proveArtifact(staged, root, html) {
 	assert.ok(manifest.files.some(f=>f.path==="node_modules/@embedpdf/pdfium/dist/pdfium.wasm"));
 	assert.ok(manifest.files.some(f=>f.path==="node_modules/@embedpdf/pdfium/dist/index.js"));
 	assert.ok(!manifest.files.some(f=>/poppler/i.test(f.path)));
+ assert.ok(!manifest.files.some(f => /^(dependencies|browsers|java|verapdf)\//.test(f.path) || /chrome-headless-shell|cli-1\.30\.2\.jar|bin\/java(?:\.exe)?$/.test(f.path)));
+ assert.equal(manifest.payloads.java,false);assert.equal(manifest.payloads.veraPDF,false);
+ assert.doesNotMatch(launcherText,/PLAYWRIGHT_BROWSERS_PATH|JAVA_HOME|JAVACMD|VERAPDF/);
 	const help = run(launcher, ["--help"], root);
 	assert.equal(help.status, 0, help.stderr || String(help.error));
 	assert.match(help.stdout, /compare-pdf/);
@@ -184,7 +196,7 @@ async function proveArtifact(staged, root, html) {
 	assert.equal(invalid.status, 2, invalid.stderr);
 
 	if (html) {
-		assert.equal(manifest.payloads.chromiumHeadlessShell, true);
+		assert.equal(manifest.payloads.chromiumHeadlessShell, false);
 		const course = join(root, "synthetic HTML course");
 		await mkdir(course);
 		await writeFile(join(course, "index.html"), '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Practice lesson</title></head><body><main><h1>Practice lesson</h1><p>Read the paragraph, then continue.</p><button type="button">Continue</button></main></body></html>');
@@ -198,8 +210,7 @@ async function proveArtifact(staged, root, html) {
 		assert.ok(report.evaluations.some(item => item.outcome === "passed"));
 		assert.equal(report.counts.confidence.high, 0);
 		assert.ok(report.pages.every(page => page.audited));
-		const versions = JSON.parse(await readFile(join(artifact, "dependencies/runtime-versions.json"), "utf8"));
-		assert.equal(report.environment.browser.version, versions.browser.browserVersion);
+		assert.equal(report.environment.components[0].source, "setup");
 		// A failing synthetic page checks that the wrapper preserves findings exit code 1 too.
 		await writeFile(join(course, "index.html"), '<!doctype html><html lang="en"><head><title>Practice lesson</title></head><body><main><h1>Practice lesson</h1><button></button></main></body></html>');
 		const failing = run(launcher, ["check", course, "--json", join(root, "failing report.json")], root);
@@ -225,7 +236,7 @@ async function proveArtifact(staged, root, html) {
 	assert.equal(bundle.renderer.name, "PDFium");
 	const png=await verifyPng(join(reviewDir,bundle.artifacts[0].image),bundle.artifacts[0].imageSha256);
 	assert.equal(png.readUInt32BE(20),1600);
-	if (windows && manifest.payloads.pdfium && manifest.payloads.java && manifest.payloads.veraPDF) {
+	if (windows && html) {
 		await proveWindowsPdf(launcher, root);
 	}
 }
@@ -243,32 +254,12 @@ test("standalone Check relocates and reads and renders PDFs with an empty PATH",
 	await proveArtifact(staged, root, false);
 });
 
-test("supplied runtime artifact checks HTML and bundled Windows PDF engine after relocation with an empty PATH", { skip: !process.env.CHECK_ARTIFACT && "Set CHECK_ARTIFACT to prove a built runtime artifact" }, async t => {
-	if (process.env.CHECK_REQUIRE_PDF === "1") {
-		const manifest = JSON.parse(await readFile(join(process.env.CHECK_ARTIFACT, "capabilities.json"), "utf8"));
-		for (const payload of ["pdfium", "java", "veraPDF"]) {
-			assert.equal(manifest.payloads?.[payload], true, `CHECK_REQUIRE_PDF=1 requires bundled ${payload}`);
-		}
-	}
+test("supplied artifact uses setup components after relocation with an empty PATH", { skip: !process.env.CHECK_ARTIFACT && "Set CHECK_ARTIFACT to prove a built runtime artifact" }, async t => {
+	if (!process.env.CHECK_COMPONENTS_DIR) throw new Error("CHECK_COMPONENTS_DIR is required to prove installed PDF and HTML components");
 	const root = await scratch(t);
 	const staged = join(root, "staged");
 	await cp(process.env.CHECK_ARTIFACT, staged, { recursive: true });
 	await proveArtifact(staged, root, true);
-});
-
-test("CHECK_REQUIRE_PDF rejects a supplied artifact missing any PDF runtime", async t => {
-	const artifact = await scratch(t);
-	const env = { ...process.env, CHECK_ARTIFACT: artifact, CHECK_REQUIRE_PDF: "1" };
-	// Start a separate test runner rather than inherit this runner's child context.
-	delete env.NODE_TEST_CONTEXT;
-	for (const missing of ["pdfium", "java", "veraPDF"]) {
-		await writeFile(join(artifact, "capabilities.json"), JSON.stringify({ payloads: { pdfium: true, java: true, veraPDF: true, [missing]: false } }));
-		const result = spawnSync(process.execPath, ["--test", "--test-name-pattern", "^supplied runtime artifact", fileURLToPath(import.meta.url)], {
-			env, encoding: "utf8",
-		});
-		assert.equal(result.status, 1, result.stderr || result.stdout || String(result.error));
-		assert.ok(result.stdout.includes(`CHECK_REQUIRE_PDF=1 requires bundled ${missing}`), result.stdout);
-	}
 });
 
 test("macOS target layout and inventory can be packaged without a Mac", async t => {
@@ -295,52 +286,25 @@ test("packaging rejects supplied Node and dependency target mismatches before wr
 	const root = await scratch(t);
 	const values = { node: root, output: join(root, "artifact"), platform: "win32", arch: "x64" };
 	await assert.rejects(packageArtifact(values, () => ({ version: "v24.19.0", platform: "darwin", arch: "arm64" })), /Node target mismatch/);
-	await writeFile(join(root, "LICENSE"), "synthetic license");
-	await writeFile(join(root, "NOTICE.md"), "synthetic notice");
-	await writeFile(join(root, "runtime-versions.json"), JSON.stringify({ platform: "darwin", arch: "arm64" }));
-	await assert.rejects(packageArtifact({ ...values, dependencies: root }, () => ({ version: "v24.19.0", platform: "win32", arch: "x64" })), /Dependencies target mismatch/);
 	await assert.rejects(lstat(values.output), /ENOENT/);
 });
 
-test("packaging rejects same-target stale browser metadata and missing browser notices", async t => {
-	const root = await scratch(t);
-	const node = join(root, "Node distribution");
-	const dependencies = join(root, "dependencies");
-	const output = join(root, "artifact");
-	await mkdir(node);
-	await mkdir(dependencies);
-	await writeFile(join(node, "LICENSE"), "synthetic Node license");
-	await writeFile(join(dependencies, "NOTICE.md"), "synthetic runtime notice");
-	// A synthetic macOS cache makes stale-runtime rejection independent of the native host cache.
-	const require = createRequire(import.meta.url);
-	const core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
-	const expected = JSON.parse(await readFile(join(dirname(core), "browsers.json"), "utf8")).browsers.find(browser => browser.name === "chromium-headless-shell");
-	const browser = { ...expected, playwright: JSON.parse(await readFile(core, "utf8")).version };
-	const cache = join(dependencies, "browsers", `chromium_headless_shell-${browser.revision}`, "chrome-headless-shell-mac-arm64");
-	await mkdir(cache, { recursive: true });
-	await writeFile(join(cache, "chrome-headless-shell"), "synthetic Mac runtime");
-	await writeFile(join(cache, "LICENSE.headless_shell"), "synthetic browser license");
-	await writeFile(join(cache, "ABOUT"), "synthetic credits");
-	const values = { node, dependencies, output, platform: "darwin", arch: "arm64" };
-	const inspector = () => ({ version: "v24.19.0", platform: "darwin", arch: "arm64" });
-	for (const field of ["revision", "browserVersion", "playwright"]) {
-		await writeFile(join(dependencies, "runtime-versions.json"), JSON.stringify({ platform: "darwin", arch: "arm64", browser: { ...browser, [field]: "stale" } }));
-		await assert.rejects(packageArtifact(values, inspector), /does not match installed Playwright/);
-	}
-	await writeFile(join(dependencies, "runtime-versions.json"), JSON.stringify({ platform: "darwin", arch: "arm64", browser }));
-	await rm(join(cache, "ABOUT"));
-	await assert.rejects(packageArtifact(values, inspector), /lacks its executable, license or credits/);
-	await assert.rejects(lstat(output), /ENOENT/);
+test("package refuses runtime bundling before creating output", async t => {
+ const root=await scratch(t);await writeFile(join(root,"LICENSE"),"fixture license");
+ const output=join(root,"output");
+ await assert.rejects(packageArtifact({node:root,output,dependencies:root},()=>({version:process.version,platform:process.platform,arch:process.arch})),/install components with check setup/);
+ await assert.rejects(lstat(output),/ENOENT/);
 });
 
-test("packager rejects obsolete native PDF payloads before creating output",async t=>{
- const root=await scratch(t),node=join(root,"Node"),dependencies=join(root,"dependencies"),output=join(root,"output");
- await mkdir(node);await mkdir(dependencies);
- await writeFile(join(node,windows?"node.exe":"bin/node"),"unused",{flag:"w"}).catch(async error=>{
-  if(error.code!=="ENOENT")throw error;await mkdir(join(node,"bin"));await writeFile(join(node,"bin/node"),"unused");
- });
- await writeFile(join(node,"LICENSE"),"fixture licence");await writeFile(join(dependencies,"NOTICE.md"),"fixture notices");
- await writeFile(join(dependencies,"runtime-versions.json"),JSON.stringify({platform:process.platform,arch:process.arch,poppler:{version:"legacy"}}));
- await assert.rejects(packageArtifact({node,dependencies,output},()=>({version:process.version,platform:process.platform,arch:process.arch})),/obsolete native PDF tooling/);
- await assert.rejects(access(output),{code:"ENOENT"});
+test("package excludes hermetic browser caches inside npm dependencies", async t => {
+	const root = await scratch(t), node = join(root, "Node"), dependency = join(root, "fake dependency");
+	await mkdir(node); await writeFile(join(node, "node.exe"), "fixture Node"); await writeFile(join(node, "LICENSE"), "fixture licence");
+	await mkdir(join(dependency, ".local-browsers", "chromium_headless_shell-1234"), { recursive: true });
+	await writeFile(join(dependency, "package.json"), JSON.stringify({ version: "1.0.0", license: "MIT" }));
+	await writeFile(join(dependency, "index.js"), "fixture dependency");
+	await writeFile(join(dependency, ".local-browsers", "chromium_headless_shell-1234", "browser.exe"), "must not ship");
+	const artifact = await packageArtifact({ node, output: join(root, "artifact"), platform: "win32", arch: "x64" }, () => ({ version: "v24.19.0", platform: "win32", arch: "x64" }), async () => dependency);
+	const manifest = JSON.parse(await readFile(join(artifact, "capabilities.json"), "utf8"));
+	assert.ok(manifest.files.some(file => file.path.endsWith("/index.js")));
+	assert.ok(!manifest.files.some(file => file.path.includes(".local-browsers") || file.path.endsWith("/browser.exe")));
 });

@@ -6,14 +6,12 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { execFileSync } from "node:child_process";
 import ts from "typescript";
-import { componentLauncher } from "../src/components.ts";
-import { browserRuntime } from "./prepare-runtimes.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
 // The inspector is a seam for testing foreign-target layouts without executing foreign binaries.
-export async function packageArtifact(values, inspectNode = executable => JSON.parse(execFileSync(executable, ["-p", "JSON.stringify({version:process.version,platform:process.platform,arch:process.arch})"], { encoding: "utf8" }))) {
-	if (!values.node || !values.output) throw new Error("Required: --node <Node distribution> --output <new directory>; optional --dependencies <reviewed relocatable runtime artifact>");
+export async function packageArtifact(values, inspectNode = executable => JSON.parse(execFileSync(executable, ["-p", "JSON.stringify({version:process.version,platform:process.platform,arch:process.arch})"], { encoding: "utf8" })), locateDependency = installedDependency) {
+	if (!values.node || !values.output) throw new Error("Required: --node <Node distribution> --output <new directory>; install components separately with check setup");
 	const output = resolve(values.output);
 	const node = resolve(values.node);
 	const platform = values.platform ?? process.platform;
@@ -28,21 +26,7 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 	const [major, minor] = version.slice(1).split(".").map(Number);
 	if (!(major > 22 || major === 22 && minor >= 18)) throw new Error(`Check requires Node >=22.18; received ${version}`);
 	await readFile(join(node, "LICENSE"));
-	let runtime;
-	if (values.dependencies) {
-		await readFile(join(resolve(values.dependencies), "NOTICE.md"));
-		runtime = JSON.parse(await readFile(join(resolve(values.dependencies), "runtime-versions.json"), "utf8"));
-		if (runtime.platform !== platform || runtime.arch !== arch) throw new Error("Dependencies target mismatch");
-		if (runtime.poppler !== undefined) throw new Error("Runtime artifact contains obsolete native PDF tooling; regenerate it with prepare-runtimes.mjs.");
-		if (runtime.browser) {
-			let browser;
-			try { browser = await browserRuntime(join(resolve(values.dependencies), "browsers"), { platform, arch }); }
-			catch (cause) { throw new Error("Supplied browser runtime does not match installed Playwright or lacks its executable, license or credits", { cause }); }
-			for (const field of ["revision", "browserVersion", "playwright"]) {
-				if (runtime.browser[field] !== browser[field]) throw new Error(`Supplied browser runtime ${field} does not match installed Playwright`);
-			}
-		}
-	}
+	if (values.dependencies) throw new Error("--dependencies is no longer supported; install components with check setup.");
 	const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 	const dirty = Boolean(execFileSync("git", ["status", "--porcelain", "--untracked-files=normal"], { cwd: root, encoding: "utf8" }).trim());
 	await mkdir(output);
@@ -61,21 +45,16 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 		await writeFile(join(output, "lib", file.replace(/\.ts$/, ".js")), result.outputText);
 	}
 	const copied = new Map();
-	const notices = ["# Bundled dependencies", "Node licence and notices: runtime/LICENSE. Dependency licence files are retained in node_modules. Optional native/runtime notices: dependencies/NOTICE.md."];
+	const notices = ["# Bundled dependencies", "Node licence and notices: runtime/LICENSE. Dependency licence files are retained in node_modules."];
 	async function dependency(name, from) {
-		let location;
-		for (let dir = from; ; dir = dirname(dir)) {
-			try { location = await realpath(join(dir, "node_modules", name)); break; }
-			catch (error) { if (error.code !== "ENOENT") throw error; }
-			if (dirname(dir) === dir) throw new Error(`Missing installed runtime dependency ${name}`);
-		}
+		const location = await locateDependency(name, from);
 		const metadata = JSON.parse(await readFile(join(location, "package.json"), "utf8"));
 		if (copied.has(name)) {
 			if (copied.get(name) !== metadata.version) throw new Error(`Conflicting runtime versions for ${name}; use a dependency-aware deployment tool`);
 			return;
 		}
 		copied.set(name, metadata.version);
-		await cp(location, join(output, "node_modules", name), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE, filter: path => !relative(location, path).split(/[\\/]/).includes("node_modules") && !/\.(map|log)$/i.test(path) });
+		await cp(location, join(output, "node_modules", name), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE, filter: path => !relative(location, path).split(/[\\/]/).some(part => ["node_modules", ".local-browsers"].includes(part)) && !/\.(map|log)$/i.test(path) });
 		notices.push(`- ${name}@${metadata.version}: ${metadata.license ?? "see package licence files"}`);
 		for (const child of Object.keys(metadata.dependencies ?? {})) await dependency(child, location);
 		for (const child of Object.keys(metadata.optionalDependencies ?? {})) {
@@ -83,9 +62,8 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 		}
 	}
 	for (const name of Object.keys(pkg.dependencies)) await dependency(name, root);
-	if (values.dependencies) await cp(resolve(values.dependencies), join(output, "dependencies"), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE, filter: path => !/\.(map|log)$/i.test(path) });
 	await writeFile(join(output, "THIRD-PARTY-NOTICES.md"), notices.join("\n\n") + "\n");
-	await writeFile(join(output, platform === "win32" ? "bin/praxity-check.cmd" : "bin/praxity-check"), componentLauncher(platform), { mode: 0o755 });
+	await writeFile(join(output, platform === "win32" ? "bin/praxity-check.cmd" : "bin/praxity-check"), launcher(platform), { mode: 0o755 });
 	const payload = [];
 	async function inventory(directory) {
 		for (const name of (await readdir(directory)).sort()) {
@@ -107,19 +85,27 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 		legalFiles: payload.filter(file => /(?:^|\/)(?:.*\.)?(?:licen[cs]e[^/]*|copying[^/]*|copyright[^/]*|notice[^/]*|third[- ]?party[^/]*|about)$/i.test(file.path) || file.path === "LICENSING.md" || file.path.startsWith("notices/pdfium/") || file.path.includes("/legal/") || file.path.startsWith("dependencies/notices/toolchain/") && !file.path.endsWith(".cmake")).map(file => file.path),
 		files: payload,
 		inventoryExcludes: ["capabilities.json"], // A manifest cannot hash its own bytes.
-		dependenciesSupplied: Boolean(values.dependencies),
-		payloads: { chromiumHeadlessShell: Boolean(runtime?.browser), pdfium: payload.some(file => file.path === "node_modules/@embedpdf/pdfium/dist/pdfium.wasm"), java: payload.some(file => file.path === "dependencies/java/bin/java" || file.path === "dependencies/java/bin/java.exe"), veraPDF: payload.some(file => file.path === "dependencies/bin/verapdf" || platform === "win32" && /^dependencies\/verapdf\/bin\/cli-.+\.jar$/.test(file.path)) },
-		requirements: {
-			pdf: ["Bundled @embedpdf/pdfium wrapper and pdfium.wasm"],
-			pdfDesignAndReview: ["Bundled PDFium engine"],
-			pdfUa: [platform === "win32" ? "veraPDF jars with VERAPDF_JAVA and VERAPDF_CLASSPATH, or VERAPDF/--verapdf executable" : "veraPDF executable (dependencies/bin/verapdf, VERAPDF or --verapdf)", "compatible Java runtime"],
-			html: ["Playwright-matched Chromium in dependencies/browsers (including headless shell)"],
-		},
-		note: "Requirements are not capability claims. Native tools, shared libraries, Java and browsers are supplied only by --dependencies; each operation reports missing or failed tools. Artifacts must match this platform and architecture and retain their notices."
+		dependenciesSupplied: false,
+		payloads: { chromiumHeadlessShell: false, pdfium: payload.some(file => file.path === "node_modules/@embedpdf/pdfium/dist/pdfium.wasm"), java: false, veraPDF: false },
+  requirements: { pdf: ["Bundled @embedpdf/pdfium wrapper and pdfium.wasm"], pdfDesignAndReview: ["Bundled PDFium engine"], pdfUa: ["check setup pdf, or explicit veraPDF and Java 17+"], html: ["check setup html"] },
+  note: "Requirements are not capability claims. Browser, Java and veraPDF are installed separately by check setup after consent. Each operation reports missing or failed components."
+
 	}, null, 2) + "\n");
 	return output;
 }
 
+async function installedDependency(name, from) {
+	for (let directory = from; ; directory = dirname(directory)) {
+		try { return await realpath(join(directory, "node_modules", name)); }
+		catch (error) { if (error.code !== "ENOENT") throw error; }
+		if (dirname(directory) === directory) throw new Error(`Missing installed runtime dependency ${name}`);
+	}
+}
+
+function launcher(platform) {
+ if (platform === "win32") return '@echo off\r\nsetlocal DisableDelayedExpansion\r\nfor %%I in ("%~dp0..") do set "CHECK_DIR=%%~fI"\r\n"%CHECK_DIR%\\runtime\\node.exe" "%CHECK_DIR%\\lib\\cli.js" %*\r\nexit /b %errorlevel%\r\n';
+ return '#!/bin/sh\nset -eu\nCHECK_DIR="$(CDPATH= cd -- "${0%/*}/.." && pwd)"\nexec "$CHECK_DIR/runtime/node" "$CHECK_DIR/lib/cli.js" "$@"\n';
+}
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 	const { values } = parseArgs({ options: Object.fromEntries(["node", "dependencies", "output", "platform", "arch"].map(name => [name, { type: "string" }])) });

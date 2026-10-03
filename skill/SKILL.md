@@ -42,7 +42,9 @@ prepare a new bundle. PDF preparation also needs `--checks accessibility` or
 `--checks design`. Manual HTML preparation exits `0` when it prepared a page,
 or `2` when it could not prepare any, and never exits `1`.
 
-Run `praxity-check doctor html` before HTML checks or review preparation,
+Run `praxity-check setup html` to install the browser, or
+`praxity-check setup pdf` for veraPDF and Java. Setup asks for consent before
+downloading optional components. Run `praxity-check doctor html` before HTML checks or review preparation,
 and `praxity-check doctor pdf` before PDF/UA checks. Doctor exits `0` when
 the required components report usable versions, otherwise `1`.
 PDF facts, renders and image review use bundled PDFium. PDF/UA requires
