@@ -40,7 +40,14 @@ function utf16(get: (buffer: number, size: number) => number) {
 }
 function checked(ok: boolean | number, what: string) { if (!ok) throw new Error(`PDFium could not read ${what}`); }
 let document = 0, analysisDocument = 0, sourceBuffer = 0;
+let extractionFailure: Error | undefined;
 const formEnvironments = new Map<number, number>();
+// Match normal display rendering, including the explicit widget rendering below.
+// Invisible applies to unknown subtypes; PDFium still renders known subtypes.
+const annotationVisible = (annot: number) => !(p.FPDFAnnot_GetFlags(annot) & (2 | 32));
+// PDFium generates these normal appearances when rendering a missing /AP.
+// Widgets use the form environment; Stamp and unsupported subtypes require saved appearances.
+const generatedAppearanceSubtypes = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 28]);
 function formEnvironment(doc: number) {
 	if (p.FPDF_GetFormType(doc) !== 1) return 0;
 	let environment = formEnvironments.get(doc);
@@ -52,22 +59,51 @@ function formEnvironment(doc: number) {
 	return environment;
 }
 function extractionDocument() {
+	if (extractionFailure) throw extractionFailure;
 	if (analysisDocument) return analysisDocument;
-	analysisDocument = p.FPDF_LoadMemDocument(sourceBuffer, bytes.length, ""); checked(analysisDocument, "extraction copy");
-	// Flatten only the extraction copy: appearance streams become ordinary form objects.
-	// Reopening each page reparses the generated content; the original retains annotations for rendering.
-	for (let i = 0; i < p.FPDF_GetPageCount(analysisDocument); i++) {
-		const page = p.FPDF_LoadPage(analysisDocument, i); checked(page, "extraction page");
-		try {
-			const environment = formEnvironment(analysisDocument);
-			// Loading the form view creates missing normal appearances, including button captions.
-			// No document, page or JavaScript action is invoked.
-			if (environment) { p.FORM_OnAfterLoadPage(page, environment); p.FORM_OnBeforeClosePage(page, environment); }
-			if (p.FPDFPage_GetAnnotCount(page)) checked(p.FPDFPage_Flatten(page, 0), "visible annotation appearances");
+	try {
+		analysisDocument = p.FPDF_LoadMemDocument(sourceBuffer, bytes.length, ""); checked(analysisDocument, "extraction copy");
+		// Flatten only the extraction copy: appearance streams become ordinary form objects.
+		// Reopening each page reparses the generated content; the original retains annotations for rendering.
+		for (let i = 0; i < p.FPDF_GetPageCount(analysisDocument); i++) {
+			const page = p.FPDF_LoadPage(analysisDocument, i); checked(page, "extraction page");
+			try {
+				const original = geometry(page, i + 1, analysisDocument);
+				const environment = formEnvironment(analysisDocument);
+				// Loading the form view creates missing normal appearances, including button captions.
+				// No document, page or JavaScript action is invoked.
+				if (environment) { p.FORM_OnAfterLoadPage(page, environment); p.FORM_OnBeforeClosePage(page, environment); }
+				const count = p.FPDFPage_GetAnnotCount(page);
+				for (let j = 0; j < count; j++) {
+					const annot = p.FPDFPage_GetAnnot(page, j); checked(annot, "extraction annotation");
+					try {
+						// Flatten handles Hidden and Invisible but omits NoView. Hide those on this copy.
+						if (!annotationVisible(annot)) { checked(p.FPDFAnnot_SetFlags(annot, p.FPDFAnnot_GetFlags(annot) | 2), "annotation visibility"); continue; }
+						// Flatten suppresses Invisible even for known subtypes, unlike the renderer.
+						if (p.FPDFAnnot_GetSubtype(annot) !== 0) checked(p.FPDFAnnot_SetFlags(annot, p.FPDFAnnot_GetFlags(annot) & ~1), "known annotation visibility");
+						if (!p.EPDFAnnot_HasAppearanceStream(annot, 0) && generatedAppearanceSubtypes.has(p.FPDFAnnot_GetSubtype(annot))) {
+							checked(p.EPDFAnnot_GenerateAppearance(annot), `missing annotation appearance on page ${i + 1}`);
+							// A borderless Link deliberately succeeds without painting an appearance.
+							if (p.FPDFAnnot_GetSubtype(annot) !== 2) checked(p.EPDFAnnot_HasAppearanceStream(annot, 0), `generated annotation appearance on page ${i + 1}`);
+						}
+					} finally { p.FPDFPage_CloseAnnot(annot); }
+				}
+				if (count) {
+					// Flatten reads only local boxes and overwrites MediaBox with CropBox.
+					// Materialize effective boxes first, then restore them before reopening the page.
+					setBoxes(page, original.boxes);
+					checked(p.FPDFPage_Flatten(page, 0), "visible annotation appearances");
+					setBoxes(page, original.boxes);
+				}
+			}
+			finally { p.FPDF_ClosePage(page); }
 		}
-		finally { p.FPDF_ClosePage(page); }
+		return analysisDocument;
+	} catch (error) {
+		// A partly flattened copy cannot supply a successful inventory on a later call.
+		extractionFailure = error instanceof Error ? error : new Error(String(error));
+		throw extractionFailure;
 	}
-	return analysisDocument;
 }
 function open() {
 	ceiling(); p.PDFiumExt_Init();
@@ -91,11 +127,20 @@ function withPage<T>(number: number, run: (page: number) => T, extraction = fals
 	try { if (environment) p.FORM_OnAfterLoadPage(page, environment); return run(page); }
 	finally { if (environment) p.FORM_OnBeforeClosePage(page, environment); p.FPDF_ClosePage(page); }
 }
-function geometry(page: number, number: number): PdfPage {
+function setBoxes(page: number, boxes: PdfPage["boxes"]) {
+	for (const [name, set] of [["MediaBox", p.FPDFPage_SetMediaBox], ["CropBox", p.FPDFPage_SetCropBox], ["BleedBox", p.FPDFPage_SetBleedBox], ["TrimBox", p.FPDFPage_SetTrimBox], ["ArtBox", p.FPDFPage_SetArtBox]] as const) {
+		const [l, b, r, t] = boxes[name]!; set(page, l!, b!, r!, t!);
+	}
+}
+function geometry(page: number, number: number, doc = document): PdfPage {
 	const boxes: Record<string, number[]> = {}, buffer = alloc(16);
 	try {
 		for (const [name, get] of [["MediaBox", p.FPDFPage_GetMediaBox], ["CropBox", p.FPDFPage_GetCropBox], ["BleedBox", p.FPDFPage_GetBleedBox], ["TrimBox", p.FPDFPage_GetTrimBox], ["ArtBox", p.FPDFPage_GetArtBox]] as const) {
-			if (get(page, buffer, buffer + 4, buffer + 8, buffer + 12)) {
+			// Only MediaBox and CropBox inherit. The other boxes default to effective CropBox.
+			const inherited = name === "MediaBox" || name === "CropBox";
+			const ok = inherited ? p.EPDF_GetPageBoxByIndex(doc, number - 1, name === "MediaBox" ? 0 : 1, buffer) : get(page, buffer, buffer + 4, buffer + 8, buffer + 12);
+			if (ok) {
+				// FS_RECTF uses left, top, right, bottom; the direct getters use left, bottom, right, top.
 				const [l, b, r, t] = Array.from(new Float32Array(memory.HEAPU8.buffer, buffer, 4)) as [number, number, number, number];
 				boxes[name] = [Math.min(l, r), Math.min(b, t), Math.max(l, r), Math.max(b, t)];
 			}
@@ -130,6 +175,7 @@ function objects(page: number, visit: (object: number, transform: Matrix) => voi
 	if (annotations) for (let i = 0; i < p.FPDFPage_GetAnnotCount(page); i++) {
 		const annot = p.FPDFPage_GetAnnot(page, i); checked(annot, "annotation");
 		try {
+			if (!annotationVisible(annot)) continue;
 			if (p.FPDFAnnot_IsObjectSupportedSubtype(p.FPDFAnnot_GetSubtype(annot))) {
 				for (let j = 0; j < p.FPDFAnnot_GetObjectCount(annot); j++) walk(p.FPDFAnnot_GetObject(annot, j), identity);
 			}
@@ -214,7 +260,10 @@ function characters(page: number, number: number) {
 				const b = new Float32Array(memory.HEAPU8.buffer, ptr+64, 4);
 				loose = [b[0]!, b[2]!, b[3]!, b[1]!];
 			}
-			const along = [loose[0]!*Math.cos(angle)+loose[2]!*Math.sin(angle), loose[1]!*Math.cos(angle)+loose[3]!*Math.sin(angle)];
+			const along = [
+				loose[0]!*Math.cos(angle)+loose[2]!*Math.sin(angle), loose[0]!*Math.cos(angle)+loose[3]!*Math.sin(angle),
+				loose[1]!*Math.cos(angle)+loose[2]!*Math.sin(angle), loose[1]!*Math.cos(angle)+loose[3]!*Math.sin(angle),
+			];
 			chars.push({ text, rect: presentation(box, g), start: Math.min(...along), end: Math.max(...along), size, angle, x, y, object: p.FPDFText_GetTextObject(textPage, i),
 				family, color, bold: p.FPDFText_GetFontWeight(textPage, i) >= 700 || /bold/i.test(family), italic: !!(flags & 64) || /italic|oblique/i.test(family) });
 		}
@@ -353,7 +402,7 @@ function render(number: number, options: PdfRender) {
 				for (let i = 0; i < p.FPDFPage_GetAnnotCount(page); i++) {
 					const annot = p.FPDFPage_GetAnnot(page, i); checked(annot, "render annotation");
 					try {
-						if (p.FPDFAnnot_GetSubtype(annot) !== 20 || p.FPDFAnnot_GetFlags(annot) & (1|2|32)) continue;
+						if (p.FPDFAnnot_GetSubtype(annot) !== 20 || !annotationVisible(annot)) continue;
 						if (p.EPDFAnnot_HasAppearanceStream(annot, 0)) checked(p.EPDF_RenderAnnotBitmap(bitmap, page, annot, 0, ptr, 1), "widget appearance render");
 						else diagnostics.push("Widget has no normal appearance stream; verify its field state in a PDF viewer.");
 					} finally { p.FPDFPage_CloseAnnot(annot); }

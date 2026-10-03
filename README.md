@@ -265,41 +265,65 @@ PDFium and its wasm are included with the package dependencies. For PDF/UA
 validation and HTML checks, assemble veraPDF, Java and Playwright's matching
 Chromium headless shell:
 
-~~~sh
+```sh
 node scripts/prepare-runtimes.mjs --verapdf /path/to/verapdf \
   --java /path/to/jdk-home --browsers /path/to/playwright-cache \
   --supplemental-notices /path/to/notices --output /new/path/dependencies
 node scripts/package.mjs --node /path/to/node-distribution \
   --dependencies /new/path/dependencies --output /new/path/check
-~~~
+```
 
 Each output directory must be new. Java native library relocation uses Xcode
 command-line tools and installed Homebrew libraries. It rewrites copied Mach-O
 load paths and ad-hoc signs copied binaries. Original installations remain intact.
-Keep the supplied licences and source provenance with Java and veraPDF.
+Missing licences, unresolved libraries, filename collisions and conflicting runtime
+versions stop preparation. When an installed dependency lacks its licence text,
+supply the original text and provenance under `supplemental-notices/<package>/`.
+veraPDF input must contain its project licence files as well as its installed jars.
+
+Runtime assembly checks the installed Playwright metadata and copies its matching
+Chromium headless shell. It supplies headless Check operations; it does not include a general browser UI.
+Revalidate actual PDF and HTML operations when changing any runtime version.
+
+These scripts prepare local prototype artifacts. Clean-machine and older-macOS
+compatibility, distribution source obligations, Developer ID signing and notarization
+remain separate release work.
 
 ### Prepare Windows x64 runtimes
 
 Set the following variables to external work, Node distribution and browser cache
 directories. Each output must be new.
 
-~~~powershell
+```powershell
 node scripts/prepare-windows-java.mjs --work "$build/java-build" --output "$build/java-verapdf"
 node scripts/prepare-runtimes.mjs --platform win32 --arch x64 --java "$build/java-verapdf/java" --verapdf "$build/java-verapdf/verapdf" --browsers "$browserCache" --output "$build/dependencies"
 node scripts/package.mjs --platform win32 --arch x64 --node "$nodeDist" --dependencies "$build/dependencies" --output "$build/check"
 $env:CHECK_NODE_DIST = $nodeDist
 $env:CHECK_ARTIFACT = "$build/check"
 $env:CHECK_REQUIRE_PDF = '1'
+$env:CHECK_WINDOWS_JAVA_RUNTIME = "$build/java-verapdf"
 node --test scripts/package.test.mjs scripts/prepare-runtimes.test.mjs scripts/prepare-windows-java.test.mjs scripts/windows-pe.test.mjs
-~~~
+```
 
 The launcher selects bundled Java and veraPDF jars. Windows invokes Java directly
 with a classpath and removes inherited Java options. Browser-only assembly needs
 only --browsers. PDF extraction and rendering work with an empty PATH.
 
+The scripts check PE imports, including delay loads. Each DLL outside the runtime
+must be a Windows system DLL. The Java proof verifies the official runtime version
+and PE imports. The package proof moves Check into a path with spaces. It checks
+PDF/UA pass and failure exit codes, manual review page images and
+`prepare-review --design-evidence` detail crops.
+
 The package keeps PDFium's wrapper, wasm, licence and component notices. Java,
 veraPDF and browser files retain their own notices. Clean-machine compatibility,
 platform signing and release review remain separate checks.
+
+Java and veraPDF downloads are pinned official releases. Their legal files and
+source links remain in the artifact. Source links alone do not fulfil source
+obligations. Java and the libraries in veraPDF's jar need a separate review.
+Review licence terms and source needs before sharing a release.
+Test that release on a clean machine too. Check keeps its PolyForm Perimeter licence.
 
 ### Compare PDF engines during development
 
@@ -308,11 +332,11 @@ Pass input directories and an output directory; optionally sample a local veraPD
 corpus. Put the intended native Poppler directory first on PATH, or select it
 explicitly with --poppler-bin.
 
-~~~sh
+```sh
 node scripts/pdf-engine-parity.mjs --output /path/to/diffs \
   --poppler-bin /path/to/native-tools --corpus /path/to/corpus --sample 150 \
   test/fixtures bench/pdf /path/to/extra-fixtures
-~~~
+```
 
 The script writes JSON facts, word counts, print-review candidates, design spans,
 render differences and a Markdown summary. Its corpus sample is deterministic.

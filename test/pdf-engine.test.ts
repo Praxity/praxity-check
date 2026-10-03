@@ -5,6 +5,7 @@ import { inflateSync } from "node:zlib";
 import { openPdf, pdfCoordinates, type PdfEngine } from "../src/pdf-engine.ts";
 import { checkPdf } from "../src/pdf.ts";
 import { evaluatePdfPrint } from "../src/pdf-print.ts";
+import { extractPdfFacts } from "../src/pdf-facts.ts";
 
 const fixture=(name:string)=>readFile("test/fixtures/pdf-engine/"+name+".pdf");
 async function use<T>(name:string,run:(engine:PdfEngine)=>Promise<T>) { const engine=await openPdf(await fixture(name));try{return await run(engine);}finally{await engine.close();} }
@@ -163,5 +164,90 @@ test("form values and button captions without saved appearances retain text, fon
   assert.ok((await e.facts("fonts")).some(f=>f.name==="Helvetica"&&!f.embedded));
   assert.ok(ink(await e.renderPage(1,{height:1600}))>0);
   assert.ok((await e.pageSpans(1)).spans.some(s=>s.text.includes(text)));
+ });
+});
+
+test("inherited MediaBox and CropBox resolve ancestors, overrides and PDF defaults",async()=>{
+ for(const [name,crop] of [["inherited-media",[0,0,200,300]],["inherited-crop",[10,20,190,280]],["overridden-crop",[20,30,180,270]]] as const) await use(name,async e=>{
+  const page=(await e.facts("pages"))[0]!;
+  assert.deepEqual(page.boxes.MediaBox,[0,0,200,300]);assert.deepEqual(page.boxes.CropBox,crop);
+  for(const box of ["BleedBox","TrimBox","ArtBox"]) assert.deepEqual(page.boxes[box],name==="overridden-crop"&&box==="TrimBox"?[25,35,175,265]:crop);
+  assert.deepEqual([page.width,page.height],[crop[2]-crop[0],crop[3]-crop[1]]);
+  const word=(await e.facts("words"))[0]!;assert.equal(word.text,"Hello");
+  assert.ok(Math.abs(word.rect[0]!-(20.9-crop[0]))<0.1);
+  const spans=await e.pageSpans(1);assert.deepEqual([spans.width,spans.height],[page.width,page.height]);
+  assert.ok(ink(await e.renderPage(1,{height:1600}))>0);
+ });
+});
+test("FreeText without a saved appearance retains rendered text and fonts",async()=>{
+ await use("missing-ap-freetext",async e=>{
+  assert.ok(ink(await e.renderPage(1,{height:1600}))>0);
+  assert.deepEqual(await e.facts("fonts"),[{name:"Helvetica",embedded:false,pages:[1]}]);
+  assert.deepEqual((await e.facts("words")).map(w=>w.text),["Appearance","text"]);
+  assert.ok((await e.pageSpans(1)).spans.some(s=>s.text.includes("Appearance text")));
+ });
+ const report=await checkPdf("test/fixtures/pdf-engine/missing-ap-freetext.pdf",{pdfua:"off"});
+ assert.equal(report.findings.filter(f=>f.rule==="font.embedding").length,1);
+});
+test("supported annotation subtypes without saved appearances retain matching inventories",async()=>{
+ for(const subtype of ["ink","square","circle","line","text","strikeout","polygon","polyline","highlight","underline","squiggly","caret","redact"]) await use("missing-ap-"+subtype,async e=>{
+  assert.ok(ink(await e.renderPage(1,{height:1600}))>0,subtype);
+  const fonts=await e.facts("fonts"),words=await e.facts("words");
+  // These generated graphics show no text. Contents alone is not painted text.
+  assert.deepEqual(words,[],subtype);assert.deepEqual(fonts,[],subtype);
+  assert.equal((await e.pageSpans(1)).spans.length>0,words.length>0);
+ });
+});
+test("appearance generation failure keeps every affected inventory untested on repeated calls",async()=>{
+ for(const name of ["missing-ap-invalid-ink","missing-ap-fileattachment"]) await use(name,async e=>{
+  for(const kind of ["fonts","words","images"] as const) await assert.rejects(e.facts(kind),/missing annotation appearance on page 1/);
+  await assert.rejects(e.pageSpans(1),/missing annotation appearance on page 1/);
+  assert.equal((await e.facts("pages")).length,1);
+ });
+ const report=await extractPdfFacts("test/fixtures/pdf-engine/missing-ap-invalid-ink.pdf");
+ assert.equal(report.machineStatus,"incomplete");
+ for(const rule of ["font.facts","image.facts","text.facts"]) assert.equal(report.evaluations.find(e=>e.rule===rule)?.outcome,"untested");
+});
+test("borderless Link appearance generation preserves independent page text",async()=>{
+ for(const name of ["empty","border"]) await use("missing-ap-link-"+name,async e=>{
+  assert.deepEqual((await e.facts("words")).map(w=>w.text),["Hello"]);
+  assert.deepEqual(await e.facts("fonts"),[{name:"Helvetica",embedded:false,pages:[1]}]);
+  assert.deepEqual(await e.facts("images"),[]);
+  const crop=await e.renderPage(1,{dpi:144,rect:{left:15,top:175,width:170,height:50}});
+  assert.equal(ink(crop)>0,name==="border");
+  assert.equal((await e.pageSpans(1)).spans[0]!.text,"Hello");
+ });
+});
+test("flattened annotations preserve offset CropBox geometry and text positions",async()=>{
+ await use("annotation-offset-crop",async e=>{
+  const page=(await e.facts("pages"))[0]!;
+  assert.deepEqual(page.boxes.CropBox,[-10,-20,220,330]);
+  const spans=await e.pageSpans(1);assert.deepEqual([spans.width,spans.height],[200,300]);
+  const word=(await e.facts("words")).find(w=>w.text==="Hello")!, expected=[20.9,191.384,25.992,8.784];
+  word.rect.forEach((n,i)=>assert.ok(Math.abs(n-expected[i]!)<0.1,JSON.stringify(word)));
+  assert.ok(spans.spans.some(s=>s.text==="Hello"&&Math.abs(s.left-20.9)<0.1&&Math.abs(s.top-191.384)<0.1));
+  assert.ok(ink(await e.renderPage(1,{dpi:144,rect:{left:20,top:185,width:40,height:25}}))>0);
+ });
+});
+test("oblique text in every quadrant preserves three words and sparse review at five",async()=>{
+ for(const angle of [135,315,45,225]) await use("oblique-"+angle,async e=>{
+  const words=await e.facts("words");assert.deepEqual(words.map(w=>w.text),["Hello","world","0123456789"],String(angle));
+  const print=evaluatePdfPrint({pages:await e.facts("pages"),images:await e.facts("images"),words},{maxSparseWords:5});
+  assert.equal(print.needsReview.filter(r=>r.rule==="page.sparse-content").length,1);
+  assert.equal(print.needsReview.filter(r=>r.rule==="text.extractable").length,0);
+ });
+});
+test("annotation visibility flags match rendered font, text and empty-page inventories",async()=>{
+ for(const subtype of ["stamp","ink","freetext","widget"]) for(const flag of ["noview","hidden","invisible","visible"]) await use("annotation-"+subtype+"-"+flag,async e=>{
+  // Invisible hides unknown subtypes only. All four fixtures use known subtypes.
+  const visible=flag==="visible"||flag==="invisible";
+  assert.equal(ink(await e.renderPage(1,{height:1600}))>0,visible,subtype+" "+flag);
+  const fonts=await e.facts("fonts"),words=await e.facts("words");
+  assert.deepEqual(fonts,visible?[{name:"Helvetica",embedded:false,pages:[1]}]:[],subtype+" "+flag);
+  assert.deepEqual(words.map(w=>w.text),visible?["Form","text"]:[],subtype+" "+flag);
+  assert.deepEqual((await e.pageSpans(1)).spans.map(s=>s.text),visible?["Form text"]:[]);
+  assert.deepEqual(await e.facts("images"),[]);
+  const print=evaluatePdfPrint({pages:await e.facts("pages"),images:[],words},{maxSparseWords:5});
+  assert.equal(print.needsReview.filter(r=>r.rule==="text.extractable").length,visible?0:1);
  });
 });

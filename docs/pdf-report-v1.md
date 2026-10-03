@@ -41,7 +41,9 @@ a conformance verdict.
 pages contains page number, rotated display width and height, page rotation,
 and MediaBox, CropBox, BleedBox, TrimBox and ArtBox. Display geometry uses the
 intersection of CropBox and MediaBox. Missing optional boxes use
-the PDF defaults. Box values are normalized lower-left and upper-right pairs in
+the PDF defaults. MediaBox and CropBox resolve page-tree inheritance; BleedBox,
+TrimBox and ArtBox are page-local and default to effective CropBox.
+Box values are normalized lower-left and upper-right pairs in
 PDF default user space before rotation. UserUnit is not extracted or validated.
 
 words groups reliable PDFium characters using whitespace, advance-box gaps
@@ -52,14 +54,18 @@ boxes. ActualText replacement words share their marked-content region box;
 they do not have individually measured glyph positions. Extracted order is
 PDFium's order, not a verified reading order. Unreliable Unicode mappings,
 NUL, replacement values and non-text controls are omitted with review diagnostics.
-Extraction includes visible annotation appearances, flattened in a separate copy.
+Extraction includes visible annotation appearances, flattened in a separate copy
+with the original effective page boxes preserved. Supported missing normal
+appearances, including FreeText, are generated on that copy before flattening.
+Generation failures leave fonts, images and words untested and reject design spans.
 The original document is used for rendering. AcroForm appearance state is
 initialized to include field values and button captions without saved
 appearances; no document, page or JavaScript action is invoked.
 
 fonts lists fonts used to paint text in page objects, nested form XObjects and
-visible annotation appearance streams. Unpainted font resources and hidden
-annotations are excluded. Flattening an extraction copy exposes appearances
+visible annotation appearance streams. Unpainted font resources, Hidden and NoView
+annotations are excluded. Invisible hides unknown subtypes only, matching normal
+display rendering. Flattening an extraction copy exposes appearances
 that PDFium's ink/stamp-only annotation object API cannot enumerate.
 Each row has a name, embedded flag and page list. Names can omit subset prefixes;
 subset status, font type, encoding, ToUnicode presence and PDF object IDs are

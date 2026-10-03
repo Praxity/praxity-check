@@ -58,4 +58,37 @@ for(const [name,attrs] of [["text","/FT /Tx /V (Field value)"],["choice","/FT /C
   "<< /Fields [6 0 R] /NeedAppearances true /DA (/F1 12 Tf 0 g) /DR << /Font << /F1 4 0 R >> >> >>"]));
 }
 
+for (const [name, parentAttrs, pageAttrs] of [
+ ["inherited-media", "/MediaBox [0 0 200 300]", ""],
+ ["inherited-crop", "/MediaBox [0 0 200 300] /CropBox [10 20 190 280] /BleedBox [30 40 170 260] /TrimBox [30 40 170 260] /ArtBox [30 40 170 260]", ""],
+ ["overridden-crop", "/MediaBox [0 0 200 300] /CropBox [10 20 190 280]", "/CropBox [20 30 180 270] /TrimBox [25 35 175 265]"]
+]) await writeFile(join(output, name+".pdf"), pdf([
+ "<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [6 0 R] /Count 1 "+parentAttrs+" >>",
+ "<< /Type /Page /Parent 6 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R "+pageAttrs+" >>",
+ font, stream("BT /F1 12 Tf 20 100 Td (Hello) Tj ET"), "<< /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 >>"
+]));
+await writeFile(join(output,"annotation-offset-crop.pdf"), simple("BT /F1 12 Tf 20 100 Td (Hello) Tj ET", "", [
+ "<< /Type /Annot /Subtype /Stamp /Rect [0 0 200 300] /AP << /N 7 0 R >> /F 4 >>", appearance
+], "/Annots [6 0 R] /CropBox [-10 -20 220 330] /BleedBox [5 10 195 290] /TrimBox [10 15 190 285] /ArtBox [15 20 185 280]"));
+for (const subtype of ["FreeText", "Ink", "Square", "Circle", "Line", "Text", "StrikeOut", "Polygon", "PolyLine", "Highlight", "Underline", "Squiggly", "Caret", "FileAttachment", "Redact"]) {
+ const attrs = subtype === "Ink" ? "/InkList [[20 100 80 100]]" : subtype === "Line" ? "/L [20 100 160 100] /Cap true" : ["Polygon","PolyLine"].includes(subtype) ? "/Vertices [20 80 180 80 100 120]" : ["StrikeOut","Highlight","Underline","Squiggly","Redact"].includes(subtype) ? "/QuadPoints [20 120 180 120 20 80 180 80]" : "";
+ await writeFile(join(output,"missing-ap-"+subtype.toLowerCase()+".pdf"),simple("", "", [
+  "<< /Type /Annot /Subtype /"+subtype+" /Rect [20 80 180 120] /F 4 /Contents (Appearance text) /DA (/Helvetica 12 Tf 0 g) "+attrs+" >>"
+ ], "/Annots [6 0 R]"));
+}
+await writeFile(join(output,"missing-ap-invalid-ink.pdf"),simple("", "", [
+ "<< /Type /Annot /Subtype /Ink /Rect [20 80 180 120] /F 4 /InkList [] >>"
+], "/Annots [6 0 R]"));
+for(const [name,border] of [["empty","[0 0 0]"],["border","[0 0 1]"]]) await writeFile(join(output,"missing-ap-link-"+name+".pdf"),simple("BT /F1 12 Tf 20 200 Td (Hello) Tj ET", "", [
+ "<< /Type /Annot /Subtype /Link /Rect [20 80 180 120] /F 4 /Border "+border+" /A << /S /URI /URI (https://example.org) >> >>"
+], "/Annots [6 0 R]"));
+for (const angle of [45, 135, 225, 315]) {
+ const radians = angle*Math.PI/180, c=Math.cos(radians), s=Math.sin(radians);
+ await writeFile(join(output,"oblique-"+angle+".pdf"),simple("BT /F1 12 Tf "+[c,s,-s,c,100,150].join(" ")+" Tm (Hello world 0123456789) Tj ET"));
+}
+for (const subtype of ["Stamp", "Ink", "FreeText", "Widget"]) for (const [name, flags] of [["noview",32],["hidden",2],["invisible",1],["visible",4]]) {
+ await writeFile(join(output,"annotation-"+subtype.toLowerCase()+"-"+name+".pdf"),simple("", "", [
+  "<< /Type /Annot /Subtype /"+subtype+" /Rect [0 0 200 300] /AP << /N 7 0 R >> /F "+flags+" >>", appearance
+ ], "/Annots [6 0 R]"));
+}
 console.log("Generated original PDF engine fixtures in "+output);
