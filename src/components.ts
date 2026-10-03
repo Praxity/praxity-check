@@ -190,7 +190,7 @@ async function executablePath(host: ComponentHost, value: string) {
  return null;
 }
 
-export async function resolveComponent(host: ComponentHost, id: ComponentId, explicit?: string): Promise<ComponentResolution> {
+export async function resolveComponent(host: ComponentHost, id: ComponentId, explicit?: string, options: { probeVersion?: boolean } = {}): Promise<ComponentResolution> {
  const component = (await componentManifest(host)).find(item => item.id === id)!;
  const missing = (inventory: ComponentResolution["inventory"] = "absent", path: string | null = null): ComponentResolution => ({ id, usable: false, source: null, path, version: null, pinned: null, inventory, reason: `${id === "browser" ? "Browser" : id === "java" ? "Java 17 or newer" : "veraPDF"} is ${inventory === "damaged" ? "damaged" : "not installed"}; checks not run. Run check setup ${component.checks.join(" ")}.` });
  let value = explicit;
@@ -203,14 +203,16 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
  if (id === "browser" && !value && variable(host, "PLAYWRIGHT_BROWSERS_PATH")) {
   const cache = variable(host, "PLAYWRIGHT_BROWSERS_PATH")!;
   if (cache === "0") { const require = createRequire(import.meta.url); value = join(dirname(createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json")), ".local-browsers", component.entryPoint); }
-  else value = join(cache, component.entryPoint);
+  else value = resolve(variable(host, "INIT_CWD") ?? process.cwd(), cache, component.entryPoint);
  }
- async function found(path: string, source: "explicit" | "setup" | "system", inventory: ComponentResolution["inventory"], known?: string): Promise<ComponentResolution> {
-  let version = known ?? null;
-  if (!version) {
-   const result = await host.run(path, classpath ? veraPdfJavaArgs(classpath, ["--version"]) : ["--version"], javaEnvironment(host.env, host.platform as NodeJS.Platform));
+ async function found(path: string, source: "explicit" | "setup" | "system", inventory: ComponentResolution["inventory"], probeTool = path): Promise<ComponentResolution> {
+  let version: string | null = null;
+  // Validation obtains veraPDF's version from its JSON, so wrappers need no version command.
+  if (!version && !(id === "verapdf" && options.probeVersion === false)) {
+   const result = await host.run(probeTool, classpath ? veraPdfJavaArgs(classpath, ["--version"]) : ["--version"], javaEnvironment(host.env, host.platform as NodeJS.Platform));
    const output = result.stdout + "\n" + result.stderr;
    version = id === "java" ? output.match(/Temurin-([\d.]+\+\d+)/)?.[1] ?? output.match(/(?:openjdk|java)\s+(?:version\s+)?"?([\d.]+(?:\+\d+)?)/i)?.[1] ?? null : id === "verapdf" ? output.match(/veraPDF\s+([\d.]+)/)?.[1] ?? null : output.match(/(?:Chromium|Chrome[^\r\n]*?)\s+([\d.]+)/)?.[1] ?? null;
+   if (result.code !== 0 || !version) return { ...missing(inventory, path), source, version, reason: `${id} did not report a version successfully; checks not run. Run check setup ${component.checks.join(" ")}.` };
    if (id === "java" && (!version || Number(version.split(".")[0]) < 17 || result.code !== 0)) return { ...missing(inventory, path), source, version, pinned: false };
   }
   return { id, usable: true, source, path, version, pinned: version === null ? null : version === component.version, inventory, ...(classpath ? { classpath } : {}) };
@@ -225,9 +227,11 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
  if (inventory === "intact") {
   if (id === "verapdf") {
    const java = await resolveComponent(host, "java");
-   return { id, usable: java.usable, source: "setup", path: join(managed, component.entryPoint), version: component.version, pinned: true, inventory, classpath: join(managed, "payload", "bin", "*"), ...(java.usable ? {} : { reason: java.reason }) };
+   classpath = join(managed, "payload", "bin", "*");
+   if (!java.usable) return { ...missing(inventory, join(managed, component.entryPoint)), source: "setup", classpath, reason: java.reason };
+   return found(join(managed, component.entryPoint), "setup", inventory, java.path!);
   }
-  return found(join(managed, component.entryPoint), "setup", inventory, id === "browser" ? undefined : component.version);
+  return found(join(managed, component.entryPoint), "setup", inventory);
  }
  if (id === "java" || id === "verapdf") {
   const path = await executablePath(host, id === "java" ? "java" : "verapdf");

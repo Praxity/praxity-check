@@ -189,4 +189,6 @@ Remove-Item Env:PRAXITY_NVDA_OUTPUT
 The output path must not exist. Without `PRAXITY_NVDA_OUTPUT`, the test retains
 evidence in a new temporary directory and prints its transcript path. It checks
 the local fixture in `test/fixtures/nvda-driver` and needs no external site.
-PDF facts and renders use bundled PDFium wasm. PDF/UA validation still requires veraPDF and Java. Windows packages can include those runtimes.
+PDF facts and renders use bundled PDFium wasm. PDF/UA validation requires
+veraPDF and Java. Run `praxity-check doctor pdf` to check those components,
+or `node src/cli.ts doctor pdf` from source.

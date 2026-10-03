@@ -11,7 +11,7 @@ async function fixture(t: test.TestContext) {
  const root = await fs.mkdtemp(join(tmpdir(), "check components "));
  t.after(() => fs.rm(root, { recursive: true, force: true }));
  return componentHost({ env: { CHECK_COMPONENTS_DIR: join(root, "components"), PATH: join(root, "system") }, home: root,
-  run: async (file) => ({ stdout: file.includes("java") ? "openjdk 17.0.20.1+1" : file.includes("verapdf") || file.endsWith(".jar") ? "veraPDF 1.30.2" : "Chromium 151.0.7922.34", stderr: "", code: 0 }) });
+  run: async (file, args) => ({ stdout: args.includes("-classpath") ? "veraPDF 1.30.2" : file.includes("java") ? "openjdk 17.0.20.1+1" : file.includes("verapdf") || file.endsWith(".jar") ? "veraPDF 1.30.2" : "Chromium 151.0.7922.34", stderr: "", code: 0 }) });
 }
 async function install(host: ComponentHost, id: ComponentId) {
  const component = (await componentManifest(host)).find(item => item.id === id)!;
@@ -121,4 +121,55 @@ test("Temurin build numbers identify the pinned Java runtime", async t => {
  host.run = async () => ({ stdout: 'openjdk 17.0.20.1 2026-09-29\nOpenJDK Runtime Environment Temurin-17.0.20.1+1 (build 17.0.20.1+1)', stderr: "", code: 0 });
  const java = await resolveComponent(host, "java", path);
  assert.equal(java.version, "17.0.20.1+1"); assert.equal(java.pinned, true);
+});
+
+test("doctor requires successful identifiable version probes", async t => {
+ const host = await fixture(t);
+ await install(host, "java");
+ const path = join(host.home, "verapdf-wrapper");
+ await fs.writeFile(path, "wrapper");
+ host.env.VERAPDF = path;
+ for (const probe of [
+  { stdout: "", stderr: "startup failed", code: 1 },
+  { stdout: "veraPDF 1.30.2", stderr: "startup failed", code: 1 },
+  { stdout: "", stderr: "", code: 0 },
+  { stdout: "", stderr: "could not start", code: null },
+ ]) {
+  host.run = async () => probe;
+  assert.equal(await doctorCli(["pdf"], host, () => {}), 1);
+  assert.equal((await resolveComponent(host, "verapdf")).usable, false);
+ }
+ host.run = async file => ({ stdout: file.includes("java") ? "openjdk 17.0.20.1+1" : "veraPDF 1.30.2", stderr: "", code: 0 });
+ assert.equal(await doctorCli(["pdf"], host, () => {}), 0);
+});
+
+test("doctor probes managed veraPDF and Java despite intact inventories", async t => {
+ const host = await fixture(t);
+ await install(host, "java");
+ await install(host, "verapdf");
+ host.run = async (_file, args) => args.includes("-classpath")
+  ? { stdout: "", stderr: "startup failed", code: 1 }
+  : { stdout: "openjdk 17.0.20.1+1", stderr: "", code: 0 };
+ const verapdf = await resolveComponent(host, "verapdf");
+ assert.equal(verapdf.inventory, "intact");
+ assert.equal(verapdf.usable, false);
+ assert.equal(await doctorCli(["pdf"], host, () => {}), 1);
+ host.run = async () => ({ stdout: "", stderr: "Permission denied", code: null });
+ assert.equal((await resolveComponent(host, "java")).usable, false);
+});
+
+test("relative Playwright caches resolve from INIT_CWD", async t => {
+ const host = await fixture(t);
+ host.env.INIT_CWD = join(host.home, "caller");
+ host.env.PLAYWRIGHT_BROWSERS_PATH = "browser-cache";
+ const browser = (await componentManifest(host)).find(c => c.id === "browser")!;
+ const path = resolve(host.env.INIT_CWD, "browser-cache", browser.entryPoint);
+ await fs.mkdir(dirname(path), { recursive: true });
+ await fs.writeFile(path, "browser");
+ const result = await resolveComponent(host, "browser");
+ assert.equal(result.path, path);
+ assert.equal(result.usable, true);
+ assert.equal(await doctorCli(["html"], host, () => {}), 0);
+ host.env.PLAYWRIGHT_BROWSERS_PATH = resolve(host.env.INIT_CWD, "browser-cache");
+ assert.equal((await resolveComponent(host, "browser")).path, path);
 });

@@ -113,7 +113,7 @@ export async function checkPdfAccessibility(snapshot: string, options: { profile
 	const profile = options.profile;
 	if (profile !== "ua1" && profile !== "ua2") throw new Error("PDF/UA profile must be ua1 or ua2");
 	const args = ["--flavour", profile, "--format", "json", "--maxfailuresdisplayed", "-1", snapshot];
-	const component = await resolveComponent(host, "verapdf", options.executable);
+	const component = await resolveComponent(host, "verapdf", options.executable, { probeVersion: false });
 	const java = component.classpath ? await resolveComponent(host, "java") : undefined;
 	const command = component.source === "setup" && component.classpath && java?.usable
 		? { tool: java.path!, args: veraPdfJavaArgs(component.classpath, args) }

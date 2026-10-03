@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { checkPdfAccessibility, parseVeraPdf } from "../src/pdf-accessibility.ts";
 import { javaEnvironment } from "../src/verapdf-runtime.ts";
+import { componentHost } from "../src/components.ts";
 
 function payload(failed = false) {
 	return { report: { buildInformation: { releaseDetails: [{ id: "core", version: "1.30.2" }] },
@@ -13,6 +14,40 @@ function payload(failed = false) {
 			details: { passedRules: 105, failedRules: Number(failed), passedChecks: 10, failedChecks: Number(failed), ...(failed ? { ruleSummaries: [{ status: "failed", ruleStatus: "FAILED", specification: "ISO 14289-1:2014", clause: "7.1", testNumber: 11, description: "Synthetic structure requirement", failedChecks: 1, checks: [{ status: "failed", context: "root/document[0]/pages[2](42 0 obj PDPage)/content[0]", errorMessage: "Synthetic structure failure" }] }] } : {}) } }] }],
 		batchSummary: { totalJobs: 1, failedParsingJobs: 0, failedEncryptedJobs: 0, outOfMemory: 0, veraExceptions: 0, validationSummary: { failedJobCount: 0, totalJobCount: 1, successfulJobCount: 1, compliantPdfaCount: Number(!failed), nonCompliantPdfaCount: Number(failed) } } } };
 }
+
+test("validation accepts explicit veraPDF wrappers without a version command", async t => {
+	const root = await mkdtemp(join(tmpdir(), "verapdf-wrapper-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const executable = join(root, process.platform === "win32" ? "verapdf-wrapper.exe" : "verapdf-wrapper");
+	await writeFile(join(root, "validation.json"), JSON.stringify(payload()));
+	if (process.platform === "win32") {
+		const source = join(root, "Wrapper.cs");
+		await writeFile(source, `using System;
+using System.IO;
+class Wrapper {
+ static int Main(string[] args) {
+  if (Array.IndexOf(args, "--version") >= 0) { Console.Error.Write("unsupported option"); return 2; }
+  Console.Write(File.ReadAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "validation.json")));
+  return 0;
+ }
+}`);
+		const compiler = join(process.env.SystemRoot ?? "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
+		const compiled = spawnSync(compiler, ["/nologo", `/out:${executable}`, source], { encoding: "utf8" });
+		assert.equal(compiled.status, 0, compiled.stderr + compiled.stdout);
+	} else {
+		await writeFile(executable, `#!${process.execPath}\nif (process.argv.includes('--version')) process.exit(2);\nprocess.stdout.write(${JSON.stringify(JSON.stringify(payload()))});\n`, { mode: 0o700 });
+	}
+	const host = componentHost({ env: { ...process.env, CHECK_COMPONENTS_DIR: join(root, "components"), PATH: root } });
+	for (const explicit of [true, false]) {
+		host.env.VERAPDF = explicit ? undefined : executable;
+		const result = await checkPdfAccessibility("unused.pdf", { profile: "ua1", ...(explicit ? { executable } : {}) }, host);
+		assert.equal(result.machineStatus, "complete");
+		assert.equal(result.validator.version, "1.30.2");
+		assert.equal(result.validator.machineCompliant, true);
+		assert.equal(result.components[0]?.source, "explicit");
+		assert.equal(result.components[0]?.version, "1.30.2");
+	}
+});
 
 test("machine results preserve failed object context without inventing pages", () => {
 	assert.equal(parseVeraPdf(JSON.stringify(payload()), "ua1").machineCompliant, true);
