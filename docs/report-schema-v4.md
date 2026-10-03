@@ -70,6 +70,34 @@ that implementation can distinguish a pass from inapplicability.
 An `untested` entry has `type: "check"` and a check name rather than a rule ID.
 This keeps execution failure separate from a standards result.
 
+## Checks that did not run
+
+`counts.checksNotRun` summarises named `untested` check evaluations:
+
+```json
+{
+  "checks": 7,
+  "pages": 2
+}
+```
+
+`checks` counts distinct check, page and state combinations. A check that did
+not run in two states counts twice; `pages` counts that page once. This includes
+named checks outside the supported frame or shadow-root scope. Whole-page
+`page-audit` entries and skipped `scenario:<id>` entries stay separate and do
+not contribute to these counts. Their reasons remain in `pages` and
+`evaluations`.
+
+Each counted entry retains its check name, page, state and reason in
+`evaluations`. Existing per-check notes remain available. A page whose checks
+time out still has `audited: true`; that flag does not mean every check ran.
+These counts do not change the finding threshold or exit code.
+
+New reports always include `counts.checksNotRun`, with both values zero when
+there are no named untested checks. This is an additive schema-v4 field, like
+the optional review and feedback fields. Older v4 reports may omit it; absence
+does not establish that every check ran. Both remain valid baselines.
+
 ## Environment and rulesets
 
 `environment` records the Node runtime, Chromium version, viewport, and colour

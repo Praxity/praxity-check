@@ -7,6 +7,7 @@ import { chromium, type Browser } from "playwright";
 import { discover } from "../src/discover.ts";
 import { auditHtml, withAuditContext } from "../src/html-audit.ts";
 import { prepareInteractionReview } from "../src/interaction-review.ts";
+import { createReport, humanSummary } from "../src/report.ts";
 import { serve } from "../src/serve.ts";
 
 const IMAGE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Crect width='20' height='20'/%3E%3C/svg%3E";
@@ -227,6 +228,30 @@ test("a page timeout keeps completed checks and records every unfinished check",
 			outcome: "untested", reason: "initial page audit exceeded 8s" },
 	]);
 	assert.match(timedOut.notes.join("\n"), /keyboardWalk did not run.*page audit exceeded 8s/);
+	const report = createReport("course", false, { pages: options.pages, stubs: [] }, result.pages,
+		result.blockedRequests, false, { runtime: { name: "node", version: process.version }, ...result.environment }, []);
+	const json = JSON.parse(JSON.stringify(report));
+	assert.deepEqual(json.counts.checksNotRun, { checks: 13, pages: 1 });
+	assert.deepEqual(json.evaluations.filter((entry: { type: string }) => entry.type === "check"),
+		[...timedOut.untested!].sort((a, b) => a.check.localeCompare(b.check)));
+	const summary = humanSummary(report);
+	assert.match(summary, /Checked 2 pages\.\nChecks not run: 13 on 1 page\.\n/);
+	assert.match(summary, /States not checked: 1 state\./);
+	assert.match(summary, /z-timeout\.html, state skipped-state: initial page audit exceeded 8s/);
+	assert.match(summary, /keyboardWalk did not run on z-timeout\.html: page audit exceeded 8s/);
+});
+
+test("a completed clean audit reports zero checks not run", async (t) => {
+	const options = await fixture(t, {
+		"index.html": '<!doctype html><html lang="en"><head><title>Clean course</title></head><body><main><h1>Clean course</h1><p>Read the lesson.</p></main></body></html>',
+	});
+	const result = await auditHtml({ ...options, scenarios: [] });
+	assert.ok(result.pages[0]?.audited);
+	assert.deepEqual(result.pages[0].findings, []);
+	const report = createReport("course", false, { pages: options.pages, stubs: [] }, result.pages,
+		result.blockedRequests, false, { runtime: { name: "node", version: process.version }, ...result.environment }, []);
+	assert.deepEqual(JSON.parse(JSON.stringify(report)).counts.checksNotRun, { checks: 0, pages: 0 });
+	assert.doesNotMatch(humanSummary(report), /Checks not run:/);
 });
 
 for (const phase of ["settling", "triage", "title retrieval"] as const) {
@@ -321,6 +346,11 @@ test("a scenario timeout keeps completed checks and continues to later states", 
 	assert.ok(page.evaluations?.some((evaluation) => evaluation.rule === "axe:image-alt" && evaluation.state === "timeout"));
 	assert.ok(page.untested?.some((evaluation) => evaluation.check === "keyboardWalk" && evaluation.state === "timeout"));
 	assert.ok(page.untested?.every((evaluation) => evaluation.state === "timeout" && evaluation.reason === "page audit exceeded 8s"));
+	const report = createReport("course", false, { pages: options.pages, stubs: [] }, result.pages,
+		result.blockedRequests, false, { runtime: { name: "node", version: process.version }, ...result.environment }, []);
+	assert.deepEqual(JSON.parse(JSON.stringify(report)).counts.checksNotRun, { checks: 13, pages: 1 });
+	assert.match(humanSummary(report), /Checks not run: 13 on 1 page\./);
+	assert.doesNotMatch(humanSummary(report), /States not checked:/);
 });
 
 test("an initial page creation failure records the page and continues", async (t) => {

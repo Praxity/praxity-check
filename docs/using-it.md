@@ -476,6 +476,29 @@ Note: Tested hover and focus contrast on only some controls on 3 pages; the rest
 The JSON keeps the tested-control counts for each page and state. If you did
 not save JSON, the summary tells you to add `--json <file>` for those details.
 
+When named checks do not run, the summary puts their count immediately after
+the checked-page count, even when there are no findings:
+
+```text
+Checked 3 pages.
+Checks not run: 7 on 2 pages.
+0 high-confidence issues found.
+```
+
+A timed-out page counts as checked because it retains completed checks. Read
+the not-run count and the notes for what remains unchecked. The count includes
+named checks outside the supported frame or shadow-root scope. The same check
+in two rendered states counts twice; affected pages count once. Whole pages
+that could not be audited and skipped declared states appear separately under
+`Pages not checked` and `States not checked`.
+
+The JSON always includes `counts.checksNotRun`, such as
+`{"checks": 7, "pages": 2}`. Its `evaluations` retain each check's name, page,
+state and reason. When no named checks are untested, both counts are zero and
+the terminal omits the `Checks not run` line. Exit codes still depend on the
+finding threshold, with `2` when no HTML page could be audited. A `0` exit does
+not prove every check ran; CI can inspect these JSON counts for completeness.
+
 Reports and evidence files can contain course content, local paths, requested
 URLs, and VoiceOver speech. Review them before sharing.
 
