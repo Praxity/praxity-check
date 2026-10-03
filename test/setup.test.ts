@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { crc32, gzipSync } from "node:zlib";
 import { extractComponentArchive } from "../src/archives.ts";
@@ -159,6 +159,9 @@ for (const offline of [false, true]) {
    fetchFile: async url => new Response(Uint8Array.from(archives.get(basename(new URL(url).pathname))!)) });
   const run = host.run;
   host.run = async (file, args, env) => {
+   // The ZIP contains synthetic runtime bytes; only Playwright's installer is executable.
+   if (file === join(componentDirectory(host, component), component.entryPoint) && args.includes("--version"))
+    return { stdout: "Chromium 151.0.7922.34", stderr: "", code: 0 };
    // Exercise the real installer and check its environment at the process boundary.
    for (const name of ["PLAYWRIGHT_DOWNLOAD_HOST", "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST", "PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST"]) {
     for (const key of [name, `npm_config_${name.toLowerCase()}`, `npm_package_config_${name.toLowerCase()}`]) {
@@ -277,6 +280,58 @@ test("system Java 17+ is reused and older Java is replaced by the pinned setup J
     const run = host.run;
     host.run = (file, args, env) => file === system ? Promise.resolve({ stdout: "openjdk 11.0.28", stderr: "", code: 0 }) : run(file, args, env);
     assert.deepEqual((await setup({ yes: true, selectors: ["java"] }, host)).installed, ["java"]);
+});
+
+test("PDF setup uses managed installer Java when a system wrapper has no usable Java", async t => {
+ for (const platform of ["win32", "linux", "darwin"]) for (const installed of [false, true]) for (const failure of ["missing", "old", "failed probe"]) await t.test(`${platform} ${installed ? "managed" : "fresh"} ${failure}`, async t => {
+  const { host, root, printed } = await fixture(t, platform);
+  if (installed) await setup({ yes: true, selectors: ["java"] }, host);
+  const system = join(root, "system"), wrapper = join(system, platform === "win32" ? "verapdf.bat" : "verapdf"), java = join(system, platform === "win32" ? "java.exe" : "java");
+  await fs.mkdir(system);
+  await fs.writeFile(wrapper, "system wrapper uses Java on PATH");
+  if (failure !== "missing") await fs.writeFile(java, "unusable system Java");
+  // Resolve the simulated PATH against the fixture, independently of the checkout drive.
+  host.cwd = root;
+  host.env.PATH = "system";
+  const stat = host.fs.stat;
+  host.fs = { ...host.fs, stat: ((path, ...args) => stat(typeof path === "string" ? resolve(root, path) : path, ...args)) as typeof fs.stat };
+  const run = host.run;
+  if (platform === "darwin") {
+   const access = host.fs.access;
+   host.fs = { ...host.fs, access: async (path, mode) => path === "/usr/libexec/java_home" ? undefined : access(path, mode) };
+  }
+  host.run = async (file, args, env) => file === "/usr/libexec/java_home" ? { stdout: "", stderr: "No system Java", code: 1 } : resolve(root, file) === java
+   ? { stdout: failure === "old" ? "openjdk 11.0.28" : "", stderr: failure === "failed probe" ? "startup failed" : "", code: failure === "old" ? 0 : 2 }
+   : run(file, args, env);
+  assert.equal((await resolveComponent(host, "java")).usable, false, "The system wrapper still selects system Java");
+  assert.equal(await setupCli(["--yes", "pdf"], host), 0);
+  assert.equal((await doctor(host, ["pdf"])).exitCode, 0, printed.join("\n"));
+  for (const id of ["java", "verapdf"] as const) {
+   const component = await resolveComponent(host, id);
+   assert.equal(component.source, "setup");
+   assert.equal(component.inventory, "intact");
+   assert.equal(component.usable, true);
+  }
+ });
+});
+
+test("setup exits nonzero when requested checks remain unusable", async t => {
+ for (const scenario of ["explicit wrapper", "explicit browser cache", "failed browser", "declined Java"]) await t.test(scenario, async t => {
+  const { host, root, printed } = await fixture(t);
+  const pdf = scenario === "explicit wrapper" || scenario === "declined Java";
+  if (scenario === "explicit wrapper") {
+   const wrapper = join(root, "verapdf-wrapper.exe");
+   await fs.writeFile(wrapper, "wrapper needs system Java");
+   host.env.VERAPDF = wrapper;
+   const run = host.run;
+   host.run = (file, args, env) => file === wrapper ? Promise.resolve({ stdout: "", stderr: "Java unavailable", code: 2 }) : run(file, args, env);
+  } else if (scenario === "explicit browser cache") host.env.PLAYWRIGHT_BROWSERS_PATH = join(root, "missing-cache");
+  else if (scenario === "failed browser") host.run = async () => ({ stdout: "", stderr: "browser startup failed", code: 2 });
+  else host.confirm = async component => component.id !== "java";
+  assert.equal(await setupCli([...(scenario === "declined Java" ? [] : ["--yes"]), pdf ? "pdf" : "html"], host), 1);
+  assert.equal((await doctor(host, [pdf ? "pdf" : "html"])).exitCode, 1);
+  assert.match(printed.join("\n"), /checks not run|Java is unavailable/);
+ });
 });
 test("verified malicious ZIP archives cannot escape staging or install links", async (t) => {
     for (const entries of [[{ name: "../escaped" }], [{ name: "/absolute" }], [{ name: "C:/outside" }], [{ name: "file:stream" }], [{ name: "link", mode: 0xa1ff }], [{ name: "duplicate" }, { name: "Duplicate" }]]) {

@@ -265,7 +265,7 @@ async function executablePath(host: ComponentHost, value: string, source: Compon
  return null;
 }
 
-export async function resolveComponent(host: ComponentHost, id: ComponentId, explicit?: string, options: { probeVersion?: boolean; validatorExecutable?: string } = {}): Promise<ComponentResolution> {
+export async function resolveComponent(host: ComponentHost, id: ComponentId, explicit?: string, options: { probeVersion?: boolean; validatorExecutable?: string; javaPurpose?: "installer" } = {}): Promise<ComponentResolution> {
  const { join } = host.path;
  const component = (await componentDefinitions(host)).find(item => item.id === id)!;
  const missing = (inventory: ComponentResolution["inventory"] = "absent", path: string | null = null): ComponentResolution => ({ id, usable: false, source: null, path, version: null, pinned: null, inventory, reason: `${id === "browser" ? "Browser" : id === "java" ? "Java 17 or newer" : "veraPDF"} is ${inventory === "damaged" ? "damaged" : "not installed"}; checks not run. Run check setup ${component.checks.join(" ")}.` });
@@ -286,9 +286,9 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
    selectionName = key;
    break;
   }
-  // A wrapper chooses its own Java; an unrelated managed JRE cannot replace that choice.
-  wrapperJava = options.validatorExecutable !== undefined || !!validator.value && !validator.direct;
-  if (!wrapperJava && !validator.direct) {
+  // Runtime wrappers choose their own Java. The managed installer can use the managed JRE.
+  wrapperJava = options.javaPurpose !== "installer" && (options.validatorExecutable !== undefined || !!validator.value && !validator.direct);
+  if (options.javaPurpose !== "installer" && !wrapperJava && !validator.direct) {
    const definition = (await componentDefinitions(host)).find(item => item.id === "verapdf")!;
    wrapperJava = await checkInventory(componentDirectory(host, definition), definition, host) !== "intact"
     && !!await executablePath(host, "verapdf");

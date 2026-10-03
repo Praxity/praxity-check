@@ -548,6 +548,9 @@ the Playwright browser. Refusing a component leaves those checks not run.
 An existing Java 17 or newer is reused. `setup --list` displays the same facts
 without prompts, downloads or filesystem changes.
 
+Setup exits 0 when the selected components are usable, or 1 with reasons when
+the requested checks remain unavailable. `setup --list` exits 0.
+
 For offline installation, download the archives for your target from the
 [archive list](offline-components.md), then run `setup --from /path/to/archives`.
 Add `--yes` to consent in scripts. Offline setup never downloads missing files.

@@ -101,7 +101,7 @@ function selectedComponents(manifest: Component[], selectors: string[]) {
 }
 const xmlEscape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 async function installVeraPdf(host: SetupHost, work: string, payload: string, component: Component) {
-    const java = await resolveComponent(host, "java");
+    const java = await resolveComponent(host, "java", undefined, { javaPurpose: "installer" });
     if (!java.usable)
         throw new Error(java.reason);
     const config = join(work, "auto-install.xml");
@@ -131,10 +131,10 @@ export async function setup(options: SetupOptions, host: SetupHost) {
     const manifest = await host.manifest(host), selected = selectedComponents(manifest, options.selectors ?? []);
     if (options.list) {
         selected.forEach(component => host.print(setupDescription(component)));
-        return { installed: [], refused: [], reused: [] };
+        return { installed: [], refused: [], reused: [], exitCode: 0 };
     }
     if (selected.some(component => component.id === "java")) {
-        const java = await resolveComponent(host, "java");
+        const java = await resolveComponent(host, "java", undefined, { javaPurpose: "installer" });
         if (java.source === "explicit" && !java.usable)
             throw new Error(java.reason);
     }
@@ -147,7 +147,7 @@ export async function setup(options: SetupOptions, host: SetupHost) {
         host.print(setupDescription(component));
         const destination = componentDirectory(host, component);
         if (await checkInventory(destination, component, host) === "intact") {
-            const installed = await resolveComponent(host, component.id);
+            const installed = await resolveComponent(host, component.id, undefined, component.id === "java" ? { javaPurpose: "installer" } : {});
             if (!installed.usable)
                 throw new Error(installed.reason);
             host.print(`${component.id}: already installed`);
@@ -155,7 +155,7 @@ export async function setup(options: SetupOptions, host: SetupHost) {
             continue;
         }
         if (component.id === "java") {
-            const java = await resolveComponent(host, "java");
+            const java = await resolveComponent(host, "java", undefined, { javaPurpose: "installer" });
             if (java.usable) {
                 host.print(`java: using ${java.source} ${java.version ?? "unknown version"} at ${java.path}`);
                 result.reused.push(component.id);
@@ -167,7 +167,7 @@ export async function setup(options: SetupOptions, host: SetupHost) {
             result.refused.push(component.id);
             continue;
         }
-        if (component.id === "verapdf" && !(await resolveComponent(host, "java")).usable) {
+        if (component.id === "verapdf" && !(await resolveComponent(host, "java", undefined, { javaPurpose: "installer" })).usable) {
             host.print("verapdf: Java is unavailable; run check setup pdf");
             result.refused.push(component.id);
             continue;
@@ -218,7 +218,11 @@ export async function setup(options: SetupOptions, host: SetupHost) {
             await host.fs.rm(staging, { recursive: true, force: true });
         }
     }
-    return result;
+    // Verify the runtime selections after publishing. Explicit overrides can still win.
+    const resolutions = await Promise.all(selected.map(component => resolveComponent(host, component.id)));
+    const unusable = resolutions.filter(component => !component.usable);
+    unusable.forEach(component => host.print(component.reason!));
+    return { ...result, exitCode: unusable.length ? 1 : 0 };
 }
 export async function setupCli(args: string[], host: SetupHost): Promise<number> {
     const options: SetupOptions = { selectors: [] };
@@ -235,6 +239,5 @@ export async function setupCli(args: string[], host: SetupHost): Promise<number>
         else
             options.selectors!.push(arg);
     }
-    await setup(options, host);
-    return 0;
+    return (await setup(options, host)).exitCode;
 }
