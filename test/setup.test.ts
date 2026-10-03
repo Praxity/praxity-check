@@ -400,9 +400,9 @@ test("component ZIP and tar archives cap entries at 20000", async t => {
 test("setup rejects unusable explicit Java before downloads even with a managed JRE", async t => {
     for (const variable of ["JAVA_HOME", "JAVACMD", "VERAPDF_JAVA"]) {
         for (const installed of [false, true]) {
-            const { host, root } = await fixture(t);
+            const { host, root } = await fixture(t, variable === "JAVA_HOME" ? "linux" : "win32");
             if (installed) await setup({ yes: true, selectors: ["java"] }, host);
-            const home = join(root, "old-java"), executable = join(home, "bin", "java.exe");
+            const home = join(root, "old-java"), executable = join(home, "bin", host.platform === "win32" ? "java.exe" : "java");
             await fs.mkdir(dirname(executable), { recursive: true });
             await fs.writeFile(executable, "old explicit Java");
             host.env[variable] = variable === "JAVA_HOME" ? home : executable;
@@ -439,7 +439,7 @@ test("setup reuses Java selected by the launcher despite inactive overrides", as
   await fs.writeFile(good, "Java 17"); await fs.writeFile(old, "Java 11");
   host.run = async file => ({ stdout: file === old ? "openjdk 11.0.28" : "openjdk 17.0.20.1+1", stderr: "", code: 0 });
   host.fetchFile = async () => { throw new Error("Must reuse the launcher's Java"); };
-  const base = { ...host.env };
+  const base = { ...host.env, ...(platform === "win32" ? { PATH: dirname(good) } : {}) };
   const cases = [
    { VERAPDF_JAVA: "", JAVACMD: "", JAVA_HOME: home },
    { VERAPDF_JAVA: "", JAVACMD: good, JAVA_HOME: join(root, "missing") },
@@ -463,4 +463,23 @@ test("setup cannot report reuse when intact components fail their probes", async
             ? { stdout: "", stderr: "startup failed", code: 1 } : run(file, args, env);
         await assert.rejects(setup({ yes: true, selectors: [id] }, host), /did not report a version successfully/);
     }
+});
+
+
+test("setup ignores Windows JAVA_HOME when the wrapper uses Java on PATH", async t => {
+ for (const installed of [false, true]) for (const JAVA_HOME of ["", "missing-home", "old-home"]) await t.test(`${installed ? "managed" : "fresh"} ${JAVA_HOME || "empty"}`, async t => {
+  const { host, root } = await fixture(t);
+  if (installed) await setup({ yes: true, selectors: ["java"] }, host);
+  const system = join(root, "system", "java.exe"), oldHome = join(root, "old-home"), old = join(oldHome, "bin", "java.exe");
+  for (const file of [system, old]) { await fs.mkdir(dirname(file), { recursive: true }); await fs.writeFile(file, "Java fixture"); }
+  const run = host.run;
+  host.run = (file, args, env) => file === old ? Promise.resolve({ stdout: "openjdk 11.0.28", stderr: "", code: 0 }) : run(file, args, env);
+  host.fetchFile = async () => { throw new Error("The wrapper's Java needs no download"); };
+  for (const JAVACMD of [undefined, ""]) for (const VERAPDF_JAVA of [undefined, "", old]) {
+   host.env = { ...host.env, PATH: dirname(system), JAVA_HOME: JAVA_HOME ? join(root, JAVA_HOME) : "", JAVACMD, VERAPDF_JAVA, VERAPDF: "verapdf-wrapper" };
+   assert.deepEqual((await setup({ yes: true, selectors: ["java"] }, host)).reused, ["java"]);
+   const java = await resolveComponent(host, "java");
+   assert.equal(java.path, system); assert.equal(java.source, "system"); assert.equal(java.usable, true);
+  }
+ });
 });
