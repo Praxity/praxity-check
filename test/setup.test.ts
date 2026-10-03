@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test from "node:test";
@@ -122,6 +123,68 @@ test("setup installs ZIP browser, Java and headless veraPDF fixtures and invento
     assert.equal((await doctor(host)).exitCode, 0);
     assert.deepEqual((await setup({ yes: true }, host)).installed, []);
 });
+
+for (const offline of [false, true]) {
+ for (const variable of [
+  "PLAYWRIGHT_DOWNLOAD_HOST", "npm_config_playwright_download_host", "npm_package_config_playwright_download_host",
+  "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "npm_config_playwright_chromium_download_host", "npm_package_config_playwright_chromium_download_host",
+  "PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST", "npm_config_playwright_firefox_download_host", "npm_package_config_playwright_firefox_download_host",
+  "PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST", "npm_config_playwright_webkit_download_host", "npm_package_config_playwright_webkit_download_host",
+  "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
+ ]) test(`production browser installer uses verified archives despite ${variable} ${offline ? "offline" : "downloaded"}`, async t => {
+  const { root } = await fixture(t, process.platform, process.arch);
+  const component = (await componentManifest({ platform: process.platform, arch: process.arch })).find(c => c.id === "browser")!;
+  const archives = new Map<string, Buffer>();
+  for (const archive of component.archives) {
+   const name = basename(new URL(archive.url).pathname);
+   const entry = name.includes("headless-shell") ? component.entryPoint.split("/").slice(1).join("/")
+    : name.startsWith("ffmpeg") ? process.platform === "win32" ? "ffmpeg-win64.exe" : process.platform === "darwin" ? "ffmpeg-mac" : "ffmpeg-linux" : "PrintDeps.exe";
+   const bytes = zip([{ name: entry, data: `verified ${name}` }]);
+   archives.set(name, bytes);
+   archive.sha256 = hash(bytes); archive.size = bytes.length;
+  }
+  const redirected: string[] = [];
+  const other = createServer((request, response) => {
+   redirected.push(request.url!);
+   response.writeHead(502); response.end("Unverified mirror or proxy must not receive installer requests");
+  });
+  await new Promise<void>(ok => other.listen(0, "127.0.0.1", ok));
+  t.after(() => new Promise<void>((ok, no) => other.close(error => error ? no(error) : ok())));
+  const address = other.address();
+  assert.ok(address && typeof address !== "string");
+  const env: NodeJS.ProcessEnv = { ...process.env, CHECK_COMPONENTS_DIR: join(root, "components"),
+   CHECK_TEST_UNTRUSTED_INSTALLER_OPTION: "must not cross the allowlist", NODE_OPTIONS: "--require=missing-installer-hook",
+   NO_PROXY: "unrelated.example", no_proxy: "unrelated.example", [variable]: `http://127.0.0.1:${address.port}` };
+  const host = setupHost({ env, print: () => {}, manifest: async () => [component],
+   fetchFile: async url => new Response(Uint8Array.from(archives.get(basename(new URL(url).pathname))!)) });
+  const run = host.run;
+  host.run = async (file, args, env) => {
+   // Exercise the real installer and check its environment at the process boundary.
+   for (const name of ["PLAYWRIGHT_DOWNLOAD_HOST", "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST", "PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST"]) {
+    for (const key of [name, `npm_config_${name.toLowerCase()}`, `npm_package_config_${name.toLowerCase()}`]) {
+     assert.equal(new URL(env[key]!).hostname, "127.0.0.1", key);
+     assert.equal(env[key], env.PLAYWRIGHT_DOWNLOAD_HOST, key);
+    }
+   }
+   assert.match(env.NO_PROXY!, /(?:^|,)127\.0\.0\.1(?:,|$)/);
+   assert.equal(env.no_proxy, env.NO_PROXY);
+   assert.equal(env.CHECK_TEST_UNTRUSTED_INSTALLER_OPTION, undefined);
+   assert.equal(env.NODE_OPTIONS, undefined);
+   assert.ok(Object.keys(env).every(key => !/proxy$/i.test(key) || key.toUpperCase() === "NO_PROXY"));
+   return run(file, args, env);
+  };
+  const from = join(root, "offline");
+  if (offline) {
+   await fs.mkdir(from);
+   for (const [name, bytes] of archives) await fs.writeFile(join(from, name), bytes);
+   host.fetchFile = async () => { throw new Error("Offline setup must not fetch"); };
+  }
+  assert.deepEqual((await setup({ yes: true, selectors: ["browser"], ...(offline ? { from } : {}) }, host)).installed, ["browser"]);
+  assert.deepEqual(redirected, [], "Only Check's verified loopback server may receive downloads");
+  const path = join(componentDirectory(host, component), component.entryPoint);
+  assert.equal(await fs.readFile(path, "utf8"), `verified ${basename(new URL(component.archives[0]!.url).pathname)}`);
+ });
+}
 test("managed Java validation on POSIX excludes inherited JVM options", async (t) => {
     const { host } = await fixture(t, "linux", "x64");
     await setup({ yes: true, selectors: ["pdf"] }, host);
@@ -352,11 +415,11 @@ test("setup rejects unusable explicit Java before downloads even with a managed 
     }
 });
 
-test("setup diagnoses missing, failing and empty explicit Java selections", async t => {
-    for (const failure of ["missing", "failed probe", "empty"]) {
+test("setup diagnoses missing and failing explicit Java selections", async t => {
+    for (const failure of ["missing", "failed probe"]) {
         const { host, root } = await fixture(t);
         const executable = join(root, "java.exe");
-        host.env.javacmd = failure === "empty" ? "" : executable;
+        host.env.javacmd = executable;
         if (failure === "failed probe") {
             await fs.writeFile(executable, "failing Java");
             host.run = async () => ({ stdout: "openjdk 17.0.20.1+1", stderr: "startup failed", code: 1 });
@@ -365,6 +428,30 @@ test("setup diagnoses missing, failing and empty explicit Java selections", asyn
         await assert.rejects(setup({ yes: true, selectors: ["java"] }, host), /[Ff]ix or clear JAVACMD/);
         assert.deepEqual((await setup({ list: true, selectors: ["java"] }, host)).installed, []);
     }
+});
+
+test("setup reuses Java selected by the launcher despite inactive overrides", async t => {
+ for (const platform of ["win32", "linux", "darwin"]) {
+  const { host, root } = await fixture(t, platform);
+  const home = join(root, "jdk"), good = join(home, "bin", platform === "win32" ? "java.exe" : "java");
+  const old = join(root, "old-java");
+  await fs.mkdir(dirname(good), { recursive: true });
+  await fs.writeFile(good, "Java 17"); await fs.writeFile(old, "Java 11");
+  host.run = async file => ({ stdout: file === old ? "openjdk 11.0.28" : "openjdk 17.0.20.1+1", stderr: "", code: 0 });
+  host.fetchFile = async () => { throw new Error("Must reuse the launcher's Java"); };
+  const base = { ...host.env };
+  const cases = [
+   { VERAPDF_JAVA: "", JAVACMD: "", JAVA_HOME: home },
+   { VERAPDF_JAVA: "", JAVACMD: good, JAVA_HOME: join(root, "missing") },
+   { VERAPDF: "wrapper", VERAPDF_JAVA: old, JAVACMD: good },
+   ...(platform === "win32" ? [] : [{ VERAPDF_JAVA: old, JAVACMD: good }, { VERAPDF_JAVA: old, JAVACMD: "", JAVA_HOME: home }]),
+  ];
+  for (const env of cases) {
+   host.env = { ...base, ...env };
+   assert.deepEqual((await setup({ yes: true, selectors: ["java"] }, host)).reused, ["java"]);
+   assert.equal((await resolveComponent(host, "java")).path, good);
+  }
+ }
 });
 
 test("setup cannot report reuse when intact components fail their probes", async t => {

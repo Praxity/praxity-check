@@ -64,9 +64,18 @@ async function installPlaywright(host: ComponentHost, directory: string, archive
         if (!address || typeof address === "string")
             throw new Error("Browser archive server did not start");
         const require = createRequire(import.meta.url), cli = join(dirname(require.resolve("playwright/package.json")), "cli.js");
-        // Strip inherited mirror settings so neither online nor offline setup can fetch unpinned bytes.
-        const env = Object.fromEntries(Object.entries(host.env).filter(([key]) => !/^(PLAYWRIGHT_.*DOWNLOAD_HOST|PLAYWRIGHT_DOWNLOAD_HOST|PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD|NODE_OPTIONS)$/i.test(key)));
-        const result = await host.run(process.execPath, [cli, "install", "chromium-headless-shell"], { ...env, PLAYWRIGHT_BROWSERS_PATH: directory, PLAYWRIGHT_DOWNLOAD_HOST: `http://127.0.0.1:${address.port}`, PLAYWRIGHT_SKIP_BROWSER_GC: "1" });
+        // Only OS paths, temporary folders and locale settings cross this process boundary.
+        // Inherited mirrors, proxies and Node hooks could otherwise bypass verified archives.
+        const allowed = new Set(["PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "LANG", "LC_ALL", "LC_CTYPE"]);
+        const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(host.env).filter(([key]) => allowed.has(host.platform === "win32" ? key.toUpperCase() : key)));
+        const loopback = `http://127.0.0.1:${address.port}`;
+        // Playwright reads each direct variable before its npm_config and npm_package_config aliases.
+        for (const name of ["PLAYWRIGHT_DOWNLOAD_HOST", "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST", "PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST"]) {
+            for (const key of [name, `npm_config_${name.toLowerCase()}`, `npm_package_config_${name.toLowerCase()}`])
+                env[key] = loopback;
+        }
+        env.NO_PROXY = env.no_proxy = "127.0.0.1,localhost,::1,[::1]";
+        const result = await host.run(process.execPath, [cli, "install", "chromium-headless-shell"], { ...env, PLAYWRIGHT_BROWSERS_PATH: directory, PLAYWRIGHT_SKIP_BROWSER_GC: "1" });
         if (result.code !== 0)
             throw new Error(`Playwright install failed: ${result.stderr || result.stdout}`);
     }
