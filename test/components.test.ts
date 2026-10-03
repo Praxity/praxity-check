@@ -123,6 +123,70 @@ test("Temurin build numbers identify the pinned Java runtime", async t => {
  assert.equal(java.version, "17.0.20.1+1"); assert.equal(java.pinned, true);
 });
 
+test("unsupported download targets still resolve explicit validators", async t => {
+ for (const [platform, arch] of [["win32", "arm64"], ["freebsd", "x64"]]) {
+  const host = await fixture(t);
+  host.platform = platform!; host.arch = arch!;
+  const path = join(host.home, "verapdf-wrapper");
+  await fs.writeFile(path, "wrapper");
+  const validator = await resolveComponent(host, "verapdf", path);
+  assert.equal(validator.usable, true);
+  assert.equal(validator.path, path);
+  assert.equal(validator.source, "explicit");
+  assert.equal(validator.version, "1.30.2");
+  await assert.rejects(componentManifest(host), /Unsupported components target/);
+ }
+});
+
+test("unsupported download targets support system lookup and doctor", async t => {
+ const host = await fixture(t);
+ host.platform = "freebsd"; host.arch = "x64";
+ await fs.mkdir(host.env.PATH!, { recursive: true });
+ for (const name of ["java", "verapdf"]) await fs.writeFile(join(host.env.PATH!, name), "system tool");
+ const printed: string[] = [];
+ assert.equal((await resolveComponent(host, "verapdf")).source, "system");
+ assert.equal((await resolveComponent(host, "java")).usable, true);
+ assert.equal(await doctorCli(["pdf", "--json"], host, text => printed.push(text)), 0);
+ assert.equal(JSON.parse(printed[0]!).components.find((c: { id: string }) => c.id === "browser").usable, false);
+ assert.equal(await doctorCli(["html"], host, () => {}), 1);
+ const browser = join(host.home, "browser");
+ await fs.writeFile(browser, "browser");
+ assert.equal((await resolveComponent(host, "browser", browser)).usable, true);
+});
+
+test("Java overrides follow the active launcher precedence and skip empty variables", async t => {
+ for (const platform of ["win32", "linux", "darwin"]) {
+  const host = await fixture(t);
+  host.platform = platform;
+  const good = join(host.home, "jdk", "bin", platform === "win32" ? "java.exe" : "java");
+  const old = join(host.home, "old-java");
+  await fs.mkdir(dirname(good), { recursive: true });
+  await fs.writeFile(good, "Java 17"); await fs.writeFile(old, "Java 11");
+  host.run = async file => ({ stdout: file === old ? "openjdk 11.0.28" : "openjdk 17.0.20.1+1", stderr: "", code: 0 });
+  const base = { ...host.env };
+  const cases: [string, NodeJS.ProcessEnv, string, boolean][] = [
+   ["empty JAVACMD falls through to JAVA_HOME", { JAVACMD: "", JAVA_HOME: join(host.home, "jdk") }, good, true],
+   ["empty VERAPDF_JAVA falls through to JAVACMD", { VERAPDF_JAVA: "", JAVACMD: good }, good, true],
+   ["JAVACMD beats JAVA_HOME", { JAVACMD: good, JAVA_HOME: join(host.home, "missing") }, good, true],
+   ["active old JAVACMD blocks JAVA_HOME", { JAVACMD: old, JAVA_HOME: join(host.home, "jdk") }, old, false],
+   ["VERAPDF_JAVA has platform precedence", { VERAPDF_JAVA: old, JAVACMD: good, JAVA_HOME: join(host.home, "jdk") }, platform === "win32" ? old : good, platform !== "win32"],
+   ["explicit Windows validator bypasses VERAPDF_JAVA", { VERAPDF: "wrapper", VERAPDF_JAVA: old, JAVACMD: good }, good, true],
+  ];
+  for (const [name, env, path, usable] of cases) await t.test(`${platform}: ${name}`, async () => {
+   host.env = { ...base, ...env };
+   const java = await resolveComponent(host, "java");
+   assert.equal(java.path, path); assert.equal(java.usable, usable); assert.equal(java.source, "explicit");
+  });
+  await t.test(`${platform}: empty variables allow system Java`, async () => {
+   await fs.mkdir(base.PATH!, { recursive: true });
+   const system = join(base.PATH!, platform === "win32" ? "java.exe" : "java");
+   await fs.writeFile(system, "Java 17");
+   host.env = { ...base, VERAPDF_JAVA: "", JAVACMD: "", JAVA_HOME: "" };
+   assert.equal((await resolveComponent(host, "java")).source, "system");
+  });
+ }
+});
+
 test("doctor requires successful identifiable version probes", async t => {
  const host = await fixture(t);
  await install(host, "java");

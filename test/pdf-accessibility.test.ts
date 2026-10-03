@@ -38,7 +38,9 @@ class Wrapper {
 		await writeFile(executable, `#!${process.execPath}\nif (process.argv.includes('--version')) process.exit(2);\nprocess.stdout.write(${JSON.stringify(JSON.stringify(payload()))});\n`, { mode: 0o700 });
 	}
 	const host = componentHost({ env: { ...process.env, CHECK_COMPONENTS_DIR: join(root, "components"), PATH: root } });
-	for (const explicit of [true, false]) {
+	for (const [platform, arch] of [[process.platform, process.arch], ["win32", "arm64"], ["freebsd", "x64"]]) {
+	 host.platform = platform!; host.arch = arch!;
+	 for (const explicit of [true, false]) {
 		host.env.VERAPDF = explicit ? undefined : executable;
 		const result = await checkPdfAccessibility("unused.pdf", { profile: "ua1", ...(explicit ? { executable } : {}) }, host);
 		assert.equal(result.machineStatus, "complete");
@@ -46,6 +48,7 @@ class Wrapper {
 		assert.equal(result.validator.machineCompliant, true);
 		assert.equal(result.components[0]?.source, "explicit");
 		assert.equal(result.components[0]?.version, "1.30.2");
+	 }
 	}
 });
 
