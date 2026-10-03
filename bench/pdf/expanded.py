@@ -11,7 +11,6 @@ import hashlib
 import json
 from pathlib import Path
 import random
-import shutil
 import subprocess
 
 CATEGORIES = ('clipping', 'overlap', 'low-text-contrast', 'small-essential-text',
@@ -286,8 +285,6 @@ def make_case(index, flawed):
 
 
 def generate(out, seed=20260914, render=True):
-    for tool in ('pdfinfo','pdftotext','pdftoppm'):
-        if not shutil.which(tool): raise RuntimeError(f'Add Poppler {tool} to PATH')
     out=Path(out); out.mkdir(parents=True,exist_ok=False)
     inputs=out/'model-input'; inputs.mkdir()
     renders=out/'renders'
@@ -313,10 +310,10 @@ def generate(out, seed=20260914, render=True):
         file_id=f'{rng.getrandbits(80):020x}'
         pages,defects,allowed=make_case(i,flawed)
         path=inputs/f'{file_id}.pdf'; write_pdf(path,pages)
-        info=subprocess.check_output(['pdfinfo',str(path)],text=True)
-        assert int(next(line.split(':')[1] for line in info.splitlines() if line.startswith('Pages:')))==len(pages)
+        info=json.loads(subprocess.check_output(["node",str(Path(__file__).resolve().parents[2]/"scripts/pdf-benchmark.mjs"),"facts",str(path)],text=True))
+        assert info["pageCount"]==len(pages)
         if render:
-            subprocess.run(['pdftoppm','-scale-to','1400','-png',str(path),str(renders/file_id)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+            subprocess.run(["node",str(Path(__file__).resolve().parents[2]/"scripts/pdf-benchmark.mjs"),"render",str(path),str(renders/file_id)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
         key['cases'].append(dict(caseId=file_id,pairId=f'P{i+1:02d}',variant='flawed' if flawed else 'clean',
             path=str(path.relative_to(out)),useContext=CASES[i]['context'],layout=CASES[i]['layout'],
             pageCount=len(pages),sha256=hashlib.sha256(path.read_bytes()).hexdigest(),

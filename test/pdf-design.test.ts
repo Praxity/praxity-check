@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { inflateSync } from "node:zlib";
-import { measurePdfDesignPage, parsePdfDesignXml, preparePdfDesignEvidence } from "../src/pdf-design.ts";
+import { measurePdfDesignPage, preparePdfDesignEvidence } from "../src/pdf-design.ts";
 
 function pdf(width = 200, height = 300) {
 	const streams = ["BT /F1 12 Tf 30 170 Td (Normal) Tj ET BT /F1 4 Tf 30 130 Td (Tiny instruction) Tj ET q 1 0 0 rg 32 120 6 6 re f Q", "BT /F1 12 Tf 30 270 Td (Landscape) Tj ET", "BT /F1 12 Tf 30 170 Td (Rotated) Tj ET", "BT /F1 12 Tf 30 170 Td (Offset) Tj ET", ""];
@@ -23,7 +22,7 @@ function pdf(width = 200, height = 300) {
 	const xref = Buffer.byteLength(result);
 	return result + `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((n) => `${String(n).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
 }
-// Decode Poppler RGB PNG scanlines to assert a known source mark lands inside the crop.
+// Decode RGB PNG scanlines to assert a known source mark lands inside the crop.
 function rgb(png: Buffer) {
  const width = png.readUInt32BE(16), height = png.readUInt32BE(20), chunks: Buffer[] = [];
  assert.equal(png[24], 8); assert.equal(png[25], 2);
@@ -45,44 +44,12 @@ function rgb(png: Buffer) {
  return (x: number, y: number) => [...pixels.subarray((y * width + x) * 3, (y * width + x) * 3 + 3)];
 }
 
-const xml = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE pdf2xml SYSTEM "pdf2xml.dtd">\n<pdf2xml producer="poppler" version="26"><page number="1" width="200" height="300"><fontspec id="0" size="4" family="Helvetica" color="#000000"/><text left="30" top="50" width="20" height="4" font="0"><b>A &amp; B</b></text></page></pdf2xml>';
-
-test("strict bounded Poppler style parsing rejects malformed or unsupported XML", () => {
-	assert.equal(parsePdfDesignXml(xml).spans[0]?.text, "A & B");
-	assert.equal(parsePdfDesignXml(xml).spans[0]?.bold, true);
- const data = parsePdfDesignXml(xml), span = data.spans[0]!;
- const measured = measurePdfDesignPage({ ...data, spans: [{ ...span, width: 0, text: "" }, span, { ...span, top: 100 }] }, {});
- assert.deepEqual(measured.textBoxGaps, [{ firstSpan: 1, secondSpan: 2, verticalGapPt: 46 }]);
- assert.equal(measured.requirement, null);
-	for (const bad of [xml.replace('size="4"', 'size="NaN"'), xml.replace('width="20"', 'width="-2"'), xml.replace('font="0"', 'font="missing"'), xml.replace("</text>", "</b>"), xml.replace("&amp;", "&external;"), xml.replace('<pdf2xml', '<!ENTITY external SYSTEM "file:///etc/passwd"><pdf2xml'), xml + '<pdf2xml></pdf2xml>', xml.repeat(20_000), xml.replace('left="30"', 'left="30" left="40"')]) assert.throws(() => parsePdfDesignXml(bad));
-});
-
-test("bookmark metadata is validated and excluded from page measurements", () => {
-	const withOutline = (outline: string) => xml.replace("</pdf2xml>", `${outline}</pdf2xml>`);
-	const outline = '<outline><item page="1">Bookmark &amp; parent</item><outline><item page="2">Nested bookmark</item><item>No destination</item></outline></outline>';
-	assert.deepEqual(parsePdfDesignXml(withOutline(outline)), parsePdfDesignXml(xml));
-	for (const bad of [
-		outline.replace("&amp;", "&external;"), outline.replace("Nested bookmark", "x".repeat(200_001)),
-		outline.replace('<item page="2">', '<unknown>'), outline.replace('page="2"', 'page="NaN"'),
-		outline.replace('page="2"', 'page="1.5"'), outline.replace("</item>", "</outline>"),
-		"<outline>unexpected text</outline>", "<item>outside outline</item>",
-		"<outline>".repeat(8) + "</outline>".repeat(8),
-	]) assert.throws(() => parsePdfDesignXml(withOutline(bad)));
-});
-
 test("real PDF design evidence preserves intentional whitespace and unsupported mapping, hashes rendered crops", async (t) => {
-	for (const tool of ["pdftohtml", "pdftoppm"]) try { execFileSync(tool, ["-v"], { stdio: "ignore" }); } catch { t.skip(`${tool} unavailable`); return; }
 	const dir = await mkdtemp(join(tmpdir(), "pdf-design-test-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	const input = join(dir, "input.pdf"); await writeFile(input, pdf());
-	const pages = [1, 2, 3, 4, 5].map((page) => ({ page, width: page === 2 ? 300 : 200, height: page === 2 ? 200 : 300, rotation: page === 3 ? 90 : 0, boxes: { MediaBox: page === 2 ? [0, 0, 300, 200] : [0, 0, 200, 300], CropBox: page === 4 ? [10, 10, 190, 290] : page === 2 ? [0, 0, 300, 200] : [0, 0, 200, 300] } }));
-	// Poppler otherwise writes internal-link chatter into its XML stdout, outside any text span.
- const noisyXml = execFileSync("pdftohtml", ["-xml", "-i", "-stdout", "-zoom", "1", "-noroundcoord", "-f", "1", "-l", "1", input], { encoding: "utf8" });
- assert.match(noisyXml, /link to page 2/);
- assert.throws(() => parsePdfDesignXml(noisyXml), /Unexpected XML text/);
+	const pages = [1, 2, 3, 4, 5].map((page) => ({ page, width: page === 2 || page === 3 ? 300 : page === 4 ? 180 : 200, height: page === 2 || page === 3 ? 200 : page === 4 ? 280 : 300, rotation: page === 3 ? 90 : 0, boxes: { MediaBox: page === 2 ? [0, 0, 300, 200] : [0, 0, 200, 300], CropBox: page === 4 ? [10, 10, 190, 290] : page === 2 ? [0, 0, 300, 200] : [0, 0, 200, 300] } }));
  const result = await preparePdfDesignEvidence(input, dir, pages, { minTextSizePt: 10 });
- const designXml = await readFile(join(dir, "page-1-design.xml"), "utf8");
- assert.match(designXml, /<outline>\s*<item page="1">Bookmark &amp; parent<\/item>\s*<outline>\s*<item page="2">Nested bookmark<\/item>/);
  assert.equal(result.pages[0]?.spans.length, 2);
  assert.ok(result.pages[0]?.spans.some((span) => span.text.includes("Normal")));
 	assert.equal(result.pages[0]?.fonts.find((f) => f.sizePt === 4)?.family, "Helvetica");
@@ -90,7 +57,7 @@ test("real PDF design evidence preserves intentional whitespace and unsupported 
 	assert.ok(result.pages[0]!.measurements.textBoxGaps[0]!.verticalGapPt > 20);
 	assert.ok(result.pages[0]!.crops.length > 0);
 	assert.equal(result.pages[1]?.mappingSupported, true);
-	for (const page of result.pages.slice(2, 4)) { assert.equal(page.mappingSupported, false); assert.equal(page.crops.length, 0); assert.match(page.mappingLimitation!, /unsupported/); }
+	for (const page of result.pages.slice(2, 4)) { assert.equal(page.mappingSupported, true); assert.ok(page.crops.length > 0); }
 	assert.equal(result.pages[4]?.measurements.extractedTextEnvelope, null);
 	assert.equal(result.pages[4]?.crops.length, 0);
 	assert.match(result.uncertainty, /Intentional whitespace/);
@@ -105,8 +72,7 @@ test("real PDF design evidence preserves intentional whitespace and unsupported 
 	await assert.rejects(preparePdfDesignEvidence(input, dir, []));
 });
 
-test("fractional PDF page dimensions retain exact crop coordinates despite truncated XML dimensions", async (t) => {
-	for (const tool of ["pdftohtml", "pdftoppm"]) try { execFileSync(tool, ["-v"], { stdio: "ignore" }); } catch { t.skip(`${tool} unavailable`); return; }
+test("fractional PDF page dimensions retain exact crop coordinates", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pdf-design-fractional-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	const input = join(dir, "input.pdf"), width = 200.75, height = 300.875;
@@ -115,7 +81,7 @@ test("fractional PDF page dimensions retain exact crop coordinates despite trunc
 	const result = await preparePdfDesignEvidence(input, dir, [geometry]);
 	const page = result.pages[0]!, crop = page.crops[0]!;
 	assert.equal(page.mappingSupported, true);
-	assert.equal(page.width, 200); assert.equal(page.height, 300);
+	assert.equal(page.width, width); assert.equal(page.height, height);
 	assert.equal(crop.selectedSpan, 1);
 	assert.equal(crop.rect.left + crop.rect.width, width);
 	assert.equal(crop.pixels.x + crop.pixels.width, Math.ceil(width * 2));

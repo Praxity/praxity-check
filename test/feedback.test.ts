@@ -52,10 +52,10 @@ test("PDF feedback separates extraction, check domains, sampled inference and pa
 		{ ...finding, check: "design", category: "observed-defect" }, { ...finding, check: "design", category: "suggestion" },
 	] }, hash, 2)).normalized;
 	const report: Parameters<typeof pdfFeedback>[0] = {
-		schemaVersion: "pdf-1", run: { id: "00000000-0000-0000-0000-000000000000", startedAt: "2026-09-15", runtime: "test" },
+		schemaVersion: "pdf-2", engine: { name: "PDFium", package: "@embedpdf/pdfium", version: "2.15.1", build: null, buildLimitation: "The distributed package and wasm do not expose the PDFium build number." }, run: { id: "00000000-0000-0000-0000-000000000000", startedAt: "2026-09-15", runtime: "test" },
 		document: { kind: "pdf", path: "synthetic.pdf", sha256: hash, bytes: 123 },
 		selection: { checks: ["accessibility", "design"], tier: "deterministic" }, policy: { checks: "accessibility,design", tier: "deterministic", pdfua: "ua1" },
-		machineStatus: "incomplete", evidence: [], facts: { metadata: {}, fonts: [], images: [], words: [], pages: [1, 2].map((page) => ({ page, width: 612, height: 792, rotation: 0, boxes: {} })), coordinates: { boxes: "test", text: "test" } },
+		machineStatus: "incomplete", evidence: [], facts: { metadata: {}, fonts: [], images: [], words: [], pages: [1, 2].map((page) => ({ page, width: 612, height: 792, rotation: 0, boxes: {} })), coordinates: { boxes: "test", text: "test", fonts: "test", images: "test" } },
 		findings: [issue], needsReview: [{ ...issue, id: "image-1", rule: "image.resolution" }],
 		evaluations: [{ rule: "font.facts", outcome: "passed", reason: "Extraction completed." }, { rule: "font.embedding", outcome: "failed", reason: "Not embedded." },
 			{ rule: "pdfua.machine", outcome: "untested", reason: "Evidence was capped." }, { rule: "assistive.technology", outcome: "untested", reason: "Human review was not performed." }],

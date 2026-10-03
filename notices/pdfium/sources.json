@@ -1,0 +1,78 @@
+{
+  "package": "@embedpdf/pdfium",
+  "version": "2.15.1",
+  "wasmSha256": "5e4cd023c3dad4a895b3571ca573d3fc51bac6de48360d95283134385b954eaa",
+  "pdfiumBuild": null,
+  "sources": [
+    {
+      "file": "PDFium-LICENSE",
+      "url": "https://raw.githubusercontent.com/embedpdf/pdfium/embedpdf/main/LICENSE",
+      "sha256": "1fe9dea718fbd75cf149adaf4d8a22a4335604d964ddb76d1b45383dec8668c9"
+    },
+    {
+      "file": "FreeType-FTL.TXT",
+      "url": "https://raw.githubusercontent.com/embedpdf/pdfium/embedpdf/main/third_party/freetype/FTL.TXT",
+      "sha256": "f4b133e25df1f86ad3ffea453aa0e613f0474f34778dbbb3e437e7b2724937d8"
+    },
+    {
+      "file": "OpenJPEG-LICENSE",
+      "url": "https://raw.githubusercontent.com/embedpdf/pdfium/embedpdf/main/third_party/libopenjpeg/LICENSE",
+      "sha256": "a6af136f3e15038a666b61f376612a07d9a4e48cb7c01adbf3e33b3f14ab49b6"
+    },
+    {
+      "file": "LittleCMS-LICENSE",
+      "url": "https://raw.githubusercontent.com/embedpdf/pdfium/embedpdf/main/third_party/lcms/LICENSE",
+      "sha256": "6dbd60437f8ef91d8de1f08ad75882547fd4931bfcc3566a0735f28db1484d31"
+    },
+    {
+      "file": "AGG-copying",
+      "url": "https://raw.githubusercontent.com/embedpdf/pdfium/embedpdf/main/third_party/agg23/copying",
+      "sha256": "0e16f9c2285583269242e94c6f502de0c9910dfcbbc7b386e236cdf29ecd4333"
+    },
+    {
+      "file": "bigint-LICENSE",
+      "url": "https://raw.githubusercontent.com/embedpdf/pdfium/embedpdf/main/third_party/bigint/LICENSE",
+      "sha256": "32759d1397d8f7b9e15ece146e4038b22b90e93b4935b5a840bcef4d2ba5ea55"
+    },
+    {
+      "file": "libjpeg-turbo-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/libjpeg-turbo/libjpeg-turbo/3.1.1/LICENSE.md",
+      "sha256": "96f5b328adbb78eeaaec6980d73fd558cb1e4d62560ed615646bc3cf5e532430"
+    },
+    {
+      "file": "libjpeg-turbo-README.ijg",
+      "url": "https://raw.githubusercontent.com/libjpeg-turbo/libjpeg-turbo/3.1.1/README.ijg",
+      "sha256": "75815e3bf6484201a3c3d17a1bbf10f2e8e3237f84df10a2357ea896db2a81d6"
+    },
+    {
+      "file": "zlib-LICENSE",
+      "url": "https://raw.githubusercontent.com/madler/zlib/v1.3.1/LICENSE",
+      "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243"
+    },
+    {
+      "file": "libpng-LICENSE",
+      "url": "https://raw.githubusercontent.com/pnggroup/libpng/v1.6.50/LICENSE",
+      "sha256": "16d9daaafbf63a31a5bdc91d4600972548fef5aaa1244202393288dbd079c49a"
+    },
+    {
+      "file": "ICU-LICENSE",
+      "url": "https://raw.githubusercontent.com/unicode-org/icu/release-77-1/LICENSE",
+      "sha256": "451167c55c0fa447cc2d5632714f5e3c567fe4f1e1badefab2c1333852198aca"
+    },
+    {
+      "file": "abseil-LICENSE",
+      "url": "https://raw.githubusercontent.com/abseil/abseil-cpp/20250512.1/LICENSE",
+      "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747"
+    },
+    {
+      "file": "Emscripten-LICENSE",
+      "url": "https://raw.githubusercontent.com/emscripten-core/emscripten/4.0.15/LICENSE",
+      "sha256": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86"
+    },
+    {
+      "file": "Foxit-fonts-NOTICE",
+      "url": "https://raw.githubusercontent.com/embedpdf/pdfium/embedpdf/main/core/fxge/fontdata/chromefontdata/FoxitSans.cpp",
+      "sha256": "0ce2b565b9a40bacc8ea9df4eb7e0a1726c3fc4c2df8f85b96c7cb96983fdb5e"
+    }
+  ]
+}

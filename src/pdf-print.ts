@@ -6,7 +6,7 @@ export type PdfPrintPolicy = { maxSparseWords?: number; includeSparse?: boolean 
 export function evaluatePdfPrint(facts: {
 	pages?: { page: number }[];
 	words?: { page: number; text: string }[];
-	images?: { page: number; type: string }[];
+	images?: { page: number; type?: string; colorSpaceKnown?: boolean }[];
 }, policy: PdfPrintPolicy = {}) {
 	if (policy.maxSparseWords !== undefined && (!Number.isSafeInteger(policy.maxSparseWords) || policy.maxSparseWords < 1)) throw new Error("maxSparseWords must be a positive safe integer");
 	const evaluations: Evaluation[] = [], findings: Review[] = [], needsReview: Review[] = [];
@@ -17,7 +17,9 @@ export function evaluatePdfPrint(facts: {
 		words.push(word.text);
 		wordsByPage.set(word.page, words);
 	}
-	const imagePages = new Set(facts.images?.filter((image) => image.type === "image").map((image) => image.page));
+	// PDFium reports no color space for stencils. Unknown color spaces cannot exempt
+	// a page from sparse review; this preserves coverage without inventing a mask type.
+	const imagePages = new Set(facts.images?.filter((image) => (image.type === "image" || image.type === undefined && image.colorSpaceKnown !== false)).map((image) => image.page));
 	for (const rule of ["text.extractable", ...(policy.includeSparse === false ? [] : ["page.sparse-content"])]) {
 		if (rule === "page.sparse-content" && policy.maxSparseWords === undefined) {
 			evaluations.push({ rule, outcome: "untested", reason: "Add --max-sparse-words to check this." });

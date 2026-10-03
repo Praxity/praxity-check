@@ -148,3 +148,14 @@ test("effective policy comparison preserves domain, tier, threshold and unknown-
 		assert.throws(() => comparePdfReports({ ...fixture(), policy }, repaired()));
 	}
 });
+
+test("PDFium reports resolve only with matching engine identity and completed coverage",async()=>{
+ const {checkPdf}=await import("../src/pdf.ts");
+ const before=await checkPdf("test/fixtures/pdf-engine/used-font-control.pdf",{pdfua:"off"});
+ const after=await checkPdf("test/fixtures/pdf-engine/embedded-type3.pdf",{pdfua:"off"});
+ assert.equal(comparePdfReports(before,after).groups.find(g=>g.rule==="font.embedding")!.status,"resolved");
+ assert.equal(comparePdfReports(before,{...after,engine:{...after.engine,version:"different"},evidence:after.evidence.map(e=>"engine" in e?{...e,engine:{...e.engine,version:"different"}}:e)}).groups.find(g=>g.rule==="font.embedding")!.status,"unverified");
+ assert.equal(comparePdfReports(fixture(),after).comparison.toolsSame,false);
+ assert.throws(()=>comparePdfReports({...before,engine:undefined},after),/report object/);
+ assert.throws(()=>comparePdfReports({...after,engine:{...after.engine,version:"different"}},after),/evidence does not match/);
+});

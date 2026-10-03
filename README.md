@@ -21,7 +21,7 @@ what was announced.
 
 Praxity Check is a local command-line tool. Give it a folder or zip file to check
 the HTML pages inside, or a PDF to check its accessibility and selected design
-requirements. PDF checks use separately installed Poppler and veraPDF tools.
+requirements. PDF facts and renders use bundled PDFium wasm. PDF/UA validation uses veraPDF and Java.
 
 Status: alpha. Run from source with the steps below. Interaction review,
 PDF model review and VoiceOver evidence are experimental. Review model claims
@@ -119,7 +119,7 @@ New PDF reviews require `--review-bundle <bundle>/manifest.json` at import. The 
 binds the exact prepared manifest, including context, selected pages and artifact hashes.
 Changing the PDF, renders, facts or context requires a new review. Legacy v1–v3
 reviews remain importable but are marked as bound only to the PDF bytes.
-`--design-evidence` adds Poppler text measurements and detail crops to design review
+`--design-evidence` adds PDFium text measurements and detail crops to design review
 bundles. Optional `--min-text-size-pt 10` states a requirement for all extracted
 text; it is not a universal readability threshold. Measurements need visual review.
 
@@ -138,12 +138,11 @@ limits described in the [PDF report guide](docs/pdf-report-v1.md#optional-infere
 pnpm check check handout.pdf --json pdf-report.json --min-image-ppi 150 --paper-size A4
 ```
 
-Install Poppler and veraPDF with its Java runtime separately. `pdfinfo`,
-`pdffonts`, `pdfimages`, and `pdftotext` should be on PATH. Select veraPDF with
+PDFium is installed with Check. Install veraPDF with its Java runtime separately. Select veraPDF with
 `--verapdf /path/to/verapdf`, `VERAPDF`, or PATH. PDF checks run the PDF/UA-1
 machine profile by default and retain detailed failed-rule/object evidence.
 Use `--pdfua ua2` for PDF/UA-2, or explicitly choose `--pdfua off` for
-Poppler-only checks. Direct PDF checks also collect page, font, image and text
+PDFium fact checks. Direct PDF checks also collect page, font, image and text
 facts without a browser. Nonembedded fonts and explicitly requested MediaBox mismatches are
 findings; low-resolution images need human review under the supplied threshold.
 The report identifies the exact PDF by SHA-256 and preserves raw tool evidence.
@@ -246,13 +245,13 @@ a package. Keep the artifact on its build platform and architecture.
 
 Optional `--dependencies /path/to/reviewed-runtimes` copies that directory into the
 artifact. It must include `NOTICE.md`; retain all applicable dependency notices.
-Use `bin/` for Poppler tools and the veraPDF launcher, `java/` for a Java runtime,
+Use `bin/` for the veraPDF launcher, `java/` for a Java runtime,
 and `browsers/` for Playwright's matching browser installation. Native shared
 libraries must also be relocatable. Homebrew executables alone are not sufficient.
 The package launcher sets these paths without downloading tools.
 
 `capabilities.json` records requirements, not successful capability tests. Without
-the required runtimes, PDF checks report incomplete evidence and HTML checks report
+the validator runtime, PDF/UA checks report incomplete evidence and HTML checks report
 the missing browser. PDF and HTML need different runtimes; test the operations you
 intend to distribute from a fresh directory without development tools on PATH.
 
@@ -262,90 +261,58 @@ provides a launcher. Desktop-local tools are not installed in remote environment
 
 ### Prepare macOS arm64 runtimes
 
-The native preparation scripts use Xcode command-line tools and installed Homebrew
-build dependencies. Keep their work directories outside this repository.
-`build-poppler-runtime.mjs` requires CMake, downloads hash-pinned official Poppler
-source and character maps, and retains its source patch and build recipe.
+PDFium and its wasm are included with the package dependencies. For PDF/UA
+validation and HTML checks, assemble veraPDF, Java and Playwright's matching
+Chromium headless shell:
 
-```sh
-node scripts/build-poppler-runtime.mjs --work "$CHECK_BUILD" --cmake /path/to/cmake
-node scripts/prepare-poppler.mjs --source-install "$CHECK_BUILD/poppler-install" \
-  --supplemental-notices "$CHECK_BUILD/supplemental-notices" --output "$CHECK_BUILD/poppler-runtime"
-node scripts/test-poppler-data.mjs "$CHECK_BUILD/poppler-runtime"
-node scripts/prepare-runtimes.mjs --poppler "$CHECK_BUILD/poppler-runtime" \
-  --verapdf /path/to/verapdf --java /path/to/jdk-home --browsers /path/to/playwright-cache \
-  --supplemental-notices "$CHECK_BUILD/supplemental-notices" --output "$CHECK_BUILD/dependencies"
+~~~sh
+node scripts/prepare-runtimes.mjs --verapdf /path/to/verapdf \
+  --java /path/to/jdk-home --browsers /path/to/playwright-cache \
+  --supplemental-notices /path/to/notices --output /new/path/dependencies
 node scripts/package.mjs --node /path/to/node-distribution \
-  --dependencies "$CHECK_BUILD/dependencies" --output "$CHECK_BUILD/check"
-```
+  --dependencies /new/path/dependencies --output /new/path/check
+~~~
 
-Each output directory must be new. Native preparation copies and rewrites Mach-O
-load paths, then ad-hoc signs copied binaries. It never modifies installed tools.
-Missing licenses, unresolved libraries, filename collisions and conflicting runtime
-versions stop preparation. When an installed dependency lacks its license text,
-supply the original text and provenance under `supplemental-notices/<package>/`.
-veraPDF input must contain its project license files as well as its installed jars.
+Each output directory must be new. Java native library relocation uses Xcode
+command-line tools and installed Homebrew libraries. It rewrites copied Mach-O
+load paths and ad-hoc signs copied binaries. Original installations remain intact.
+Keep the supplied licences and source provenance with Java and veraPDF.
 
-The source-built Poppler reads its packaged character maps through
-`POPPLER_DATADIR`. The Check launcher selects the bundled font configuration, which
-uses macOS system fonts and a user cache. This supports unembedded-font substitution
-without Homebrew font configuration. It does not make fonts identical across macOS
-versions. `test-poppler-data.mjs` checks Japanese CID text, a missing-data control,
-font substitution and a raster with Homebrew access blocked.
+### Prepare Windows x64 runtimes
 
-Runtime assembly checks the installed Playwright metadata and copies its matching
-Chromium headless shell. It supplies headless Check operations; it does not include
-a general browser UI. Java native libraries are relocated too. Revalidate actual
-PDF and HTML operations when changing any runtime version.
+Set the following variables to external work, Node distribution and browser cache
+directories. Each output must be new.
 
-These scripts prepare local prototype artifacts. Clean-machine and older-macOS
-compatibility, distribution source obligations, Developer ID signing and notarization
-remain separate release work.
-
-### Prepare Windows x64 PDF runtimes
-
-Use Windows x64 with Visual Studio 2022 C++ build tools and an installed checkout.
-Keep build inputs outside the repository. The Windows builder uses the same pinned
-Poppler source and character maps as macOS. It downloads a fixed vcpkg registry.
-It links fontconfig, the codec libraries and the Visual C++ runtime into the tools.
-Build tools download into the work directory; system settings stay unchanged.
-
-Set `$build` to a new external work directory. Set `$nodeDist` to your Windows x64
-Node distribution and `$browserCache` to Playwright's matching browser cache.
-Each output directory below must be new.
-
-```powershell
-node scripts/build-poppler-windows-runtime.mjs --work "$build/poppler-build"
-node scripts/prepare-poppler-windows.mjs --source-install "$build/poppler-build/poppler-install" --output "$build/poppler-runtime"
-node scripts/test-poppler-data.mjs "$build/poppler-runtime"
+~~~powershell
 node scripts/prepare-windows-java.mjs --work "$build/java-build" --output "$build/java-verapdf"
-node scripts/prepare-runtimes.mjs --platform win32 --arch x64 --poppler "$build/poppler-runtime" --java "$build/java-verapdf/java" --verapdf "$build/java-verapdf/verapdf" --browsers "$browserCache" --output "$build/dependencies"
+node scripts/prepare-runtimes.mjs --platform win32 --arch x64 --java "$build/java-verapdf/java" --verapdf "$build/java-verapdf/verapdf" --browsers "$browserCache" --output "$build/dependencies"
 node scripts/package.mjs --platform win32 --arch x64 --node "$nodeDist" --dependencies "$build/dependencies" --output "$build/check"
 $env:CHECK_NODE_DIST = $nodeDist
 $env:CHECK_ARTIFACT = "$build/check"
 $env:CHECK_REQUIRE_PDF = '1'
-$env:CHECK_POPPLER_RUNTIME = "$build/poppler-runtime"
-$env:CHECK_POPPLER_INSTALL = "$build/poppler-build/poppler-install"
-$env:CHECK_WINDOWS_JAVA_RUNTIME = "$build/java-verapdf"
-node --test scripts/package.test.mjs scripts/prepare-poppler.test.mjs scripts/prepare-poppler-windows.test.mjs scripts/prepare-runtimes.test.mjs scripts/prepare-windows-java.test.mjs scripts/windows-pe.test.mjs
-```
+node --test scripts/package.test.mjs scripts/prepare-runtimes.test.mjs scripts/prepare-windows-java.test.mjs scripts/windows-pe.test.mjs
+~~~
 
-The scripts check PE imports, including delay loads. Each DLL outside the runtime
-must be a Windows system DLL. Poppler keeps its source archive, patch and recipe.
-It also keeps library sources, licence texts, SPDX records and hashes.
-Encoding data and font settings must match the build hashes.
-The data proof extracts Japanese CID text with an empty PATH.
-It checks that missing maps fail and that a system font can render the text.
+The launcher selects bundled Java and veraPDF jars. Windows invokes Java directly
+with a classpath and removes inherited Java options. Browser-only assembly needs
+only --browsers. PDF extraction and rendering work with an empty PATH.
 
-The `.cmd` launcher sets paths for Poppler data, fonts, Java and veraPDF jars.
-Windows runs `java.exe` directly with veraPDF's classpath and main class.
-It removes Java options from the parent process before each run.
-The proof moves Check into a path with spaces. It checks PDF/UA pass and failure
-exit codes, manual review page images and `prepare-review --design-evidence`
-detail crops. To build a browser runtime alone, supply only `--browsers`.
+The package keeps PDFium's wrapper, wasm, licence and component notices. Java,
+veraPDF and browser files retain their own notices. Clean-machine compatibility,
+platform signing and release review remain separate checks.
 
-Java and veraPDF downloads are pinned official releases. Their legal files and
-source links remain in the artifact. Source links alone do not fulfil source
-obligations. Java and the libraries in veraPDF's jar need a separate review.
-Review licence terms and source needs before sharing a release.
-Test that release on a clean machine too. Check keeps its PolyForm Perimeter licence.
+### Compare PDF engines during development
+
+The development oracle uses native Poppler. It is excluded from the distributable.
+Pass input directories and an output directory; optionally sample a local veraPDF
+corpus. Put the intended native Poppler directory first on PATH, or select it
+explicitly with --poppler-bin.
+
+~~~sh
+node scripts/pdf-engine-parity.mjs --output /path/to/diffs \
+  --poppler-bin /path/to/native-tools --corpus /path/to/corpus --sample 150 \
+  test/fixtures bench/pdf /path/to/extra-fixtures
+~~~
+
+The script writes JSON facts, word counts, print-review candidates, design spans,
+render differences and a Markdown summary. Its corpus sample is deterministic.

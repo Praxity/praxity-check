@@ -12,9 +12,9 @@ import { normalizePdfPolicy, parseChecks, parseTier, selectChecks, type PdfOptio
 type Outcome = "passed" | "failed" | "cantTell" | "inapplicable" | "untested";
 type Issue = { id: string; rule: string; severity: "serious" | "moderate"; confidence: "high" | "medium"; location: { documentSha256: string; page?: number }; message: string; remedy: string; evidence: unknown };
 export type { PdfOptions } from "./selection.ts";
-export { parsePages, parseFonts, parseImages, parseText } from "./pdf-facts.ts";
 
-/** Check a read-only private snapshot. The report retains all subprocess evidence before cleanup. */
+
+/** Check a read-only private snapshot. The report retains engine and validator evidence before cleanup. */
 export async function checkPdf(path: string, options: PdfOptions = {}) {
 	const policy = normalizePdfPolicy(options);
 	const selection = selectChecks(policy);
@@ -31,7 +31,7 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 		const sha256 = extraction.document.sha256;
 		const report = {
 			get feedback(): Feedback { return pdfFeedback(report); },
-			schemaVersion: "pdf-1" as const, run,
+			schemaVersion: "pdf-2" as const, run, engine: extraction.engine,
 			document: { kind: "pdf" as const, path: resolve(path), sha256, bytes: extraction.document.bytes }, policy, selection,
 			machineStatus: extraction.machineStatus, evidence: extraction.evidence,
 			pdfuaValidation: undefined as Awaited<ReturnType<typeof checkPdfAccessibility>>["validator"] | undefined,
@@ -48,14 +48,14 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 		if (design || accessibility) {
 			if (extracted("font.facts")) {
 				for (const font of report.facts.fonts.filter((f) => !f.embedded)) issue("font.embedding", `Font ${font.name} is not embedded.`, "Embed this font when exporting, or replace it with an embeddable font in the source.", font);
-				evaluate("font.embedding", report.facts.fonts.some((f) => !f.embedded) ? "failed" : report.facts.fonts.length ? "passed" : "inapplicable", "Checks font embedding only; Unicode maps and reading order require separate review.");
+				evaluate("font.embedding", report.facts.fonts.some((f) => !f.embedded) ? "failed" : report.facts.fonts.length ? "passed" : "inapplicable", "Checks embedding of fonts used to paint text in page objects, nested forms and visible annotation appearances. Unpainted resources are excluded; Unicode maps and reading order require separate review.");
 			} else evaluate("font.embedding", "untested", "Font inventory unavailable.");
 		}
 		if (design) {
 			if (extracted("image.facts") && policy.minImagePpi !== undefined) {
-				const images = report.facts.images.filter((i) => i.type === "image");
+				const images = report.facts.images;
 				for (const image of images.filter((i) => Math.min(i.xPpi, i.yPpi) < policy.minImagePpi!)) issue("image.resolution", `Image is ${image.xPpi} × ${image.yPpi} PPI, below the requested ${policy.minImagePpi} PPI.`, "Inspect labels and image purpose at intended print size; replace the source image if needed.", image, image.page, true);
-				evaluate("image.resolution", !images.length ? "inapplicable" : report.needsReview.some((i) => i.rule === "image.resolution") ? "cantTell" : "passed", "Explicit PPI threshold; masks excluded. PPI does not establish visual quality.");
+				evaluate("image.resolution", !images.length ? "inapplicable" : report.needsReview.some((i) => i.rule === "image.resolution") ? "cantTell" : "passed", "Explicit PPI threshold for painted raster objects; soft masks have no separate rows. Stencil classification is unavailable. PPI does not establish visual quality.");
 			} else evaluate("image.resolution", "untested", policy.minImagePpi === undefined ? "Add --min-image-ppi to check this." : "Could not list the images.");
 			if (extracted("page.facts") && policy.paperSize) {
 				const expected = policy.paperSize === "A4" ? [595.276, 841.89] : [612, 792];

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { copyFile, mkdtemp, readFile, rm, writeFile, link, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { checkPdf, pdfHumanSummary, parseFonts, parseImages, parsePages, parseText } from "../src/pdf.ts";
+import { checkPdf, pdfHumanSummary } from "../src/pdf.ts";
 
 // Synthetic objects with a real xref, one unembedded font and a 1-pixel raster at 72 points.
 function fixture() {
@@ -19,7 +19,6 @@ function fixture() {
 }
 
 test("real PDF facts, policy review, revision identity and safe CLI output", async (t) => {
-	try { execFileSync("pdfinfo", ["-v"], { stdio: "ignore" }); } catch { t.skip("Poppler pdfinfo unavailable; install poppler to run integration coverage"); return; }
 	const dir = await mkdtemp(join(tmpdir(), "pdf-test-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "synthetic.pdf");
@@ -55,43 +54,6 @@ test("real PDF facts, policy review, revision identity and safe CLI output", asy
 	assert.equal(malformed.evaluations.find((e) => e.rule === "pdf.open")?.outcome, "untested");
 });
 
-test("missing tools remain untested, with JSON and exit 2 and no browser import", async (t) => {
-	const dir = await mkdtemp(join(tmpdir(), "pdf-missing-"));
-	t.after(() => rm(dir, { recursive: true, force: true }));
-	const path = join(dir, "extensionless"), output = join(dir, "report.json");
-	await writeFile(path, fixture());
-	await copyFile(resolve("src/cli.ts"), join(dir, "cli.ts"));
-	await copyFile(resolve("src/pdf.ts"), join(dir, "pdf.ts"));
-	await copyFile(resolve("src/pdf-facts.ts"), join(dir, "pdf-facts.ts"));
-	await copyFile(resolve("src/poppler.ts"), join(dir, "poppler.ts"));
-	await copyFile(resolve("src/feedback.ts"), join(dir, "feedback.ts"));
-	await copyFile(resolve("src/pdf-accessibility.ts"), join(dir, "pdf-accessibility.ts"));
-	await copyFile(resolve("src/verapdf-runtime.ts"), join(dir, "verapdf-runtime.ts"));
-	await copyFile(resolve("src/pdf-print.ts"), join(dir, "pdf-print.ts"));
-	await copyFile(resolve("src/pdf-review.ts"), join(dir, "pdf-review.ts"));
-	await copyFile(resolve("src/review-runner.ts"), join(dir, "review-runner.ts"));
-	await copyFile(resolve("src/selection.ts"), join(dir, "selection.ts"));
-	await copyFile(resolve("src/pdf-design.ts"), join(dir, "pdf-design.ts"));
-	const result = spawnSync(process.execPath, [join(dir, "cli.ts"), "check", path, "--json", output], { encoding: "utf8", env: { ...process.env, PATH: dir } });
-	assert.equal(result.status, 2);
-	const report = JSON.parse(await readFile(output, "utf8"));
-	assert.equal(report.machineStatus, "incomplete");
-	assert.equal(report.feedback.schemaVersion, "feedback-1");
-	assert.equal(report.feedback.coverage.find((entry: { rule: string }) => entry.rule === "font.embedding").outcome, "untested");
-	assert.equal(report.evaluations.find((e: { rule: string }) => e.rule === "font.embedding").outcome, "untested");
-	assert.ok(report.evidence.some((e: { error?: string }) => e.error?.includes("ENOENT")));
-});
-
-test("Poppler parser variants reject unknown output rather than report empty inventories", () => {
-	assert.equal(parseFonts("name type encoding emb sub uni object ID\r\n---- ---- ---- --- --- --- ----\r\nArial Bold Type 1 WinAnsi no yes no 3 0\r\n")[0]?.type, "Bold Type 1");
-	const header = "page   num  type   width height color comp bpc  enc interp  object ID x-ppi y-ppi size ratio\n--------------------------------------------------------------------------------------------\n";
-	assert.equal(parseImages(header + "1 0 image 10 10 gray 1 8 image no [inline] 25 25 100B 1%\n")[0]?.xPpi, 25);
-	assert.throws(() => parseImages(header + "unrecognized row"));
-	assert.throws(() => parseFonts("new output format"));
-	assert.throws(() => parsePages("Pages: 2", 2));
-	assert.throws(() => parseText("new TSV format"));
-});
-
 
 test("human feedback groups repeated problems without losing machine evidence or uncertainty", () => {
 	const issue = { id: "first", rule: "font.embedding", severity: "serious" as const, confidence: "high" as const, location: { documentSha256: "hash", page: 2 }, message: "A font is not embedded.", remedy: "Embed the font when exporting.", evidence: { font: "Example" } };
@@ -115,20 +77,4 @@ test("human feedback groups repeated problems without losing machine evidence or
 	assert.match(clean, /Automated checks completed/);
 	assert.match(clean, /Not checked:/);
 	assert.doesNotMatch(clean, /After changing the source/);
-});
-
-
-test("Poppler TSV blank records preserve words and still reject malformed nonempty rows", () => {
-	const header = "level\tpage_num\tpar_num\tblock_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext";
-	const first = "5\t1\t0\t0\t0\t0\t10\t20\t30\t12\t100\tSynthetic";
-	const next = "5\t2\t0\t0\t0\t0\t11\t21\t31\t13\t100\tExample";
-	for (const newline of ["\n", "\r\n"]) {
-		assert.deepEqual(parseText([header, first, "", next, ""].join(newline)), [
-			{ page: 1, rect: [10, 20, 30, 12], text: "Synthetic" },
-			{ page: 2, rect: [11, 21, 31, 13], text: "Example" },
-		]);
-		for (const malformed of [" ", "\t", "5\t1", first.replace("\t10\t", "\tinvalid\t"), first.replace("5\t", "2\t")]) {
-			assert.throws(() => parseText([header, first, "", malformed, next].join(newline)), /Invalid Poppler TSV row/);
-		}
-	}
 });

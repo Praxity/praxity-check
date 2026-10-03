@@ -23,6 +23,7 @@
 	"packageManager": "pnpm@11.5.3",
 	"dependencies": {
 		"@axe-core/playwright": "^4.12.1",
+		"@embedpdf/pdfium": "2.15.1",
 		"@guidepup/guidepup": "0.34.0",
 		"@guidepup/guidepup-voiceover": "npm:@guidepup/guidepup@0.24.1",
 		"playwright": "^1.62.1",

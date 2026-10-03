@@ -11,7 +11,7 @@ const sourceInstalls = await Promise.all(sourceRoots.map(path => realpath(path))
 const run = (tool, args) => execFileSync(tool, args, { encoding: "utf8" }).trim();
 const hash = async path => createHash("sha256").update(await readFile(path)).digest("hex");
 const system = path => path.startsWith("/usr/lib/") || path.startsWith("/System/Library/");
-const tools = ["pdfinfo", "pdffonts", "pdfimages", "pdftotext", "pdftoppm", "pdftohtml"];
+if (!roots?.length) throw new Error("Explicit native library roots are required");
 const files = new Map();
 const names = new Map();
 const kegs = new Set();
@@ -47,7 +47,7 @@ async function collect(path, executable, inherited = []) {
 	}
 	return record;
 }
-for (const path of roots ?? tools.map(tool => join(prefix, "bin", tool))) {
+for (const path of roots) {
 	const source = await realpath(path);
 	await collect(source, source);
 }
@@ -102,7 +102,7 @@ for (const keg of [...kegs].sort()) {
 	}
 	if (fromSource) {
 		// Source builders supply the archive, patch, recipe and hashes; never label these as bottles.
-		await readFile(join(keg, "notices/poppler/provenance.json"));
+		await readFile(join(keg, "notices/provenance.json"));
 		await cp(join(keg, "notices"), join(destination, "source"), { recursive: true });
 	} else {
 		for (const file of ["INSTALL_RECEIPT.json", "sbom.spdx.json", ".brew"]) await cp(join(keg, file), join(destination, file), { recursive: true });
@@ -110,6 +110,6 @@ for (const keg of [...kegs].sort()) {
 	packages.push({ name, origin: fromSource ? "source-build" : "homebrew", notices: retained.map(path => path.startsWith(`${keg}/`) ? relative(keg, path) : `supplemental/${basename(path)}`) });
 }
 await writeFile(join(output, "notices/provenance.json"), JSON.stringify({ builtAt: new Date().toISOString(), platform: process.platform, arch: process.arch, macOS: run("/usr/bin/sw_vers", ["-productVersion"]), prefix, packages, files: [...files.values()] }, null, 2) + "\n");
-await writeFile(join(output, "NOTICE.md"), `# Homebrew native runtime\n\nLocal macOS arm64 development artifact, assembled from installed Homebrew packages and explicitly supplied source builds. No host files were changed. Copied Mach-O load commands were relocated and modified files ad-hoc signed.\n\nIncludes ${[...files.values()].filter(file => file.target.startsWith("bin/")).map(file => basename(file.target)).join(", ") || "Native libraries"} and their ${[...files.values()].filter(file => file.target.startsWith("lib/")).length} non-system dylibs. Package licenses, Homebrew formulas, installation receipts, bottle SBOMs and file hashes are retained under notices/.\n\n${packages.map(pkg => `- ${pkg.name}: notices/${pkg.name}`).join("\n")}\n\nThis is not a release-ready license compliance bundle. Poppler and some dependencies have copyleft obligations; installed notices and source URLs do not themselves provide corresponding source or a source offer. Review the retained formulas, receipts and SBOMs and supply required source before redistribution.\n\nRequires Apple arm64 macOS compatible with each recorded Mach-O deployment target and system libraries. Ad-hoc signing is not Developer ID signing or notarization. Runtime-loaded plugins, fontconfig configuration, fonts and Poppler character maps are not collected by dylib dependency traversal. Non-Latin text and font substitution need separate data packaging and validation.\n`);
+await writeFile(join(output, "NOTICE.md"), `# Homebrew native runtime\n\nLocal macOS arm64 development artifact, assembled from installed Homebrew packages and explicitly supplied source builds. No host files were changed. Copied Mach-O load commands were relocated and modified files ad-hoc signed.\n\nIncludes ${[...files.values()].filter(file => file.target.startsWith("bin/")).map(file => basename(file.target)).join(", ") || "Native libraries"} and their ${[...files.values()].filter(file => file.target.startsWith("lib/")).length} non-system dylibs. Package licenses, Homebrew formulas, installation receipts, bottle SBOMs and file hashes are retained under notices/.\n\n${packages.map(pkg => `- ${pkg.name}: notices/${pkg.name}`).join("\n")}\n\nThis is not a release-ready license compliance bundle. Some dependencies have copyleft obligations; installed notices and source URLs do not themselves provide corresponding source or a source offer. Review the retained formulas, receipts and SBOMs and supply required source before redistribution.\n\nRequires Apple arm64 macOS compatible with each recorded Mach-O deployment target and system libraries. Ad-hoc signing is not Developer ID signing or notarization. Runtime-loaded plugins, fontconfig configuration, fonts are not collected by dylib dependency traversal. Non-Latin text and font substitution need separate data packaging and validation.\n`);
 return new Map([...files].map(([source, record]) => [source, record.target]));
 }
