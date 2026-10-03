@@ -114,3 +114,11 @@ test("doctor CLI returns 1 and missing HTML checks save not-run coverage", async
  assert.equal(result.pages[0].audited, false);
  assert.match(result.evaluations[0].reason, /Run check setup html/);
 });
+
+test("Temurin build numbers identify the pinned Java runtime", async t => {
+ const host = await fixture(t), path = join(host.home, "java.exe");
+ await fs.writeFile(path, "fake Java");
+ host.run = async () => ({ stdout: 'openjdk 17.0.20.1 2026-09-29\nOpenJDK Runtime Environment Temurin-17.0.20.1+1 (build 17.0.20.1+1)', stderr: "", code: 0 });
+ const java = await resolveComponent(host, "java", path);
+ assert.equal(java.version, "17.0.20.1+1"); assert.equal(java.pinned, true);
+});

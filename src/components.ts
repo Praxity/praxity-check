@@ -210,7 +210,7 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
   if (!version) {
    const result = await host.run(path, classpath ? veraPdfJavaArgs(classpath, ["--version"]) : ["--version"], javaEnvironment(host.env, host.platform as NodeJS.Platform));
    const output = result.stdout + "\n" + result.stderr;
-   version = id === "java" ? output.match(/(?:openjdk|java)\s+(?:version\s+)?"?([\d.]+(?:\+\d+)?)/i)?.[1] ?? null : id === "verapdf" ? output.match(/veraPDF\s+([\d.]+)/)?.[1] ?? null : output.match(/(?:Chromium|Chrome[^\r\n]*?)\s+([\d.]+)/)?.[1] ?? null;
+   version = id === "java" ? output.match(/Temurin-([\d.]+\+\d+)/)?.[1] ?? output.match(/(?:openjdk|java)\s+(?:version\s+)?"?([\d.]+(?:\+\d+)?)/i)?.[1] ?? null : id === "verapdf" ? output.match(/veraPDF\s+([\d.]+)/)?.[1] ?? null : output.match(/(?:Chromium|Chrome[^\r\n]*?)\s+([\d.]+)/)?.[1] ?? null;
    if (id === "java" && (!version || Number(version.split(".")[0]) < 17 || result.code !== 0)) return { ...missing(inventory, path), source, version, pinned: false };
   }
   return { id, usable: true, source, path, version, pinned: version === null ? null : version === component.version, inventory, ...(classpath ? { classpath } : {}) };
