@@ -1,235 +1,170 @@
-# PDF report v1
+# PDF report v2
 
-`praxity-check check file.pdf --json report.json` checks a direct PDF with
-Poppler's `pdfinfo`, `pdffonts`, `pdfimages`, and `pdftotext`, plus the veraPDF
-CLI and its Java runtime. Install these tools separately. No browser starts. HTML folders and ZIPs keep their existing
-coverage; PDFs inside them are not scanned by this command.
+The check command reads PDF facts and renders pages in process with
+@embedpdf/pdfium 2.15.1. A worker handles each PDF. No browser starts for PDF
+checks. PDFs inside HTML folders and ZIPs are outside this command's coverage.
 
-PDF checks run veraPDF's `ua1` machine profile by default. Use `--pdfua ua2`
-for PDF/UA-2, or `--pdfua off` to explicitly request only the Poppler checks.
-Select the executable with `--verapdf /path/to/verapdf`, the `VERAPDF` environment
-variable, or `verapdf` on PATH, in that order. Configure its Java runtime as the
-veraPDF installation requires. A missing validator produces incomplete coverage
-and exit 2; it is not silently skipped. The adapter was verified with veraPDF
-1.30.2. It requests all failed checks rather than the default truncated display.
+veraPDF and Java remain separate requirements for PDF/UA machine validation.
+The default is --pdfua ua1. Select ua2 for PDF/UA-2, or off to disable that
+validation explicitly. --verapdf, VERAPDF and PATH select the validator in that
+order. Missing or failed validation produces incomplete coverage and exit 2.
+The adapter was verified with veraPDF 1.30.2.
 
-Use `--min-image-ppi 150` to request review of raster images below 150 effective
-PPI. This is a chosen review threshold, not a universal print requirement.
-Masks are excluded. `--paper-size A4` or `--paper-size Letter` compares MediaBox
-dimensions in default user space, allowing either orientation and one point of
-rounding tolerance. It does not validate UserUnit scaling or physical printing.
+## Identity and evidence
 
-The report uses `schemaVersion: "pdf-1"`, independent of HTML report
-schema v4. `document` identifies the original absolute path, byte count, kind,
-and SHA-256 of the exact private snapshot used for every extraction. The snapshot
-is read-only and removed after the report captures evidence. The original PDF
-is never rewritten. Each evidence entry retains the tool, arguments, raw stdout,
-stderr, exit code, and error when present. Separate `-v` entries record tool
-versions. Argument paths to the temporary snapshot will no longer exist.
+New reports use schemaVersion "pdf-2", independently of HTML schema v4.
+document records the original absolute path, byte count and SHA-256 of the
+immutable snapshot used for extraction. The original PDF remains intact.
+engine records the PDFium name, @embedpdf/pdfium package and exact package
+version. build is null because the distributed package and wasm expose no
+PDFium build number. buildLimitation explains that absence.
 
-`facts` contains metadata, per-page boxes and rotation, fonts, image dimensions
-and effective PPI, and extracted words. Boxes use PDF default user space with a
-bottom-left origin. Word rectangles retain Poppler TSV's top-left page
-presentation in points; they are **not** normalized to an unrotated CropBox.
-Do not use them as overlay anchors without a tested coordinate conversion.
-Image locations identify a page only, because Poppler does not provide a
-placement rectangle in its image inventory. UserUnit is not extracted.
+Engine evidence records engine identity, operation, passed or untested outcome,
+diagnostics and any error. Operations are open, pages, fonts, images and words.
+veraPDF evidence retains tool, args, stdout, stderr, exitCode and error, plus
+version evidence. Older pdf-1 reports retain their original subprocess evidence.
 
-`evaluations` distinguishes `passed`, `failed`, `cantTell`, `inapplicable`, and
-`untested`. Extraction passes mean facts were obtained, not that the document
-is accessible. Missing tools, failed commands, unsupported encryption, and
-unrecognized parser output produce `untested` and an `incomplete` machine
-status. Review Poppler stderr warnings even when extraction succeeds.
-Empty font or raster inventories can be valid on vector-only pages.
+Every worker operation has a 30-second deadline. A deadline terminates its worker.
+The wasm ceiling is 512 MiB, checked after initialization, allocations and each
+native call. Worker V8 limits do not bound wasm memory. Rendering also rejects
+more than 16 million pixels; fact results retain the 32 MiB output limit.
+Text extraction rejects more than 200,000 characters per page. Object traversal
+is bounded at 100,000 objects and 64 nested forms; design evidence at 5,000
+spans and 1,000 font styles per page. Exceeding a limit fails the operation.
 
-`findings` records nonembedded fonts, requested MediaBox mismatches and each
-failed veraPDF machine check. Validator findings retain specification, clause,
-test number, original requirement, error and object context. Page locations are
-included only where an explicit page context identifies one. The adapter reuses
-the validator's rules for tags, language, metadata, headings, tables, graphics,
-annotations and fonts; it does not implement a second standards validator.
+## Facts and coordinates
 
-`pdfua.machine` reports the selected machine profile result. A validator exit 1
-is a completed validation with failures, not an execution error. A missing or
-invalid report leaves the run incomplete and the check untested.
-This also applies when the report contradicts itself or uses the wrong profile.
-When a normal validation job supplies consistent failed-rule totals but omits
-some check details, Check retains the validated findings and keeps the run
-incomplete with exit 2. `pdfuaValidation.coverage` records total, retained and
-omitted failed checks, including counts for each failed rule. The CLI names
-the rules with missing evidence. A failed rule with no retained details has no
-invented occurrence or location. Raw validator JSON remains in evidence.
-`needsReview` separately records low-PPI images and tool diagnostics. Items
-have a rule, severity, confidence, remedy, evidence, and document-hash location.
-Occurrence IDs include the document hash. Changed PDF bytes produce new IDs. PDF baseline and machine-finding disposition import are not
-supported in this version. Optional inference reviews use a separate format below. HTML `--baseline`, `--scenarios`, and network options
-are rejected for PDF input. `--min-confidence` is accepted; all current machine
-findings have high confidence, so its values give the same exit result.
+metadata contains PDFium's document information strings, page count, encryption
+and tag presence. PDF dates retain their raw D: syntax. Presence of tags is not
+a conformance verdict.
 
-Exit 0 means extraction completed without machine findings. Exit 1 means
-machine findings exist. Exit 2 means invalid input/options or incomplete
-extraction, even if some facts were obtained. Review candidates do not change
-exit 0 into exit 1. JSON is still written for extraction failures. Failed JSON
-writes preserve an existing report; output paths that alias the source PDF are
-rejected.
+pages contains page number, rotated display width and height, page rotation,
+and MediaBox, CropBox, BleedBox, TrimBox and ArtBox. Display geometry uses the
+intersection of CropBox and MediaBox. Missing optional boxes use
+the PDF defaults. MediaBox and CropBox resolve page-tree inheritance; BleedBox,
+TrimBox and ArtBox are page-local and default to effective CropBox.
+Box values are normalized lower-left and upper-right pairs in
+PDF default user space before rotation. UserUnit is not extracted or validated.
 
-Overall PDF/UA conformance remains untested. Human visual review, print testing
-and tests with assistive technology also remain untested. Optional model inference
-does not complete these evaluations. A passed machine profile
-does not settle human checkpoints such as meaningful reading order or alt-text quality. Tagged metadata is a
-fact, never proof of meaningful tags, reading order, alt text, or accessible
-tables. There is no conformance claim or automatic PDF repair. Image treatment
-and dithering belong in source generation, not this checker.
+words groups reliable PDFium characters using whitespace, advance-box gaps
+relative to transformed font size, line changes, size changes and rotation.
+Rectangles are [left, top, width, height] in the rotated intersection of CropBox and MediaBox,
+top-left origin, nominal PDF points. Ordinary word boxes enclose tight character
+boxes. ActualText replacement words share their marked-content region box;
+they do not have individually measured glyph positions. Extracted order is
+PDFium's order, not a verified reading order. Unreliable Unicode mappings,
+NUL, replacement values and non-text controls are omitted with review diagnostics.
+Extraction includes visible annotation appearances, flattened in a separate copy
+with the original effective page boxes preserved. Supported missing normal
+appearances, including FreeText, are generated on that copy before flattening.
+NoRotate appearance instances receive the renderer's inverse page rotation
+around the annotation's top-left corner, so extracted rectangles match rendering.
+Generation failures leave fonts, images and words untested and reject design spans.
+The original document is used for rendering. AcroForm appearance state is
+initialized to include field values and button captions without saved
+appearances; no document, page or JavaScript action is invoked.
 
-Feedback uses the same findings for people and agents. Each message states the
-problem; its remedy names a source or export change, or a review step when a fix
-cannot be determined automatically. Reviewed wording covers 11 exact PDF/UA-1
-rules. Other rules retain the validator's original error rather than guessing a
-fix. Exact requirements and object contexts remain in evidence for every rule.
+fonts lists fonts used to paint text in page objects, nested form XObjects and
+visible annotation appearance streams. Unpainted font resources, Hidden and NoView
+annotations are excluded. Invisible hides unknown subtypes only, matching normal
+display rendering. Flattening an extraction copy exposes appearances
+that PDFium's ink/stamp-only annotation object API cannot enumerate.
+Each row has a name, embedded flag and page list. Names can omit subset prefixes;
+subset status, font type, encoding, ToUnicode presence and PDF object IDs are
+unavailable. Those fields are omitted rather than invented. The report's
+coordinates.fonts describes these limits. font.embedding checks this inventory.
 
-The CLI groups repeated problems and shows the first location and occurrence
-count. JSON retains every occurrence, its ID, location and evidence. Wording
-changes do not change occurrence IDs. Missing page information stays at document
-level; it does not imply that the problem affects every page. Fixes, review
-questions and checks that did not run are presented separately. After a source
-change, regenerate and recheck the PDF before applying feedback to the revision.
+images lists painted raster objects, including nested forms and visible
+annotation appearances, with pixel
+dimensions, bitsPerPixel, numeric PDFium colorSpace, colorSpaceKnown, page, sequence number and
+effective xPpi/yPpi. Soft masks remain internal to their parent images and do not
+have separate rows. Object IDs and stencil classification are unavailable.
+The inventory includes painted image objects without inventing a type field.
+PPI uses the composed image-to-page matrix in default user space.
 
+## Checks and incomplete evidence
 
-## Optional inference review
+--min-image-ppi requests review below the caller's threshold. It applies to
+painted raster objects; soft masks have no separate rows. PPI is not a visual
+quality verdict. --paper-size A4 or Letter compares MediaBox dimensions in
+either orientation with the unchanged one-point tolerance. Physical printing
+and UserUnit scaling remain untested.
 
-Automated checks run without a model. To ask an agent to review visible design,
-prepare a private bundle:
+text.extractable requests review when a page has no reliably extracted words.
+With --max-sparse-words, page.sparse-content requests review of pages with at
+most that many words and no raster objects with a known color space. Stencils
+and other unknown-color-space images do not exempt sparse review. These are
+review candidates.
+Vector artwork, intentional whitespace and image purpose need a person.
 
-```sh
-praxity-check prepare-review file.pdf --checks design --tier inference --focus visual --output /private/new-review
-praxity-check prepare-review file.pdf --checks design --tier inference --focus usability --output /private/new-usability-review --audience "New staff" --use "Complete the first-day checklist"
-```
+evaluations distinguishes passed, failed, cantTell, inapplicable and untested.
+Extraction passes mean facts were obtained, not that the PDF is accessible.
+Failed opening, unsupported encryption, deadlines, ceilings and unavailable
+inventories make the affected extraction rules untested and machineStatus
+incomplete. Other inventories retain their completed results. Locked PDFs and
+encrypted PDFs that open with an empty password are both rejected.
 
-Use a new output directory; existing directories are rejected. Without `--output`,
-the command creates a private temporary directory and prints its path. The bundle
-contains selected page images, extracted words and geometry, a manifest, a review
-prompt and a JSON schema. It contains document content: keep it private and delete
-it when finished. `--tier inference` runs the installed, signed-in Codex CLI by default, sending
-the selected evidence to the model. Add `--reviewer manual` to prepare a local
-bundle without calling a reviewer. Optional `--classifier jev` labels
-extracted page text only. See [reviewer setup](using-it.md#choose-a-classifier-and-reviewer).
-Rendering also requires Poppler's `pdftoppm`.
+Review diagnostics remain needsReview even when extraction succeeds.
+Empty font or image inventories can be valid. Findings retain document-scoped
+occurrence IDs; inference never changes the machine verdict.
 
-Visual and usability are review focuses within the inference tier. Visual
-review checks the visible layout and whether text can be read. Usability asks
-whether the stated audience can complete the intended task. `--audience` and
-`--use` supply optional context for either focus. Each bundle requests one focus.
-The default selects up to eight evenly spaced pages, including the first and last.
-Use `--pages 1,3,7` to choose pages; each bundle allows at most 24. Each render has
-a maximum dimension of 1600 pixels and a 30-second timeout. Small print details
-may need a closer inspection outside this bundle. Page geometry and actual render
-dimensions accompany each image. Text coordinates retain their original Poppler
-convention; they are not image overlay coordinates.
+## PDF/UA evidence
 
-Give `review-prompt.md` and the bundle to a model capable of inspecting the images.
-Rubato and other agents use the same files. The reviewer returns JSON matching
-`review.schema.json`, records its actual model identifier, and declares only pages
-it inspected. Import that result with:
+veraPDF findings retain specification, clause, test number, requirement, error
+and object context. Only explicit page context supplies a page location.
+The adapter uses veraPDF's rules for tags, language, metadata, tables, graphics,
+annotations and fonts. It does not implement another standards validator.
 
-```sh
-praxity-check check file.pdf --checks design --tier inference --review review.json --review-bundle /private/new-review/manifest.json --json report.json
-```
+A validator exit 1 means completed validation with failures. Invalid,
+contradictory, capped or wrong-profile evidence makes coverage incomplete.
+pdfuaValidation.coverage records failedChecks, retainedChecks, omittedChecks
+and per-rule counts. No PDF/UA conformance or assistive-technology claim follows
+from machine validation alone. Physical-print and human review remain untested.
 
-Import rejects unknown or missing fields, stale document hashes, invalid tiers,
-invalid page coverage, findings outside that coverage and missing evidence or
-feedback. A review file is limited to 4 MiB, 24 reviewed pages and 200 findings.
-Version 4 imports require `--review-bundle <bundle>/manifest.json`. The importer
-checks the PDF identity, exact manifest hash, image and facts hashes, any design
-artifacts, focus, domains and selected pages. The manifest hash also binds task
-context. Partial reviews may list a subset of selected pages; omitted pages stay
-unreviewed. Hash verification cannot prove image inspection or correct inference.
+## Review bundles and design evidence
 
-`inferenceReviews` holds imported review envelopes separately from machine
-`findings` and `needsReview`. Each inferred concern names the page and observed
-problem, with a confidence
-level. It states the effect on readers, proposes an action and explains how to
-check the result. It also cites the evidence. Imported findings normalize to
-stable `id`, `rule`,
-`location`, `message`, `remedy`, `confidence`, `consequence`, `verification`,
-`provenance` and `evidence` fields. `provenance` records method, the canonical inference tier, review focus and model.
-Version 2 reviews classify each concern as `observed-defect`, `needs-context`,
-or `suggestion`. These are the model's classifications, not confirmed verdicts.
-Version 1 reviews remain importable and default to `needs-context`. Generated
-legacy bundles use version 2. Canonical `--tier inference` bundles use version 4,
-which adds `bundleSha256` to version 3's `tier: "inference"`, `focus`, selected
-`checks` and a `check` domain for each finding. Versions 1–3 remain importable
-and are explicitly marked `document-only` in `evidenceBinding`; they cannot
-verify which prepared evidence or context the reviewer used. Version 4 imports
-are marked `bundle`. When you select a domain, the import rejects legacy reviews
-that do not state
-their domain.
-The CLI prints the category beside each concern.
-Inferred concerns have moderate severity until someone confirms them. IDs bind
-the document hash, tier, page and evidence. The submitted origin statement is
-retained as a reviewer hypothesis in evidence; uncertain source causes should be stated as hypotheses.
-Page regions are not accepted because this workflow does not establish reliable
-region coordinates. The CLI prints the same information under a separate inferred
-review label. Inferences do not change machine status, machine evaluations or exit
-codes. `check --tier inference --review ...` extracts supporting facts only and
-skips deterministic quality and conformance checks; it requires an imported review.
-An explicit `--tier deterministic` rejects `--review`. Omitting the tier retains
-the legacy combined report. Unreviewed pages remain outside coverage; an empty findings array is not a
-whole-document pass, an accessibility verdict or a conformance claim. After you change the PDF, prepare and review the new version.
+prepare-review file.pdf --tier inference --reviewer manual prepares a private
+bundle. --checks selects accessibility, design or both; --focus selects visual
+or usability. audience and use provide context. Up to 24 explicitly selected
+pages or the deterministic default sample receive PNG overviews at 1600 pixels
+high, page JSON facts, hashes, a manifest, a review schema and review instructions.
 
-Preparation currently requires all Poppler fact extractions to succeed. A font
-or image inventory failure can therefore block a visual bundle even when the
-page could render; run `check` for the failed extraction and its diagnostics.
+New manifests use pdf-review-bundle-3 for canonical and legacy-focus preparation.
+renderer records the engine identity. Page artifacts record render dimensions,
+image/fact hashes, operation parameters and diagnostics. The manifest's SHA-256
+binds pdf-review-4 imports to the exact evidence, context and selection.
+Legacy reviews remain document-bound and say which evidence binding is missing.
 
+--design-evidence adds pdf-design-evidence-2. Each page retains
+page-N-design.json with PDFium spans, font sizes, families, foreground colours,
+bold/italic flags, hashes and diagnostic evidence. Measurements describe text
+envelopes and adjacent text-box gaps, not drawn rules or visible whitespace.
+--min-text-size-pt compares transformed extraction sizes with an explicit
+caller requirement; it is not a universal readability threshold.
+Up to two 144 DPI detail crops target the smallest font and the largest measured
+adjacent text-box gap. Crops use the same rotated CropBox coordinates as spans,
+including rotated, offset and fractional pages. A supplied geometry mismatch
+leaves crop mapping unsupported and keeps the overview.
 
-Pages without extracted words produce review candidates by default. Use
-`--max-sparse-words 8` to additionally flag pages with one to eight extracted words
-and no raster images. This does not measure vector artwork, visible content
-coverage or intended whitespace. Keep intentional covers and writing areas;
-change pagination only after inspecting the page. Missing extraction remains
-untested, rather than being treated as an empty page.
+Source spans and words can include hidden or clipped text. Render inspection
+must establish visible defects, contrast concerns and reader consequences.
+Font count, whitespace and mixed orientation alone are not defects.
+Model review remains inference, even when evidence hashes match.
 
-Repeat `--review` for separate page batches from the same bundle. Each batch
-retains its own page coverage and reviewer. One `--review-bundle` applies to all
-reviews in that invocation; use separate reports for different bound bundles or
-focuses. Legacy unbound reviews can still combine focuses without a bundle.
+Verification still accepts pdf-review-bundle-1 and -2 and their historical
+artifact formats. Existing pdf-review-1 through -4 imports remain accepted under
+their original binding rules. A pdf-review-4 import accepts a bound -2 or -3
+bundle. Changing the renderer requires a newly prepared bundle and review.
 
-Model review is experimental. The initial Luna max trials missed a clipped
-instruction and reported a nonexistent writing-space defect on a clean control.
-Review the supporting page before applying a proposed fix. A fresh empty review
-is useful evidence, but it is not proof that all defects were repaired.
+## Comparing reports
 
+compare-pdf BEFORE.json AFTER.json accepts pdf-1 and pdf-2 reports. --json emits
+structured comparison to stdout. Comparison groups rule, message and page;
+it does not establish object identity or when an issue was introduced.
+Changed schema or engine versions prevent a disappearing finding from being
+declared resolved. Only comparable completed machine coverage can do that.
+Review observations remain unverified when they disappear.
 
-## Compare PDF revisions
-
-```sh
-praxity-check compare-pdf before.check.json after.check.json
-praxity-check compare-pdf before.check.json after.check.json --json
-```
-
-Compare two `pdf-1` reports. `--json` writes structured output to stdout;
-it is not an output filename. A valid comparison exits 0, even when findings remain. Invalid input exits 2. Use the original check reports for their
-check outcomes. Each comparison input is limited to 64 MiB.
-
-The output identifies both document hashes and keeps occurrence IDs within their
-revision. Groups match rule, message and page, plus the observation for inference.
-They describe reported problems, not proven object identity across exports.
-Newly reported does not mean newly introduced. Reduced counts do not identify
-individual repairs, and page moves are not matched automatically.
-
-Treat a missing machine finding as resolved only when complete, comparable
-checks show it is absent. Different policy, missing tool versions, incomplete coverage
-or changed page counts prevent that conclusion. Rules the comparison does not know remain unverified.
-Missing model concerns and review questions always remain unverified, even after
-an empty fresh review. Comparison is evidence for the next repair decision, not
-a conformance verdict or a record of human acceptance.
-
-## Sources behind the review boundaries
-
-[W3C PDF3](https://www.w3.org/WAI/WCAG22/Techniques/pdf/PDF3) describes reading
-and focus-order testing. A rendered page alone cannot establish that result.
-[W3C PDF1](https://www.w3.org/WAI/WCAG22/Techniques/pdf/PDF1) bases image
-alternatives on equivalent meaning, not string presence.
-[W3C PDF6](https://www.w3.org/WAI/WCAG22/Techniques/pdf/PDF6) addresses table
-structure and relationships. The [Matterhorn Protocol](https://pdfa.org/resource/the-matterhorn-protocol/)
-distinguishes machine and human assessments for PDF/UA-1. These inform Check's
-coverage boundaries; their examples are not bundled as product fixtures.
+Reports and bundles can contain private content and local paths. Review them
+before sharing. Generated CLI reports include feedback.schemaVersion "feedback-1"
+as described in the shared report schema guide.

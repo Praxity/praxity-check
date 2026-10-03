@@ -43,8 +43,8 @@ prepare a new bundle. PDF preparation also needs `--checks accessibility` or
 or `2` when it could not prepare any, and never exits `1`.
 
 The Windows x64 artifact supplies headless Chromium for HTML checks and review
-preparation. It currently omits Poppler, Java and veraPDF. PDF checks therefore
-report incomplete with exit `2`; PDF image review is unavailable. Headed browsers
-and screen-reader assets are also absent. On macOS arm64, PDF support depends on
+preparation. It includes PDFium extraction and rendering, but omits Java and veraPDF. PDF/UA checks therefore
+report incomplete with exit `2` when the validator is absent. PDF image review uses bundled PDFium. Headed browsers
+and screen-reader assets are also absent. On macOS arm64, PDF/UA validation depends on
 the supplied dependency payload. The root file `capabilities.json` lists the
 files and tools. Its entries are not proof that a check can run.

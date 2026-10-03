@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 import subprocess
-import shutil
 import sys
 
 OUT = Path(sys.argv[1]).resolve() if len(sys.argv) == 2 else None
@@ -114,15 +113,12 @@ def worksheet(flawed):
 
 
 def main():
-    for tool in ("pdfinfo", "pdftoppm"):
-        if not shutil.which(tool):
-            raise SystemExit(f"Install Poppler and add {tool} to PATH")
     for variant in ('flawed', 'clean'):
         destination = OUT / f'{variant}.pdf'
         pdf(destination, worksheet(variant == 'flawed'))
-        info = subprocess.check_output(['pdfinfo', str(destination)], text=True)
-        assert 'Pages:           2' in info, info
-        subprocess.run(['pdftoppm', '-scale-to', '1400', '-png', str(destination), str(OUT / variant)], check=True)
+        info = json.loads(subprocess.check_output(["node", str(Path(__file__).resolve().parents[2] / "scripts/pdf-benchmark.mjs"), "facts", str(destination)], text=True))
+        assert info["pageCount"] == 2, info
+        subprocess.run(["node", str(Path(__file__).resolve().parents[2] / "scripts/pdf-benchmark.mjs"), "render", str(destination), str(OUT / variant)], check=True)
         assert all((OUT / f'{variant}-{page}.png').exists() for page in (1, 2))
     (OUT / 'ground-truth.json').write_text(json.dumps({
         'generator_command': COMMAND,
@@ -138,9 +134,9 @@ def main():
     for variant in ('flawed', 'clean'):
         destination = OUT / f'reference-{variant}.pdf'
         pdf(destination, reference(variant == 'flawed'))
-        info = subprocess.check_output(['pdfinfo', str(destination)], text=True)
-        assert 'Pages:           2' in info, info
-        subprocess.run(['pdftoppm', '-scale-to', '1400', '-png', str(destination), str(OUT / f'reference-{variant}')], check=True)
+        info = json.loads(subprocess.check_output(["node", str(Path(__file__).resolve().parents[2] / "scripts/pdf-benchmark.mjs"), "facts", str(destination)], text=True))
+        assert info["pageCount"] == 2, info
+        subprocess.run(["node", str(Path(__file__).resolve().parents[2] / "scripts/pdf-benchmark.mjs"), "render", str(destination), str(OUT / f"reference-{variant}")], check=True)
         assert all((OUT / f'reference-{variant}-{page}.png').exists() for page in (1, 2))
     (OUT / 'reference-ground-truth.json').write_text(json.dumps({
         'generator_command': COMMAND,

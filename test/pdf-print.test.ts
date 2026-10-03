@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +17,6 @@ function pdf(streams: string[]) {
 }
 
 test("real PDF sparse and empty candidates retain intentional artwork and cover uncertainty", async (t) => {
-	try { execFileSync("pdfinfo", ["-v"], { stdio: "ignore" }); } catch { t.skip("Poppler unavailable"); return; }
 	const dir = await mkdtemp(join(tmpdir(), "pdf-print-test-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "controls.pdf");

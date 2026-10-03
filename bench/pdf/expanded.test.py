@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run: PATH=/opt/homebrew/bin:$PATH python3 bench/pdf/expanded.test.py"""
+"""Run: python3 bench/pdf/expanded.test.py"""
 from collections import Counter
 import hashlib
 import json
@@ -14,7 +14,8 @@ from expanded import CATEGORIES, INK, WHITE, contrast, generate
 
 
 def words(case, root):
-    return Counter(subprocess.check_output(['pdftotext','-raw',str(root/case['path']),'-'], text=True).split())
+    facts=json.loads(subprocess.check_output(["node",str(Path(__file__).resolve().parents[2]/"scripts/pdf-benchmark.mjs"),"facts",str(root/case["path"])],text=True))
+    return Counter(word["text"] for word in facts["words"])
 
 
 def main():
@@ -71,7 +72,7 @@ def main():
                 elif d['category']=='color-only-meaning':
                     swatches=[o for o in ops if o['kind']=='rectangle']
                     assert len(swatches)==2
-                    # The existing Poppler grayscale conversion uses encoded-channel luma.
+                    # The existing grayscale conversion uses encoded-channel luma.
                     luma=lambda rgb: sum(a*b for a,b in zip(rgb,(.299,.587,.114)))
                     assert abs(luma(swatches[0]['color'])-luma(swatches[1]['color']))<.002
                 else:

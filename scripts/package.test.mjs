@@ -50,7 +50,7 @@ async function verifyInventory(artifact) {
 		assert.equal(file.size, bytes.length, file.path);
 		assert.equal(file.sha256, createHash("sha256").update(bytes).digest("hex"), file.path);
 	}
-	for (const path of ["LICENSE", "LICENSING.md", "NOTICE.md", "THIRD-PARTY-NOTICES.md", "runtime/LICENSE", "node_modules/playwright-core/ThirdPartyNotices.txt", "node_modules/playwright/lib/transform/babelBundle.js.LICENSE"]) {
+	for (const path of ["notices/pdfium/FreeType-FTL.TXT", "notices/pdfium/PDFium-LICENSE", "notices/pdfium/OpenJPEG-LICENSE", "node_modules/@embedpdf/pdfium/LICENSE", "LICENSE", "LICENSING.md", "NOTICE.md", "THIRD-PARTY-NOTICES.md", "runtime/LICENSE", "node_modules/playwright-core/ThirdPartyNotices.txt", "node_modules/playwright/lib/transform/babelBundle.js.LICENSE"]) {
 		assert.ok(manifest.legalFiles.includes(path), `Missing legal path: ${path}`);
 	}
 	for (const path of ["LICENSE", "LICENSING.md", "NOTICE.md", "skill/SKILL.md"]) {
@@ -99,9 +99,7 @@ async function proveWindowsPdf(launcher, root) {
 	assert.ok(report.evaluations.some(item => item.rule === "pdfua.machine" && item.outcome === "passed"));
 	assert.equal(report.facts.pages.length, 1);
 	assert.deepEqual(report.facts.words.map(word => word.text), ["A"]);
-	for (const tool of ["pdfinfo", "pdffonts", "pdfimages", "pdftotext"]) {
-		assert.ok(report.evidence.some(item => item.tool === tool && item.exitCode === 0 && !item.args.includes("-v")), `${tool} must extract facts`);
-	}
+	for (const operation of ["open", "pages", "fonts", "images", "words"]) assert.ok(report.evidence.some(item => item.operation === operation && item.outcome === "passed"), operation + " must extract facts");
 
 	// Changing this one PDF/UA requirement checks both the finding and launcher exit code.
 	const failingInput = join(root, "synthetic title display failure.pdf");
@@ -121,7 +119,7 @@ async function proveWindowsPdf(launcher, root) {
 	const review = run(launcher, ["prepare-review", input, "--tier", "inference", "--checks", "accessibility", "--reviewer", "manual", "--output", reviewDirectory], root);
 	assert.equal(review.status, 0, review.stderr || review.stdout || String(review.error));
 	const bundle = JSON.parse(await readFile(join(reviewDirectory, "manifest.json"), "utf8"));
-	assert.equal(bundle.schemaVersion, "pdf-review-bundle-2");
+	assert.equal(bundle.schemaVersion, "pdf-review-bundle-3");
 	assert.equal(bundle.documentSha256, createHash("sha256").update(source).digest("hex"));
 	assert.deepEqual(bundle.checks, ["accessibility"]);
 	assert.deepEqual(bundle.selectedPages, [1]);
@@ -130,26 +128,26 @@ async function proveWindowsPdf(launcher, root) {
 	const facts = JSON.parse(await readFile(join(reviewDirectory, bundle.artifacts[0].facts), "utf8"));
 	assert.deepEqual(facts.words.map(word => word.text), ["A"]);
 
-	// Design evidence belongs to prepare-review. It exercises pdftohtml and cropped pdftoppm renders.
+	// Design evidence exercises real PDFium spans and detail crops.
 	const designDirectory = join(root, "PDF design evidence manual review");
 	const design = run(launcher, ["prepare-review", input, "--tier", "inference", "--checks", "design", "--reviewer", "manual", "--design-evidence", "--output", designDirectory], root);
 	assert.equal(design.status, 0, design.stderr || design.stdout || String(design.error));
 	const designBundle = JSON.parse(await readFile(join(designDirectory, "manifest.json"), "utf8"));
 	const evidence = JSON.parse(await readFile(join(designDirectory, "design-evidence.json"), "utf8"));
-	assert.equal(evidence.schemaVersion, "pdf-design-evidence-1");
+	assert.equal(evidence.schemaVersion, "pdf-design-evidence-2");
 	assert.equal(evidence.documentSha256, bundle.documentSha256);
 	assert.deepEqual(designBundle.checks, ["design"]);
-	assert.ok(evidence.tools.some(tool => tool.tool === "pdftohtml" && /pdftohtml version/.test(tool.version)));
+	assert.equal(evidence.engine.name, "PDFium");
 	assert.equal(evidence.pages.length, 1);
 	const page = evidence.pages[0];
 	assert.equal(page.mappingSupported, true);
-	assert.equal(page.extraction.tool, "pdftohtml");
+	assert.equal(page.extraction.engine.name, "PDFium");
 	assert.deepEqual(page.spans.map(span => span.text), ["A"]);
 	assert.ok(page.crops.length > 0, "Design evidence must retain an actual detail crop");
-	const xml = await readFile(join(designDirectory, page.xml));
-	assert.equal(createHash("sha256").update(xml).digest("hex"), page.xmlSha256);
+	const xml = await readFile(join(designDirectory, page.source));
+	assert.equal(createHash("sha256").update(xml).digest("hex"), page.sourceSha256);
 	for (const crop of page.crops) {
-		assert.equal(crop.render.tool, "pdftoppm");
+		assert.equal(crop.render.engine.name, "PDFium");
 		const png = await verifyPng(join(designDirectory, crop.image), crop.imageSha256);
 		assert.equal(png.readUInt32BE(16), crop.pixels.width);
 		assert.equal(png.readUInt32BE(20), crop.pixels.height);
@@ -166,8 +164,11 @@ async function proveArtifact(staged, root, html) {
 	const launcher = join(artifact, windows ? "bin/praxity-check.cmd" : "bin/praxity-check");
 	assert.equal(manifest.entryPoint, windows ? "bin/praxity-check.cmd" : "bin/praxity-check");
 	const launcherText = await readFile(launcher, "utf8");
-	assert.ok(launcherText.includes(windows ? 'set "CHECK_POPPLER_BIN=%CHECK_DIR%\\dependencies\\bin"' : 'export CHECK_POPPLER_BIN="$CHECK_DIR/dependencies/bin"'));
 	assert.doesNotMatch(launcherText, /(?:set "|export )PATH=/);
+	assert.doesNotMatch(launcherText, /CHECK_POPPLER|POPPLER_DATADIR|FONTCONFIG/);
+	assert.ok(manifest.files.some(f=>f.path==="node_modules/@embedpdf/pdfium/dist/pdfium.wasm"));
+	assert.ok(manifest.files.some(f=>f.path==="node_modules/@embedpdf/pdfium/dist/index.js"));
+	assert.ok(!manifest.files.some(f=>/poppler/i.test(f.path)));
 	const help = run(launcher, ["--help"], root);
 	assert.equal(help.status, 0, help.stderr || String(help.error));
 	assert.match(help.stdout, /compare-pdf/);
@@ -197,52 +198,31 @@ async function proveArtifact(staged, root, html) {
 		assert.equal(failing.status, 1, failing.stderr || failing.stdout);
 	}
 
-	if (!manifest.payloads.poppler) {
-		assert.equal(manifest.payloads.java, false);
-		assert.equal(manifest.payloads.veraPDF, false);
-		const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"];
-		let pdf = "%PDF-1.4\n";
-		const offsets = objects.map((object, i) => { const offset = Buffer.byteLength(pdf); pdf += `${i + 1} 0 obj\n${object}\nendobj\n`; return offset; });
-		const xref = Buffer.byteLength(pdf);
-		pdf += `xref\n0 4\n0000000000 65535 f \n${offsets.map(n => `${String(n).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-		const input = join(root, "synthetic input.pdf");
-		const output = join(root, "PDF machine report.json");
-		await writeFile(input, pdf);
-		const result = run(launcher, ["check", input, "--json", output], root);
-		assert.equal(result.status, 2, result.stderr || String(result.error));
-		const report = JSON.parse(await readFile(output, "utf8"));
-		assert.equal(report.machineStatus, "incomplete");
-		assert.ok(report.evidence.some(item => item.tool === "pdfinfo" && /ENOENT/.test(item.error)));
-		assert.ok(report.evaluations.some(item => item.rule === "pdf.open" && item.outcome === "untested"));
-		const decoy = join(root, "PATH decoy");
-		await mkdir(decoy);
-		const executable = join(decoy, windows ? "pdfinfo.exe" : "pdfinfo");
-		await cp(process.execPath, executable);
-		await chmod(executable, 0o700);
-		const marker = join(root, "PATH decoy ran.txt"), adapter = join(root, "decoy.mjs");
-		// The import hook acts only in the native decoy, leaving the packaged Node invocation intact.
-		await writeFile(adapter, `import { writeFileSync } from "node:fs";
-import { basename } from "node:path";
-if (/^pdfinfo(?:\\.exe)?$/.test(basename(process.execPath))) {
-  writeFileSync(${JSON.stringify(marker)}, "unexpected PATH fallback");
-  console.log("Pages: 1\\nEncrypted: no");
-  process.exit(0);
-}
-`);
-		const refused = run(launcher, ["check", input, "--json", output], root, { PATH: decoy, CHECK_POPPLER_BIN: decoy, NODE_OPTIONS: `--import=${pathToFileURL(adapter).href}` });
-		assert.equal(refused.status, 2, refused.stderr || String(refused.error));
-		const refusedReport = JSON.parse(await readFile(output, "utf8"));
-		assert.deepEqual(refusedReport.facts.metadata, {});
-		assert.ok(refusedReport.evidence.some(item => item.tool === "pdfinfo" && item.exitCode === null && item.error?.includes(join(artifact, "dependencies", "bin", windows ? "pdfinfo.exe" : "pdfinfo")) && item.error.includes("ENOENT")));
-		await assert.rejects(access(marker), { code: "ENOENT" });
-	}
-	if (windows && manifest.payloads.poppler && manifest.payloads.java && manifest.payloads.veraPDF) {
-		for (const name of ["BuildTools-ThirdPartyNotices.txt", "Redist.txt", "sdk_license.rtf", "sdk_third_party_notices.rtf"]) assert.ok(manifest.legalFiles.includes(`dependencies/notices/toolchain/${name}`), `Missing toolchain legal path: ${name}`);
+
+	assert.equal(manifest.payloads.pdfium, true);
+	const input = join(root, "engine PDF.pdf"), output = join(root, "engine report.json");
+	await writeFile(input, await readFile(join(repository, "test/fixtures/pdf-facts.pdf")));
+	const checked = run(launcher, ["check", input, "--pdfua", "off", "--json", output], root);
+	assert.equal(checked.status, 1, checked.stderr || checked.stdout || String(checked.error));
+	const report = JSON.parse(await readFile(output,"utf8"));
+	assert.equal(report.schemaVersion, "pdf-2");
+	assert.equal(report.machineStatus, "complete");
+	assert.deepEqual(report.facts.words.map(w=>w.text), ["PDF", "facts", "fixture"]);
+	assert.equal(report.engine.version, "2.15.1");
+	const reviewDir = join(root, "engine review");
+	const prepared = run(launcher, ["prepare-review", input, "--checks", "design", "--tier", "inference", "--reviewer", "manual", "--design-evidence", "--output", reviewDir], root);
+	assert.equal(prepared.status, 0, prepared.stderr || prepared.stdout || String(prepared.error));
+	const bundle = JSON.parse(await readFile(join(reviewDir, "manifest.json"),"utf8"));
+	assert.equal(bundle.schemaVersion, "pdf-review-bundle-3");
+	assert.equal(bundle.renderer.name, "PDFium");
+	const png=await verifyPng(join(reviewDir,bundle.artifacts[0].image),bundle.artifacts[0].imageSha256);
+	assert.equal(png.readUInt32BE(20),1600);
+	if (windows && manifest.payloads.pdfium && manifest.payloads.java && manifest.payloads.veraPDF) {
 		await proveWindowsPdf(launcher, root);
 	}
 }
 
-test("standalone Check relocates and reports missing PDF tools with an empty PATH", async t => {
+test("standalone Check relocates and reads and renders PDFs with an empty PATH", async t => {
 	const root = await scratch(t);
 	const distribution = process.env.CHECK_NODE_DIST ?? (windows ? dirname(process.execPath) : dirname(dirname(process.execPath)));
 	const supplied = join(root, "supplied Node distribution");
@@ -255,10 +235,10 @@ test("standalone Check relocates and reports missing PDF tools with an empty PAT
 	await proveArtifact(staged, root, false);
 });
 
-test("supplied runtime artifact checks HTML and bundled Windows PDF tools after relocation with an empty PATH", { skip: !process.env.CHECK_ARTIFACT && "Set CHECK_ARTIFACT to prove a built runtime artifact" }, async t => {
+test("supplied runtime artifact checks HTML and bundled Windows PDF engine after relocation with an empty PATH", { skip: !process.env.CHECK_ARTIFACT && "Set CHECK_ARTIFACT to prove a built runtime artifact" }, async t => {
 	if (process.env.CHECK_REQUIRE_PDF === "1") {
 		const manifest = JSON.parse(await readFile(join(process.env.CHECK_ARTIFACT, "capabilities.json"), "utf8"));
-		for (const payload of ["poppler", "java", "veraPDF"]) {
+		for (const payload of ["pdfium", "java", "veraPDF"]) {
 			assert.equal(manifest.payloads?.[payload], true, `CHECK_REQUIRE_PDF=1 requires bundled ${payload}`);
 		}
 	}
@@ -273,8 +253,8 @@ test("CHECK_REQUIRE_PDF rejects a supplied artifact missing any PDF runtime", as
 	const env = { ...process.env, CHECK_ARTIFACT: artifact, CHECK_REQUIRE_PDF: "1" };
 	// Start a separate test runner rather than inherit this runner's child context.
 	delete env.NODE_TEST_CONTEXT;
-	for (const missing of ["poppler", "java", "veraPDF"]) {
-		await writeFile(join(artifact, "capabilities.json"), JSON.stringify({ payloads: { poppler: true, java: true, veraPDF: true, [missing]: false } }));
+	for (const missing of ["pdfium", "java", "veraPDF"]) {
+		await writeFile(join(artifact, "capabilities.json"), JSON.stringify({ payloads: { pdfium: true, java: true, veraPDF: true, [missing]: false } }));
 		const result = spawnSync(process.execPath, ["--test", "--test-name-pattern", "^supplied runtime artifact", fileURLToPath(import.meta.url)], {
 			env, encoding: "utf8",
 		});
@@ -298,7 +278,6 @@ test("macOS target layout and inventory can be packaged without a Mac", async t 
 	await assert.rejects(lstat(join(output, "runtime/node.exe")), /ENOENT/);
 	const launcher = await readFile(join(output, "bin/praxity-check"), "utf8");
 	assert.match(launcher, /^#!\/bin\/sh/);
-	assert.match(launcher, /export CHECK_POPPLER_BIN="\$CHECK_DIR\/dependencies\/bin"/);
 	assert.doesNotMatch(launcher, /export PATH=/);
 	assert.match(launcher, /exec "\$CHECK_DIR\/runtime\/node" "\$CHECK_DIR\/lib\/cli.js" "\$@"/);
 	assert.doesNotMatch(launcher, /dirname|node.exe/);
@@ -344,4 +323,16 @@ test("packaging rejects same-target stale browser metadata and missing browser n
 	await rm(join(cache, "ABOUT"));
 	await assert.rejects(packageArtifact(values, inspector), /lacks its executable, license or credits/);
 	await assert.rejects(lstat(output), /ENOENT/);
+});
+
+test("packager rejects obsolete native PDF payloads before creating output",async t=>{
+ const root=await scratch(t),node=join(root,"Node"),dependencies=join(root,"dependencies"),output=join(root,"output");
+ await mkdir(node);await mkdir(dependencies);
+ await writeFile(join(node,windows?"node.exe":"bin/node"),"unused",{flag:"w"}).catch(async error=>{
+  if(error.code!=="ENOENT")throw error;await mkdir(join(node,"bin"));await writeFile(join(node,"bin/node"),"unused");
+ });
+ await writeFile(join(node,"LICENSE"),"fixture licence");await writeFile(join(dependencies,"NOTICE.md"),"fixture notices");
+ await writeFile(join(dependencies,"runtime-versions.json"),JSON.stringify({platform:process.platform,arch:process.arch,poppler:{version:"legacy"}}));
+ await assert.rejects(packageArtifact({node,dependencies,output},()=>({version:process.version,platform:process.platform,arch:process.arch})),/obsolete native PDF tooling/);
+ await assert.rejects(access(output),{code:"ENOENT"});
 });

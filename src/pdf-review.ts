@@ -1,18 +1,16 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { chmod, mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { promisify } from "node:util";
 import { extractPdfFacts } from "./pdf-facts.ts";
 import { preparePdfDesignEvidence } from "./pdf-design.ts";
-import { popplerExecutable } from "./poppler.ts";
+import { openPdf, pdfEngineVersion } from "./pdf-engine.ts";
 import { parseReviewExecutionOption, runPreparedReview, validateReviewExecutionOptions, type ReviewExecutionOptions } from "./review-runner.ts";
 
 import { parseChecks, parseTier, type CheckDomain, type CheckTier } from "./selection.ts";
 
-const exec = promisify(execFile);
+
 type ReviewFinding = { page: number; confidence: "high" | "medium" | "low"; message: string; action: string; consequence: string; origin: string; verification: string; evidence: { observation: string } };
 const categories = ["observed-defect", "needs-context", "suggestion"] as const;
 type ReviewFocus = "visual" | "usability";
@@ -123,7 +121,7 @@ export async function validatePdfReviewBundle(manifestPath: string, documentSha2
 	const bytes = await readPdfEvidence(manifestPath);
 	const bundle: unknown = JSON.parse(bytes.toString());
 	bundleObject(bundle);
-	if ((bundle.schemaVersion !== "pdf-review-bundle-1" && bundle.schemaVersion !== "pdf-review-bundle-2") || bundle.documentSha256 !== documentSha256) throw new Error("Bundle version or PDF hash mismatch");
+	if ((typeof bundle.schemaVersion !== "string" || !["pdf-review-bundle-1", "pdf-review-bundle-2", "pdf-review-bundle-3"].includes(bundle.schemaVersion)) || bundle.documentSha256 !== documentSha256) throw new Error("Bundle version or PDF hash mismatch");
 	if (typeof bundle.pageCount !== "number" || !Number.isSafeInteger(bundle.pageCount) || bundle.pageCount < 1 || pageCount !== undefined && bundle.pageCount !== pageCount) throw new Error("Bundle page count mismatch");
 	if (!Array.isArray(bundle.selectedPages)) throw new Error("Invalid bundle selected pages");
 	const pages = selectReviewPages(bundle.pageCount, bundle.selectedPages);
@@ -133,7 +131,7 @@ export async function validatePdfReviewBundle(manifestPath: string, documentSha2
 		if (bundle.focus !== "visual" && bundle.focus !== "usability" || !Array.isArray(bundle.checks) || bundle.checks.some(check => check !== "accessibility" && check !== "design")) throw new Error("Invalid bundle focus or check domains");
 		checks = parseChecks(bundle.checks.join(","));
 	}
-	if (bundle.schemaVersion === "pdf-review-bundle-2" && (bundle.tier !== "inference" || bundle.coverage !== (pages.length === bundle.pageCount ? "all-pages" : "sample"))) throw new Error("Invalid bound bundle selection or coverage");
+	if (["pdf-review-bundle-2", "pdf-review-bundle-3"].includes(String(bundle.schemaVersion)) && ((bundle.schemaVersion === "pdf-review-bundle-2" && bundle.tier !== "inference") || bundle.coverage !== (pages.length === bundle.pageCount ? "all-pages" : "sample"))) throw new Error("Invalid bound bundle selection or coverage");
 	const paths = [resolve(manifestPath)];
 	const fingerprint = async (path: unknown) => {
 		if (typeof path !== "string" || !path.trim()) throw new Error("Invalid artifact path");
@@ -149,7 +147,7 @@ export async function validatePdfReviewBundle(manifestPath: string, documentSha2
 		const imageSha256 = await fingerprint(artifact.image);
 		if (imageSha256 !== artifact.imageSha256) throw new Error("Artifact image hash mismatch");
 		const factsSha256 = await fingerprint(artifact.facts);
-		if ((bundle.schemaVersion === "pdf-review-bundle-2" || artifact.factsSha256 !== undefined) && factsSha256 !== artifact.factsSha256) throw new Error("Artifact facts hash mismatch");
+		if ((["pdf-review-bundle-2", "pdf-review-bundle-3"].includes(String(bundle.schemaVersion)) || artifact.factsSha256 !== undefined) && factsSha256 !== artifact.factsSha256) throw new Error("Artifact facts hash mismatch");
 		artifacts.push({ page: artifact.page, imageSha256, factsSha256 });
 	}
 	if (artifacts.length !== pages.length) throw new Error("Missing selected-page artifact");
@@ -168,7 +166,7 @@ export type VerifiedPdfReviewBundle = Awaited<ReturnType<typeof validatePdfRevie
 export type AcceptedPdfReview = { review: PdfReview; normalized: ReturnType<typeof normalizePdfReview> };
 
 function validatePdfReviewBundleSelection(review: PdfReview, bundle: VerifiedPdfReviewBundle) {
-	if (review.schemaVersion === "pdf-review-4" && (bundle.schemaVersion !== "pdf-review-bundle-2" || review.bundleSha256 !== bundle.manifestSha256)) throw new Error("PDF review bundle SHA-256 does not match; prepare a new review after changing evidence or context");
+	if (review.schemaVersion === "pdf-review-4" && (!["pdf-review-bundle-2", "pdf-review-bundle-3"].includes(String(bundle.schemaVersion)) || review.bundleSha256 !== bundle.manifestSha256)) throw new Error("PDF review bundle SHA-256 does not match; prepare a new review after changing evidence or context");
 	if (review.tier !== bundle.tier) throw new Error("Review tier mismatch");
 	if ("checks" in review && (review.focus !== bundle.focus || JSON.stringify([...review.checks].sort()) !== JSON.stringify([...(bundle.checks ?? [])].sort()))) throw new Error("Review focus or check domains mismatch");
 	if (review.pagesReviewed.some(page => !bundle.pages.includes(page))) throw new Error("Review includes a page outside the bundle selected pages");
@@ -229,21 +227,21 @@ export async function preparePdfReview(path: string, options: { tier: CheckTier 
 		const extraction = await extractPdfFacts(snapshot);
 		if (extraction.machineStatus !== "complete") throw new Error("PDF facts could not be extracted; run check for diagnostics");
 		const pages = selectReviewPages(extraction.facts.pages.length, options.pages);
-		const rendererVersion = await exec(popplerExecutable("pdftoppm"), ["-v"], { timeout: 10_000, maxBuffer: 1024 * 1024 });
+		const engine = await openPdf(bytes);
 		const artifacts = [];
+		try {
 		for (const page of pages) {
 			const prefix = `page-${page}`;
-			const args = ["-f", String(page), "-l", String(page), "-singlefile", "-scale-to", "1600", "-png", snapshot, join(dir, prefix)];
-			const result = await exec(popplerExecutable("pdftoppm"), args, { timeout: 30_000, maxBuffer: 1024 * 1024 });
-			const png = await readFile(join(dir, `${prefix}.png`));
-			await chmod(join(dir, `${prefix}.png`), 0o600);
+			const png = await engine.renderPage(page, { height: 1600 });
+			await writeFile(join(dir, `${prefix}.png`), png, { mode: 0o600 });
 			const facts = { geometry: extraction.facts.pages[page - 1], words: extraction.facts.words.filter((w) => w.page === page), images: extraction.facts.images.filter((i) => i.page === page), coordinates: extraction.facts.coordinates };
 			const factsBytes = JSON.stringify(facts, null, 2);
 			await writeFile(join(dir, `${prefix}.json`), factsBytes, { mode: 0o600 });
-			artifacts.push({ page, geometry: extraction.facts.pages[page - 1], renderPixels: { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, image: `${prefix}.png`, facts: `${prefix}.json`, factsSha256: hash(factsBytes), imageSha256: createHash("sha256").update(png).digest("hex"), render: { tool: "pdftoppm", args, stdout: result.stdout, stderr: result.stderr } });
+			artifacts.push({ page, geometry: extraction.facts.pages[page - 1], renderPixels: { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, image: `${prefix}.png`, facts: `${prefix}.json`, factsSha256: hash(factsBytes), imageSha256: createHash("sha256").update(png).digest("hex"), render: { engine: pdfEngineVersion, operation: "render", page, height: 1600, diagnostics: engine.diagnostics.splice(0) } });
 		}
+		} finally { await engine.close(); }
 		const designEvidence = options.designEvidence ? await preparePdfDesignEvidence(snapshot, dir, extraction.facts.pages.filter((page) => pages.includes(page.page)), { minTextSizePt: options.minTextSizePt }) : undefined;
-		const manifest = { schemaVersion: canonical ? "pdf-review-bundle-2" : "pdf-review-bundle-1", ...(designEvidence ? { designEvidence } : {}), renderer: { name: "pdftoppm", version: `${rendererVersion.stdout}${rendererVersion.stderr}`.trim() }, documentSha256: extraction.document.sha256, tier: canonical ? "inference" : focus, ...(canonical ? { focus, checks } : {}), pageCount: extraction.facts.pages.length, selectedPages: pages, coverage: pages.length === extraction.facts.pages.length ? "all-pages" : "sample", context: { audience: options.audience ?? null, use: options.use ?? null }, artifacts };
+		const manifest = { schemaVersion: "pdf-review-bundle-3", ...(designEvidence ? { designEvidence } : {}), renderer: pdfEngineVersion, documentSha256: extraction.document.sha256, tier: canonical ? "inference" : focus, ...(canonical ? { focus, checks } : {}), pageCount: extraction.facts.pages.length, selectedPages: pages, coverage: pages.length === extraction.facts.pages.length ? "all-pages" : "sample", context: { audience: options.audience ?? null, use: options.use ?? null }, artifacts };
 		const manifestBytes = JSON.stringify(manifest, null, 2);
 		const bundleSha256 = hash(manifestBytes);
 		await writeFile(join(dir, "manifest.json"), manifestBytes, { mode: 0o600 });
@@ -290,7 +288,7 @@ export async function pdfReviewCli(args: string[]): Promise<number> {
 		}));
 		await runPreparedReview(result.directory, options, { kind: "pdf", sourceSha256: result.bundleSha256, items, images: result.manifest.artifacts.map(artifact => join(result.directory, artifact.image)) }, async path => {
 			await acceptPdfReview(JSON.parse((await readPdfEvidence(path)).toString()), result.manifest.documentSha256, result.manifest.pageCount, {
-				bundle: join(result.directory, "manifest.json"), requireBoundReview: result.manifest.schemaVersion === "pdf-review-bundle-2",
+				bundle: join(result.directory, "manifest.json"), requireBoundReview: result.manifest.tier === "inference",
 			});
 		});
 	}

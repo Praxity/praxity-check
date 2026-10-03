@@ -1,0 +1,94 @@
+%PDF-1.7
+%âãÏÓ
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Metadata 4 0 R /StructTreeRoot 6 0 R /MarkInfo << /Marked true >> /Lang (en-US) /ViewerPreferences << /DisplayDocTitle true >> >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 10 0 R >> >> /Contents 5 0 R /StructParents 0 /Tabs /S >>
+endobj
+4 0 obj
+<< /Length 408 /Type /Metadata /Subtype /XML >>
+stream
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfuaid:part="1"/><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Synthetic letter A</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>
+endstream
+endobj
+5 0 obj
+<< /Length 55  >>
+stream
+/P <</MCID 0>> BDC
+BT /F1 36 Tf 72 700 Td (A) Tj ET
+EMC
+endstream
+endobj
+6 0 obj
+<< /Type /StructTreeRoot /K [7 0 R] /ParentTree 8 0 R /ParentTreeNextKey 1 >>
+endobj
+7 0 obj
+<< /Type /StructElem /S /Document /P 6 0 R /K [9 0 R] >>
+endobj
+8 0 obj
+<< /Nums [0 [9 0 R]] >>
+endobj
+9 0 obj
+<< /Type /StructElem /S /P /P 7 0 R /Pg 3 0 R /K 0 >>
+endobj
+10 0 obj
+<< /Type /Font /Subtype /Type3 /Name /SyntheticA /FontBBox [0 0 600 700] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /A 11 0 R >> /Encoding << /Type /Encoding /Differences [65 /A] >> /FirstChar 65 /LastChar 65 /Widths [600] /Resources << >> /ToUnicode 12 0 R >>
+endobj
+11 0 obj
+<< /Length 74  >>
+stream
+600 0 0 0 600 700 d1
+60 w
+30 0 m 300 670 l 570 0 l S
+150 300 m 450 300 l S
+endstream
+endobj
+12 0 obj
+<< /Length 331  >>
+stream
+/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /SyntheticA-Unicode def
+/CMapType 2 def
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+1 beginbfchar
+<41> <0041>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+endstream
+endobj
+13 0 obj
+<< /Title (Synthetic letter A) /Producer (Praxity Check synthetic runtime proof) >>
+endobj
+xref
+0 14
+0000000000 65535 f 
+0000000019 00000 n 
+0000000196 00000 n 
+0000000253 00000 n 
+0000000406 00000 n 
+0000000895 00000 n 
+0000001001 00000 n 
+0000001094 00000 n 
+0000001166 00000 n 
+0000001205 00000 n 
+0000001274 00000 n 
+0000001556 00000 n 
+0000001682 00000 n 
+0000002066 00000 n 
+trailer
+<< /Size 14 /Root 1 0 R /Info 13 0 R >>
+startxref
+2166
+%%EOF

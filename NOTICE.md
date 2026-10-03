@@ -59,3 +59,12 @@ Check code:
   plus the tooltip hover, focus, pointer-persistence, timed-persistence, and
   Escape evidence. No MagentaA11y code or text is incorporated here.
 - axe-core rule descriptions included in audit results originate from axe-core.
+
+## PDF engine
+
+PDF facts and page rendering use @embedpdf/pdfium 2.15.1, MIT wrapper,
+with PDFium under BSD terms. Wrapper, PDFium and component licence texts
+are retained in notices/pdfium and copied into standalone artifacts.
+The component notice index identifies source URLs and hashes.
+This software includes work of the FreeType Project, www.freetype.org.
+PDFium includes standard-font substitutes originally copyright Foxit Software.

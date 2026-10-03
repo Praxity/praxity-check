@@ -51,3 +51,10 @@ Praxity Check does not claim ownership of the sites, courses, or other content
 you check. Automated checks run locally; the
 experimental interaction review sends only the evidence packet you choose to a
 separately invoked model reviewer.
+
+## PDFium and other dependencies
+
+Check's licence does not replace the terms of its dependencies.
+PDFium's wasm and the MIT wrapper are distributed with their own licences.
+Their licence and component notices are in notices/pdfium.
+Java, veraPDF and browsers retain separate terms when included in an artifact.

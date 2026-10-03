@@ -32,6 +32,7 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 		await readFile(join(resolve(values.dependencies), "NOTICE.md"));
 		runtime = JSON.parse(await readFile(join(resolve(values.dependencies), "runtime-versions.json"), "utf8"));
 		if (runtime.platform !== platform || runtime.arch !== arch) throw new Error("Dependencies target mismatch");
+		if (runtime.poppler !== undefined) throw new Error("Runtime artifact contains obsolete native PDF tooling; regenerate it with prepare-runtimes.mjs.");
 		if (runtime.browser) {
 			let browser;
 			try { browser = await browserRuntime(join(resolve(values.dependencies), "browsers"), { platform, arch }); }
@@ -48,6 +49,7 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 	await cp(join(node, nodePath), join(output, runtimePath), { dereference: true, mode: constants.COPYFILE_FICLONE });
 	await cp(join(node, "LICENSE"), join(output, "runtime/LICENSE"), { dereference: true });
 	for (const file of ["LICENSE", "NOTICE.md", "LICENSING.md"]) await cp(join(root, file), join(output, file));
+	await cp(join(root, "notices"), join(output, "notices"), { recursive: true, dereference: true });
 	await cp(join(root, "skill"), join(output, "skill"), { recursive: true, dereference: true });
 	const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 	await writeFile(join(output, "package.json"), JSON.stringify({ name: pkg.name, version: pkg.version, private: true, type: "module" }, null, 2));
@@ -101,14 +103,14 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 		schemaVersion: 1, tool: pkg.name, version: pkg.version, sourceRevision: revision, dirty,
 		platform, arch, node: version, nodeRequirement: pkg.engines.node,
 		entryPoint: platform === "win32" ? "bin/praxity-check.cmd" : "bin/praxity-check",
-		legalFiles: payload.filter(file => /(?:^|\/)(?:.*\.)?(?:licen[cs]e[^/]*|copying[^/]*|copyright[^/]*|notice[^/]*|third[- ]?party[^/]*|about)$/i.test(file.path) || file.path === "LICENSING.md" || file.path.includes("/legal/") || file.path.startsWith("dependencies/notices/toolchain/") && !file.path.endsWith(".cmake")).map(file => file.path),
+		legalFiles: payload.filter(file => /(?:^|\/)(?:.*\.)?(?:licen[cs]e[^/]*|copying[^/]*|copyright[^/]*|notice[^/]*|third[- ]?party[^/]*|about)$/i.test(file.path) || file.path === "LICENSING.md" || file.path.startsWith("notices/pdfium/") || file.path.includes("/legal/") || file.path.startsWith("dependencies/notices/toolchain/") && !file.path.endsWith(".cmake")).map(file => file.path),
 		files: payload,
 		inventoryExcludes: ["capabilities.json"], // A manifest cannot hash its own bytes.
 		dependenciesSupplied: Boolean(values.dependencies),
-		payloads: { chromiumHeadlessShell: Boolean(runtime?.browser), poppler: payload.some(file => file.path === "dependencies/bin/pdfinfo" || file.path === "dependencies/bin/pdfinfo.exe"), java: payload.some(file => file.path === "dependencies/java/bin/java" || file.path === "dependencies/java/bin/java.exe"), veraPDF: payload.some(file => file.path === "dependencies/bin/verapdf" || platform === "win32" && /^dependencies\/verapdf\/bin\/cli-.+\.jar$/.test(file.path)) },
+		payloads: { chromiumHeadlessShell: Boolean(runtime?.browser), pdfium: payload.some(file => file.path === "node_modules/@embedpdf/pdfium/dist/pdfium.wasm"), java: payload.some(file => file.path === "dependencies/java/bin/java" || file.path === "dependencies/java/bin/java.exe"), veraPDF: payload.some(file => file.path === "dependencies/bin/verapdf" || platform === "win32" && /^dependencies\/verapdf\/bin\/cli-.+\.jar$/.test(file.path)) },
 		requirements: {
-			pdf: ["pdfinfo", "pdffonts", "pdfimages", "pdftotext"],
-			pdfDesignAndReview: ["pdftohtml", "pdftoppm"],
+			pdf: ["Bundled @embedpdf/pdfium wrapper and pdfium.wasm"],
+			pdfDesignAndReview: ["Bundled PDFium engine"],
 			pdfUa: [platform === "win32" ? "veraPDF jars with VERAPDF_JAVA and VERAPDF_CLASSPATH, or VERAPDF/--verapdf executable" : "veraPDF executable (dependencies/bin/verapdf, VERAPDF or --verapdf)", "compatible Java runtime"],
 			html: ["Playwright-matched Chromium in dependencies/browsers (including headless shell)"],
 		},
@@ -121,13 +123,7 @@ function launcher(platform) {
 if (platform === "win32") return `@echo off\r
 setlocal DisableDelayedExpansion\r
 for %%I in ("%~dp0..") do set "CHECK_DIR=%%~fI"\r
-set "CHECK_POPPLER_BIN=%CHECK_DIR%\\dependencies\\bin"\r
 set "PLAYWRIGHT_BROWSERS_PATH=%CHECK_DIR%\\dependencies\\browsers"\r
-if exist "%CHECK_DIR%\\dependencies\\share\\poppler\\" set "POPPLER_DATADIR=%CHECK_DIR%\\dependencies\\share\\poppler"\r
-if exist "%CHECK_DIR%\\dependencies\\etc\\fonts\\fonts.conf" (\r
-  set "FONTCONFIG_FILE=%CHECK_DIR%\\dependencies\\etc\\fonts\\fonts.conf"\r
-  set "FONTCONFIG_PATH=%CHECK_DIR%\\dependencies\\etc\\fonts"\r
-)\r
 if exist "%CHECK_DIR%\\dependencies\\java\\bin\\java.exe" (\r
   set "JAVA_HOME=%CHECK_DIR%\\dependencies\\java"\r
   set "JAVACMD=%CHECK_DIR%\\dependencies\\java\\bin\\java.exe"\r
@@ -143,13 +139,7 @@ exit /b %errorlevel%\r
 return `#!/bin/sh
 set -eu
 CHECK_DIR="$(CDPATH= cd -- "\${0%/*}/.." && pwd)"
-export CHECK_POPPLER_BIN="$CHECK_DIR/dependencies/bin"
 export PLAYWRIGHT_BROWSERS_PATH="$CHECK_DIR/dependencies/browsers"
-if [ -d "$CHECK_DIR/dependencies/share/poppler" ]; then export POPPLER_DATADIR="$CHECK_DIR/dependencies/share/poppler"; fi
-if [ -f "$CHECK_DIR/dependencies/etc/fonts/fonts.conf" ]; then
-  export FONTCONFIG_FILE="$CHECK_DIR/dependencies/etc/fonts/fonts.conf"
-  export FONTCONFIG_PATH="$CHECK_DIR/dependencies/etc/fonts"
-fi
 if [ -x "$CHECK_DIR/dependencies/bin/verapdf" ]; then export VERAPDF="$CHECK_DIR/dependencies/bin/verapdf"; fi
 if [ -x "$CHECK_DIR/dependencies/java/bin/java" ]; then
   export JAVA_HOME="$CHECK_DIR/dependencies/java"

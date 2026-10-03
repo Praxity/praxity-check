@@ -151,3 +151,7 @@ reviewed. Human review remains untested until performed. HTML review imports bin
 feedback to a local content snapshot and retained browser evidence. Ordinary HTML
 deterministic reports lack that revision hash. Legacy PDF reviews lack declared
 domains and use an empty `domains` array with an explanation in `limitations`.
+
+PDF reports now use schemaVersion pdf-2 and record PDFium engine identity.
+The shared feedback-1 envelope stays the same. Historical pdf-1 reports remain
+valid comparison inputs. See [PDF report v2](pdf-report-v1.md).

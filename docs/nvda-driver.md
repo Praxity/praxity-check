@@ -189,6 +189,4 @@ Remove-Item Env:PRAXITY_NVDA_OUTPUT
 The output path must not exist. Without `PRAXITY_NVDA_OUTPUT`, the test retains
 evidence in a new temporary directory and prints its transcript path. It checks
 the local fixture in `test/fixtures/nvda-driver` and needs no external site.
-Put Poppler's `bin` directory first on `PATH` so the PDF tests do not pick up
-Git for Windows' Xpdf `pdftotext`. Windows standalone packaging is not supported
-yet: `pnpm test:package` expects a Unix Node distribution at `bin/node`.
+PDF facts and renders use bundled PDFium wasm. PDF/UA validation still requires veraPDF and Java. Windows packages can include those runtimes.

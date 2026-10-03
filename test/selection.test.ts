@@ -75,7 +75,7 @@ test("PDF domain and tier selection changes executed checks and keeps inference 
 	const design = await checkPdf(path, { checks: "design", tier: "deterministic", veraPdfPath: join(dir, "missing-validator"), paperSize: "A4" });
 	assert.equal(design.machineStatus, "complete");
 	assert.ok(design.findings.some((finding) => finding.rule === "page.geometry"));
-	assert.ok(!design.evidence.some((evidence) => evidence.tool.includes("validator")));
+	assert.ok(!design.evidence.some((evidence) => "tool" in evidence && evidence.tool.includes("validator")));
 	assert.ok(!design.evaluations.some((evaluation) => evaluation.rule.startsWith("pdfua")));
 	const accessibility = await checkPdf(path, { checks: "accessibility", tier: "deterministic", pdfua: "off", paperSize: "A4" });
 	assert.equal(accessibility.findings.length, 0);

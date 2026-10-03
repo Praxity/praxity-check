@@ -14,6 +14,9 @@ importers:
       '@axe-core/playwright':
         specifier: ^4.12.1
         version: 4.12.1(playwright-core@1.62.1)
+      '@embedpdf/pdfium':
+        specifier: 2.15.1
+        version: 2.15.1
       '@guidepup/guidepup':
         specifier: 0.34.0
         version: 0.34.0
@@ -43,6 +46,9 @@ packages:
     resolution: {integrity: sha512-rMd7xriptqKpP+w5265i4Hdkv2X5kbu6uiBi/B2I7uf3hieRBM3qDCfaKPtxfiYb2mKXfF+yLODJwIx+Jv1GDw==}
     peerDependencies:
       playwright-core: '>= 1.0.0'
+
+  '@embedpdf/pdfium@2.15.1':
+    resolution: {integrity: sha512-qDH4gEkGSQT0iM+07Hpm3LyvoB7PEFbW3Qyk6+LPkEYLJYfHagkHM1OzYlDq2EDOhJRguykTkzdMOT3/w27x5Q==}
 
   '@guidepup/guidepup@0.24.1':
     resolution: {integrity: sha512-L33QKSzeceTOq/DaxAhEkM6fEbJmzkOF2K0U6AsN0zuzy1T4/2LVsLG9f9IPge70T6XgUF7fsCzYotVo4FNk/A==}
@@ -229,6 +235,8 @@ snapshots:
     dependencies:
       axe-core: 4.12.1
       playwright-core: 1.62.1
+
+  '@embedpdf/pdfium@2.15.1': {}
 
   '@guidepup/guidepup@0.24.1':
     dependencies:

@@ -1,6 +1,6 @@
 # PDF review controls
 
-Run `python3 bench/pdf/generate.py /tmp/pdf-controls` with Poppler on PATH and a new output directory. The dependency-free generator writes two pairs of two-page PDFs, page images and separate ground-truth files. The controls test print review, not PDF/UA conformance; they use an unembedded standard font and have no tags.
+Run `python3 bench/pdf/generate.py /tmp/pdf-controls` with Node on PATH and Check dependencies installed and a new output directory. The dependency-free generator writes two pairs of two-page PDFs, page images and separate ground-truth files. The controls test print review, not PDF/UA conformance; they use an unembedded standard font and have no tags.
 
 Prepare each PDF with Check's `prepare-review --checks design --tier inference --focus visual`. Give the reviewer only its bundle. Keep the generator, control names and ground-truth file outside its review context. Record the exact model, effort, prompt, PDF hash and pages inspected.
 
@@ -41,7 +41,7 @@ A run uses this shape. File paths resolve relative to `run.json`; artifact paths
 }
 ```
 
-Every finding needs exactly one zero-based `findingIndex` adjudication. Verdicts are `supported-defect`, `unsupported`, `context-question`, or `suggestion`. Only supported defects map expected defect IDs, and each mapping must match the finding's page. Two findings identifying the same defect detect it once. Use `expectedDefects: []` for a clean control. Record a concrete reason for each judgment; the scorer checks consistency, not whether the human judgment is correct. Model-authored v2 categories do not determine adjudicated verdicts. Both production review schema versions are accepted through the production validator.
+Every finding needs exactly one zero-based `findingIndex` adjudication. Verdicts are `supported-defect`, `unsupported`, `context-question`, or `suggestion`. Only supported defects map expected defect IDs, and each mapping must match the finding's page. Two findings identifying the same defect detect it once. Use `expectedDefects: []` for a clean control. Record a concrete reason for each judgment; the scorer checks consistency, not whether the human judgment is correct. Model-authored v2 categories do not determine adjudicated verdicts. Review schemas 1–4 are accepted through the production validator. New PDFium evidence uses pdf-review-bundle-3 and pdf-design-evidence-2; historical bundles 1–2 remain verifiable.
 
 `actionable` records whether the advice is useful according to the adjudicator. The supported-actionable-advice denominator is the number of supported findings, including duplicate findings. This measures advice quality among those findings, not repair success. Defect detection counts unique expected defects per trial. Unsupported claims, cases with unsupported claims, clean-case false alarms, context questions, and suggestions are separate. A clean-case false alarm requires an unsupported claim; a context question alone does not count. Every ratio includes its numerator and denominator and is null when the denominator is zero. No combined score or model ranking is produced.
 

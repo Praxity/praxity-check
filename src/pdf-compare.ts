@@ -34,7 +34,7 @@ function canonical(value: unknown): string {
 /** Validate every field consumed by comparison; unrelated report evidence stays opaque. */
 export function validateComparisonReport(value: unknown) {
 	const report = object(value);
-	if (report.schemaVersion !== "pdf-1") throw new Error("Expected schemaVersion pdf-1");
+	if (report.schemaVersion !== "pdf-1" && report.schemaVersion !== "pdf-2") throw new Error("Expected schemaVersion pdf-1 or pdf-2");
 	const sha256 = hash(object(report.document).sha256);
 	if (report.machineStatus !== "complete" && report.machineStatus !== "incomplete") throw new Error("Invalid machine status");
 	const pages = array(object(report.facts).pages).map((p) => count(object(p).page));
@@ -52,7 +52,16 @@ export function validateComparisonReport(value: unknown) {
 		return { rule: text(e.rule), outcome };
 	});
 	const versions = array(report.evidence).flatMap((v) => {
-		const e = object(v), args = array(e.args).map(text);
+		const e = object(v);
+		if (e.engine !== undefined) {
+			const engine = object(e.engine);
+			if (engine.name !== "PDFium" || engine.package !== "@embedpdf/pdfium" || e.outcome !== "passed" && e.outcome !== "untested") throw new Error("Invalid PDF engine evidence");
+			text(e.operation); array(e.diagnostics).forEach(text);
+			const recorded = object(report.engine);
+			if (engine.version !== recorded.version || engine.build !== recorded.build) throw new Error("PDF engine evidence does not match report identity");
+			return [];
+		}
+		const args = array(e.args).map(text);
 		const tool = text(e.tool);
 		if (args.length !== 1 || args[0] !== "-v") return [];
 		if (e.exitCode !== 0 || e.error !== undefined) return [];
@@ -61,6 +70,11 @@ export function validateComparisonReport(value: unknown) {
 		const version = `${stdout}${stderr}`.trim();
 		return version ? [[tool, version]] : [];
 	}).sort(([a], [b]) => a!.localeCompare(b!));
+	if (report.schemaVersion === "pdf-2") {
+		const engine = object(report.engine);
+		if (engine.name !== "PDFium" || engine.package !== "@embedpdf/pdfium" || engine.build !== null && typeof engine.build !== "string") throw new Error("Invalid PDF engine identity");
+		versions.push(["PDFium", JSON.stringify([text(engine.version), engine.build])]);
+	}
 	const validator = report.pdfuaValidation === undefined ? undefined : (() => {
 		const v = object(report.pdfuaValidation);
 		if (v.name !== "veraPDF" || v.profile !== "ua1" && v.profile !== "ua2") throw new Error("Invalid PDF/UA validator");
@@ -103,14 +117,14 @@ export function validateComparisonReport(value: unknown) {
 			return issue;
 		});
 	});
-	return { sha256, pageCount: pages.length, policy: canonical(report.policy), complete: report.machineStatus === "complete", evaluations, versions, validator,
+	return { schemaVersion: report.schemaVersion, sha256, pageCount: pages.length, policy: canonical(report.policy), complete: report.machineStatus === "complete", evaluations, versions, validator,
 		findings: issues(report.findings), needsReview: issues(report.needsReview), inference };
 }
 
 export function comparePdfReports(beforeValue: unknown, afterValue: unknown) {
 	const before = validateComparisonReport(beforeValue), after = validateComparisonReport(afterValue);
 	const policySame = before.policy === after.policy;
-	const toolsSame = JSON.stringify(before.versions) === JSON.stringify(after.versions);
+	const toolsSame = before.schemaVersion === after.schemaVersion && JSON.stringify(before.versions) === JSON.stringify(after.versions);
 	const pageCountSame = before.pageCount === after.pageCount;
 	const passed = (report: typeof before, rule: string) => report.evaluations.some((e) => e.rule === rule && e.outcome === "passed") && !report.evaluations.some((e) => e.rule === rule && e.outcome !== "passed");
 	const completedMachine = (report: typeof before) => report.evaluations.some((e) => e.rule === "pdfua.machine" && ["passed", "failed"].includes(e.outcome)) && !report.evaluations.some((e) => e.rule === "pdfua.machine" && !["passed", "failed"].includes(e.outcome));
@@ -120,7 +134,7 @@ export function comparePdfReports(beforeValue: unknown, afterValue: unknown) {
 			const b = before.validator, a = after.validator;
 			return !!(a?.version && b?.version === a.version && a.profile === b.profile && a.coverage?.status === "complete" && b.coverage?.status === "complete" && completedMachine(before) && completedMachine(after) && b.coverage.rules.some((r) => r.rule === rule) && !a.coverage.rules.some((r) => r.rule === rule));
 		}
-		const required = rule === "font.embedding" ? ["font.facts", "pdffonts"] : rule === "page.geometry" ? ["page.facts", "pdfinfo"] : undefined;
+		const required = rule === "font.embedding" ? ["font.facts", before.schemaVersion === "pdf-2" ? "PDFium" : "pdffonts"] : rule === "page.geometry" ? ["page.facts", before.schemaVersion === "pdf-2" ? "PDFium" : "pdfinfo"] : undefined;
 		return !!(required && passed(after, rule) && passed(before, required[0]!) && passed(after, required[0]!) && before.versions.some(([tool]) => tool === required[1]) && after.versions.some(([tool]) => tool === required[1]));
 	}
 	const groups = [];
