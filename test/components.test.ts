@@ -100,6 +100,23 @@ test("doctor rejects an explicit component that cannot start", async (t) => {
     assert.equal((await resolveComponent(host, "verapdf")).usable, false);
     assert.equal(await doctorCli(["pdf"], host, () => { }), 1);
 });
+
+test("an intact managed Java inventory also needs a usable executable", async (t) => {
+    const host = await fixture(t);
+    await install(host, "java");
+    host.run = async () => ({ stdout: "", stderr: "Permission denied", code: null });
+    const java = await resolveComponent(host, "java");
+    assert.equal(java.inventory, "intact");
+    assert.equal(java.usable, false);
+});
+
+test("inventory detects extra files whose names match Object prototype properties", async (t) => {
+    const host = await fixture(t);
+    await install(host, "java");
+    const component = (await componentManifest(host)).find(c => c.id === "java")!;
+    await fs.writeFile(join(componentDirectory(host, component), "__proto__"), "unexpected file");
+    assert.equal((await resolveComponent(host, "java")).inventory, "damaged");
+});
 test("system Java below 17 cannot satisfy PDF checks", async (t) => {
  const host = await fixture(t), path = join(host.env.PATH!, host.platform === "win32" ? "java.exe" : "java");
     await fs.mkdir(dirname(path), { recursive: true });

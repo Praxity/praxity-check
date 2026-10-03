@@ -122,6 +122,27 @@ test("setup installs ZIP browser, Java and headless veraPDF fixtures and invento
     assert.equal((await doctor(host)).exitCode, 0);
     assert.deepEqual((await setup({ yes: true }, host)).installed, []);
 });
+test("managed Java validation on POSIX excludes inherited JVM options", async (t) => {
+    const { host } = await fixture(t, "linux", "x64");
+    await setup({ yes: true, selectors: ["pdf"] }, host);
+    host.env.JAVA_TOOL_OPTIONS = "-javaagent:unexpected.jar";
+    host.env.JAVA_OPTS = "-invalid-option";
+    const run = host.run;
+    host.run = async (file, args, env) => {
+        if (args.includes("--version")) return run(file, args, env);
+        if (env.JAVA_TOOL_OPTIONS || env.JAVA_OPTS) return { stdout: "", stderr: "Inherited JVM options", code: 2 };
+        return { stdout: JSON.stringify({ report: {
+            buildInformation: { releaseDetails: [{ id: "core", version: "1.30.2" }] },
+            jobs: [{ validationResult: [{ profileName: "PDF/UA-1 validation profile", jobEndStatus: "normal", compliant: true, details: { passedRules: 1, failedRules: 0, passedChecks: 1, failedChecks: 0 } }] }],
+            batchSummary: { totalJobs: 1, failedParsingJobs: 0, failedEncryptedJobs: 0, outOfMemory: 0, veraExceptions: 0, validationSummary: { failedJobCount: 0, totalJobCount: 1, successfulJobCount: 1, compliantPdfaCount: 1, nonCompliantPdfaCount: 0 } }
+        } }), stderr: "", code: 0 };
+    };
+    const result = await checkPdfAccessibility("fixture.pdf", { profile: "ua1" }, host);
+    assert.equal(result.machineStatus, "complete");
+    assert.equal(result.validator.machineCompliant, true);
+    assert.equal(result.evaluations[0]?.outcome, "passed");
+});
+
 test("offline setup verifies the same hashes and never calls the network", async (t) => {
     const { host, manifest, archiveBytes, root } = await fixture(t), offline = join(root, "offline archives");
     await fs.mkdir(offline);

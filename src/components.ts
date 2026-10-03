@@ -41,8 +41,8 @@ export function javaEnvironment(env: NodeJS.ProcessEnv, platform = process.platf
 }
 
 // Preserve main's validator policy: POSIX wrappers consume inherited JVM options.
-export function veraPdfEnvironment(env: NodeJS.ProcessEnv, platform: string): NodeJS.ProcessEnv {
- return platform === "win32" ? javaEnvironment(env, "win32") : env;
+export function veraPdfEnvironment(env: NodeJS.ProcessEnv, platform: string, directJava = false): NodeJS.ProcessEnv {
+ return platform === "win32" || directJava ? javaEnvironment(env, platform as NodeJS.Platform) : env;
 }
 
 
@@ -171,7 +171,7 @@ function filesystemFailure(error: unknown, path: string, source: ComponentResolu
 export async function fileInventory(root: string, fs: typeof nodeFs, path = nodePath) {
  const { join } = path;
  if ((await fs.lstat(root)).isSymbolicLink()) throw new Error("Component root is a symlink");
- const files: Record<string, string> = {};
+ const files: Record<string, string> = Object.create(null);
  async function walk(directory: string, prefix = "") {
   for (const name of (await fs.readdir(directory)).sort()) {
             if (!prefix && name === inventoryName)
@@ -299,7 +299,7 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
   // Validation obtains veraPDF's version from its JSON, so wrappers need no version command.
   if (!version && !(id === "verapdf" && options.probeVersion === false)) {
    const result = await host.run(probeTool, classpath ? veraPdfJavaArgs(classpath, ["--version"]) : ["--version"],
-    id === "verapdf" ? veraPdfEnvironment(host.env, host.platform) : javaEnvironment(host.env, host.platform as NodeJS.Platform));
+    id === "verapdf" ? veraPdfEnvironment(host.env, host.platform, !!classpath) : javaEnvironment(host.env, host.platform as NodeJS.Platform));
    const output = result.stdout + "\n" + result.stderr;
    version = id === "java" ? output.match(/Temurin-([\d.]+\+\d+)/)?.[1] ?? output.match(/(?:openjdk|java)\s+(?:version\s+)?"?([\d.]+(?:\+\d+)?)/i)?.[1] ?? null : id === "verapdf" ? output.match(/veraPDF\s+([\d.]+)/)?.[1] ?? null : output.match(/(?:Chromium|Chrome[^\r\n]*?)\s+([\d.]+)/)?.[1] ?? null;
    if (result.code !== 0 || !version) return { ...missing(inventory, path), source, version, reason: `${id} did not report a version successfully: ${output.trim() || `exit ${result.code}`}; checks not run. Run check setup ${component.checks.join(" ")}.` };
