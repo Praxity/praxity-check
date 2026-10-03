@@ -105,7 +105,7 @@ async function relocateJava(java, source, output, supplementalNotices) {
 	}
 	let libraries = new Map();
 	if (external.size) {
-		const { prepareHomebrewRuntime } = await import("./prepare-poppler.mjs");
+		const { prepareHomebrewRuntime } = await import("./prepare-homebrew-libraries.mjs");
 		libraries = await prepareHomebrewRuntime({ roots: [...external], output: join(output, "java-external"), prefix: "/opt/homebrew", executables: false, supplementalNotices });
 	}
 	for (const { path, loads, id } of binaries) {
