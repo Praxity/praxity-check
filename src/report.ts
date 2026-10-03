@@ -1,4 +1,5 @@
 import type { ImportedHtmlReview } from "./html-review.ts";
+import type { ComponentResolution } from "./components.ts";
 import { createHash } from "node:crypto";
 import packageJson from "../package.json" with { type: "json" };
 import type {
@@ -39,6 +40,7 @@ interface PageVerdict extends DiscoveredPage {
 }
 
 export interface AuditEnvironment {
+	components?: ComponentResolution[];
 	runtime: { name: "node"; version: string };
 	browser: { engine: "chromium"; version: string } | null;
 	viewport: { width: number; height: number } | null;

@@ -1,4 +1,5 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { componentHost, resolveComponent, type ComponentResolution } from "./components.ts";
 import {
 	altTextQuality,
 	audioAutoplay,
@@ -75,6 +76,13 @@ export async function auditHtml(
 	/** @internal Tests shorten the check deadline without changing production options. */
 	testOptions: { pageAuditTimeoutMs?: number } = {},
 ): Promise<HtmlAuditResult> {
+	const component = await resolveComponent(componentHost(), "browser");
+	if (!component.usable) {
+		const reason = component.reason!;
+		return { blockedRequests: [], environment: { browser: null, viewport: null, colorScheme: null, components: [component] },
+			pages: options.pages.map(page => ({ page, audited: false, triage: { ok: false, reason }, findings: [], notes: [reason],
+				untested: [{ type: "check", check: "page-audit", page: page.file, state: "initial", outcome: "untested", reason }] })) };
+	}
 	return withAuditBrowser(async (browser, blockedRequests) => ({
 		pages: await auditPages(browser, options.pages, blockedRequests, options.scenarios, options.auditOrigin, options.allowNetwork, testOptions.pageAuditTimeoutMs ?? PAGE_AUDIT_TIMEOUT_MS),
 		blockedRequests,
@@ -82,8 +90,9 @@ export async function auditHtml(
 			browser: { engine: "chromium", version: browser.version() },
 			viewport: VIEWPORT,
 			colorScheme: "light",
+			components: [{ ...component, version: browser.version() }],
 		},
-	}));
+	}), component);
 }
 
 /**
@@ -102,10 +111,13 @@ export async function withAuditContext<T>(
 	});
 }
 
-async function withAuditBrowser<T>(run: (browser: Browser, blockedRequests: BlockedRequest[]) => Promise<T>): Promise<T> {
+async function withAuditBrowser<T>(run: (browser: Browser, blockedRequests: BlockedRequest[]) => Promise<T>, selected?: ComponentResolution): Promise<T> {
+	const component = selected ?? await resolveComponent(componentHost(), "browser");
+	if (!component.usable) throw new Error(component.reason);
 	// Auditing author intent requires a browser that does not silently suppress
 	// autoplay before the 1.4.2 probe can observe it.
 	const browser = await chromium.launch({
+		executablePath: component.path!,
 		timeout: NAVIGATION_TIMEOUT_MS,
 		args: ["--autoplay-policy=no-user-gesture-required"],
 	});

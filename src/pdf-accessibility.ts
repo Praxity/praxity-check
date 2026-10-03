@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { javaEnvironment, veraPdfCommand } from "./components.ts";
+import { componentHost, windowsJavaPins, javaEnvironment, resolveComponent, veraPdfCommand, veraPdfJavaArgs, type ComponentHost } from "./components.ts";
 
 const exec = promisify(execFile);
 type Profile = "ua1" | "ua2";
@@ -109,13 +109,19 @@ async function run(tool: string, args: string[]): Promise<Evidence> {
 	}
 }
 
-export async function checkPdfAccessibility(snapshot: string, options: { profile: Profile; executable?: string }) {
+export async function checkPdfAccessibility(snapshot: string, options: { profile: Profile; executable?: string }, host: ComponentHost = componentHost()) {
 	const profile = options.profile;
 	if (profile !== "ua1" && profile !== "ua2") throw new Error("PDF/UA profile must be ua1 or ua2");
 	const args = ["--flavour", profile, "--format", "json", "--maxfailuresdisplayed", "-1", snapshot];
-	const command = veraPdfCommand(process.env, process.platform, options.executable, args);
-	const evidence = await run(command.tool, command.args);
+	const component = await resolveComponent(host, "verapdf", options.executable);
+	const java = component.classpath ? await resolveComponent(host, "java") : undefined;
+	const command = component.source === "setup" && component.classpath && java?.usable
+		? { tool: java.path!, args: veraPdfJavaArgs(component.classpath, args) }
+		: veraPdfCommand(host.env, host.platform as NodeJS.Platform, options.executable, args);
+	const evidence: Evidence = component.usable ? await run(command.tool, command.args)
+		: { tool: component.path ?? "verapdf", args, stdout: "", stderr: "", exitCode: null, error: `ENOENT: ${component.reason}` };
 	const output = { evidence: [evidence], machineStatus: "complete" as "complete" | "incomplete",
+		components: [component, ...(java ? [java] : [])],
 		validator: { name: "veraPDF", profile, version: undefined as string | undefined, machineCompliant: undefined as boolean | undefined, coverage: undefined as ReturnType<typeof parseVeraPdf>["coverage"] | undefined },
 		evaluations: [] as { rule: string; outcome: "passed" | "failed" | "untested"; reason: string }[], findings: [] as Finding[], needsReview: [] as Finding[] };
 	try {
@@ -123,6 +129,8 @@ export async function checkPdfAccessibility(snapshot: string, options: { profile
 		const result = parseVeraPdf(evidence.stdout, profile);
 		if (evidence.exitCode !== Number(!result.machineCompliant)) throw new Error("veraPDF exit code contradicts validation result");
 		output.validator.version = result.version;
+		component.version = result.version;
+		component.pinned = result.version === windowsJavaPins.veraPDF.version;
 		output.validator.machineCompliant = result.machineCompliant;
 		output.findings = result.findings;
 		output.validator.coverage = result.coverage;

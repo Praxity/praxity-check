@@ -343,3 +343,19 @@ node scripts/pdf-engine-parity.mjs --output /path/to/diffs \
 
 The script writes JSON facts, word counts, print-review candidates, design spans,
 render differences and a Markdown summary. Its corpus sample is deterministic.
+
+## Check installed components
+
+Run `node src/cli.ts doctor` to inspect the HTML browser, Java and veraPDF.
+Use `doctor pdf` or `doctor html` to require only those checks, and `--json`
+for the same facts as JSON. Doctor exits 0 when the selected checks have usable
+components, otherwise 1. Each line records the location, version, pinned-version
+match, inventory status and source. Existing bundle launcher variables count as
+explicit selections. Java on PATH must be version 17 or newer.
+
+Setup-managed components live in `%LOCALAPPDATA%/Praxity/Check/components` on
+Windows, `~/Library/Application Support/Praxity Check/components` on macOS,
+and `$XDG_DATA_HOME/praxity-check/components` on Linux. Linux defaults to
+`~/.local/share/praxity-check/components`. `CHECK_COMPONENTS_DIR` overrides the
+folder. Each component version has its own folder and file-hash inventory.
+Changed, missing, extra or linked files invalidate that inventory.

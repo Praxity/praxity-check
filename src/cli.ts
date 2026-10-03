@@ -16,7 +16,10 @@ try {
 			pdf = !zip && (extname(target).toLowerCase() === ".pdf" || header.includes(Buffer.from("%PDF-")));
 		} finally { await file.close(); }
 	}
-	if (args[0] === "compare-pdf") {
+	if (args[0] === "doctor") {
+		const { doctorCli } = await import("./components.ts");
+		process.exitCode = await doctorCli(args.slice(1));
+	} else if (args[0] === "compare-pdf") {
 		const { pdfCompareCli } = await import("./pdf-compare.ts");
 		process.exitCode = await pdfCompareCli(args);
 	} else if (pdf && args[0] === "prepare-review") {
