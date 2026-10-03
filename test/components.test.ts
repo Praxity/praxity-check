@@ -2,21 +2,38 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, posix } from "node:path";
 import test from "node:test";
 import { checkPdfAccessibility } from "../src/pdf-accessibility.ts";
 import { componentHost, componentDirectory, componentManifest, componentsDirectory, doctorCli, resolveComponent, writeInventory, type ComponentHost, type ComponentId } from "../src/components.ts";
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, platform = process.platform as string, arch = process.arch as string) {
  const root = await fs.mkdtemp(join(tmpdir(), "check components "));
  t.after(() => fs.rm(root, { recursive: true, force: true }));
- return componentHost({ env: { CHECK_COMPONENTS_DIR: join(root, "components"), PATH: join(root, "system") }, home: root,
+ const foreignPosix = process.platform === "win32" && platform !== "win32";
+ const home = foreignPosix ? "/check-components" : root;
+ // Simulated POSIX paths have no drive letters. Only this adapter maps them to host files.
+ const files = foreignPosix ? new Proxy(fs, { get(target, key: keyof typeof fs) {
+  const fn = target[key];
+  if (typeof fn !== "function") return fn;
+  return (...args: unknown[]) => {
+   const map = (value: unknown) => typeof value === "string" && value.startsWith(home)
+    ? join(root, ...posix.relative(home, value).split("/")) : value;
+   args[0] = map(args[0]);
+   if (["rename", "copyFile", "symlink"].includes(key)) args[1] = map(args[1]);
+   return (fn as Function)(...args);
+  };
+ } }) : fs;
+ const host = componentHost({ env: {}, platform, arch, home, fs: files,
+  ...(foreignPosix ? { path: posix } : {}),
   run: async (file, args) => ({ stdout: args.includes("-classpath") ? "veraPDF 1.30.2" : file.includes("java") ? "openjdk 17.0.20.1+1" : file.includes("verapdf") || file.endsWith(".jar") ? "veraPDF 1.30.2" : "Chromium 151.0.7922.34", stderr: "", code: 0 }) });
+ host.env = { CHECK_COMPONENTS_DIR: host.path.join(home, "components"), PATH: host.path.join(home, "system") };
+ return host;
 }
 async function install(host: ComponentHost, id: ComponentId) {
  const component = (await componentManifest(host)).find(item => item.id === id)!;
- const root = componentDirectory(host, component), path = join(root, component.entryPoint);
- await host.fs.mkdir(dirname(path), { recursive: true });
+ const root = componentDirectory(host, component), path = host.path.join(root, component.entryPoint);
+ await host.fs.mkdir(host.path.dirname(path), { recursive: true });
  await host.fs.writeFile(path, "fake runtime");
  await writeInventory(root, component, host);
  return path;
@@ -125,10 +142,9 @@ test("Temurin build numbers identify the pinned Java runtime", async t => {
 
 test("unsupported download targets still resolve explicit validators", async t => {
  for (const [platform, arch] of [["win32", "arm64"], ["freebsd", "x64"]]) {
-  const host = await fixture(t);
-  host.platform = platform!; host.arch = arch!;
-  const path = join(host.home, "verapdf-wrapper");
-  await fs.writeFile(path, "wrapper");
+  const host = await fixture(t, platform!, arch!);
+  const path = host.path.join(host.home, "verapdf-wrapper");
+  await host.fs.writeFile(path, "wrapper");
   const validator = await resolveComponent(host, "verapdf", path);
   assert.equal(validator.usable, true);
   assert.equal(validator.path, path);
@@ -139,37 +155,35 @@ test("unsupported download targets still resolve explicit validators", async t =
 });
 
 test("unsupported download targets support system lookup and doctor", async t => {
- const host = await fixture(t);
- host.platform = "freebsd"; host.arch = "x64";
- await fs.mkdir(host.env.PATH!, { recursive: true });
- for (const name of ["java", "verapdf"]) await fs.writeFile(join(host.env.PATH!, name), "system tool");
+ const host = await fixture(t, "freebsd", "x64");
+ await host.fs.mkdir(host.env.PATH!, { recursive: true });
+ for (const name of ["java", "verapdf"]) await host.fs.writeFile(host.path.join(host.env.PATH!, name), "system tool");
  const printed: string[] = [];
  assert.equal((await resolveComponent(host, "verapdf")).source, "system");
  assert.equal((await resolveComponent(host, "java")).usable, true);
  assert.equal(await doctorCli(["pdf", "--json"], host, text => printed.push(text)), 0);
  assert.equal(JSON.parse(printed[0]!).components.find((c: { id: string }) => c.id === "browser").usable, false);
  assert.equal(await doctorCli(["html"], host, () => {}), 1);
- const browser = join(host.home, "browser");
- await fs.writeFile(browser, "browser");
+ const browser = host.path.join(host.home, "browser");
+ await host.fs.writeFile(browser, "browser");
  assert.equal((await resolveComponent(host, "browser", browser)).usable, true);
 });
 
 test("Java overrides follow the active launcher precedence and skip empty variables", async t => {
  for (const platform of ["win32", "linux", "darwin"]) {
-  const host = await fixture(t);
-  host.platform = platform;
-  const good = join(host.home, "jdk", "bin", platform === "win32" ? "java.exe" : "java");
-  const old = join(host.home, "old-java");
-  await fs.mkdir(dirname(good), { recursive: true });
-  await fs.writeFile(good, "Java 17"); await fs.writeFile(old, "Java 11");
+  const host = await fixture(t, platform);
+  const good = host.path.join(host.home, "jdk", "bin", platform === "win32" ? "java.exe" : "java");
+  const old = host.path.join(host.home, "old-java");
+  await host.fs.mkdir(host.path.dirname(good), { recursive: true });
+  await host.fs.writeFile(good, "Java 17"); await host.fs.writeFile(old, "Java 11");
   host.run = async file => ({ stdout: file === old ? "openjdk 11.0.28" : "openjdk 17.0.20.1+1", stderr: "", code: 0 });
   const base = { ...host.env };
   const cases: [string, NodeJS.ProcessEnv, string, boolean][] = [
-   ["empty JAVACMD falls through to JAVA_HOME", { JAVACMD: "", JAVA_HOME: join(host.home, "jdk") }, good, true],
+   ["empty JAVACMD falls through to JAVA_HOME", { JAVACMD: "", JAVA_HOME: host.path.join(host.home, "jdk") }, good, true],
    ["empty VERAPDF_JAVA falls through to JAVACMD", { VERAPDF_JAVA: "", JAVACMD: good }, good, true],
-   ["JAVACMD beats JAVA_HOME", { JAVACMD: good, JAVA_HOME: join(host.home, "missing") }, good, true],
-   ["active old JAVACMD blocks JAVA_HOME", { JAVACMD: old, JAVA_HOME: join(host.home, "jdk") }, old, false],
-   ["VERAPDF_JAVA has platform precedence", { VERAPDF_JAVA: old, JAVACMD: good, JAVA_HOME: join(host.home, "jdk") }, platform === "win32" ? old : good, platform !== "win32"],
+   ["JAVACMD beats JAVA_HOME", { JAVACMD: good, JAVA_HOME: host.path.join(host.home, "missing") }, good, true],
+   ["active old JAVACMD blocks JAVA_HOME", { JAVACMD: old, JAVA_HOME: host.path.join(host.home, "jdk") }, old, false],
+   ["VERAPDF_JAVA has platform precedence", { VERAPDF_JAVA: old, JAVACMD: good, JAVA_HOME: host.path.join(host.home, "jdk") }, platform === "win32" ? old : good, platform !== "win32"],
    ["explicit Windows validator bypasses VERAPDF_JAVA", { VERAPDF: "wrapper", VERAPDF_JAVA: old, JAVACMD: good }, good, true],
   ];
   for (const [name, env, path, usable] of cases) await t.test(`${platform}: ${name}`, async () => {
@@ -178,9 +192,9 @@ test("Java overrides follow the active launcher precedence and skip empty variab
    assert.equal(java.path, path); assert.equal(java.usable, usable); assert.equal(java.source, "explicit");
   });
   await t.test(`${platform}: empty variables allow system Java`, async () => {
-   await fs.mkdir(base.PATH!, { recursive: true });
-   const system = join(base.PATH!, platform === "win32" ? "java.exe" : "java");
-   await fs.writeFile(system, "Java 17");
+   await host.fs.mkdir(base.PATH!, { recursive: true });
+   const system = host.path.join(base.PATH!, platform === "win32" ? "java.exe" : "java");
+   await host.fs.writeFile(system, "Java 17");
    host.env = { ...base, VERAPDF_JAVA: "", JAVACMD: "", JAVA_HOME: "" };
    assert.equal((await resolveComponent(host, "java")).source, "system");
   });

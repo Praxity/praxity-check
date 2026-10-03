@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
+import * as nodePath from "node:path";
 import { dirname, join, resolve } from "node:path";
 export const windowsJavaPins = Object.freeze({
 	java: {
@@ -91,12 +92,12 @@ export type ComponentId = "browser" | "java" | "verapdf";
 export type Archive = { url: string; sha256: string; size: number };
 export type Component = { id: ComponentId; version: string; purpose: string; license: string; checks: string[]; archives: Archive[]; entryPoint: string };
 export type ComponentResolution = { id: ComponentId; usable: boolean; source: "explicit" | "setup" | "system" | null; path: string | null; version: string | null; pinned: boolean | null; inventory: "intact" | "damaged" | "absent" | "unmanaged"; reason?: string; classpath?: string };
-export type ComponentHost = { env: NodeJS.ProcessEnv; platform: string; arch: string; home: string; fs: typeof nodeFs;
+export type ComponentHost = { env: NodeJS.ProcessEnv; platform: string; arch: string; home: string; cwd: string; path: typeof nodePath; fs: typeof nodeFs;
  run: (file: string, args: string[], env: NodeJS.ProcessEnv) => Promise<{ stdout: string; stderr: string; code: number | null }> };
 
 export function componentHost(overrides: Partial<ComponentHost> = {}): ComponentHost {
  const exec = promisify(execFile);
- return { env: process.env, platform: process.platform, arch: process.arch, home: homedir(), fs: nodeFs,
+ return { env: process.env, platform: process.platform, arch: process.arch, home: homedir(), cwd: process.cwd(), path: nodePath, fs: nodeFs,
   run: async (file, args, env) => {
    try { const result = await exec(file, args, { env, encoding: "utf8", timeout: 120_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true }); return { ...result, code: 0 }; }
    catch (error) { const e = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string }; return { stdout: e.stdout ?? "", stderr: e.stderr ?? e.message, code: typeof e.code === "number" ? e.code : null }; }
@@ -107,7 +108,8 @@ function variable(host: ComponentHost, key: string) {
  return host.platform === "win32" ? Object.entries(host.env).find(([name]) => name.toUpperCase() === key)?.[1] : host.env[key];
 }
 
-export function componentsDirectory(host: Pick<ComponentHost, "env" | "platform" | "home">): string {
+export function componentsDirectory(host: Pick<ComponentHost, "env" | "platform" | "home"> & Partial<Pick<ComponentHost, "path">>): string {
+ const { join, resolve } = host.path ?? nodePath;
  if (host.env.CHECK_COMPONENTS_DIR) return resolve(host.env.CHECK_COMPONENTS_DIR);
  if (host.platform === "win32") return join(host.env.LOCALAPPDATA ?? join(host.home, "AppData", "Local"), "Praxity", "Check", "components");
  if (host.platform === "darwin") return join(host.home, "Library", "Application Support", "Praxity Check", "components");
@@ -149,12 +151,13 @@ export async function componentManifest(host: Pick<ComponentHost, "platform" | "
  return (await componentDefinitions(host)).map(component => ({ ...component, archives: archives[component.id] }));
 }
 
-export function componentDirectory(host: Pick<ComponentHost, "env" | "platform" | "home">, component: Pick<Component, "id" | "version">) {
- return join(componentsDirectory(host), component.id, component.version);
+export function componentDirectory(host: Pick<ComponentHost, "env" | "platform" | "home"> & Partial<Pick<ComponentHost, "path">>, component: Pick<Component, "id" | "version">) {
+ return (host.path ?? nodePath).join(componentsDirectory(host), component.id, component.version);
 }
 
 const inventoryName = ".inventory.json";
-export async function fileInventory(root: string, fs: typeof nodeFs) {
+export async function fileInventory(root: string, fs: typeof nodeFs, path = nodePath) {
+ const { join } = path;
  if ((await fs.lstat(root)).isSymbolicLink()) throw new Error("Component root is a symlink");
  const files: Record<string, string> = {};
  async function walk(directory: string, prefix = "") {
@@ -172,19 +175,21 @@ export async function fileInventory(root: string, fs: typeof nodeFs) {
 }
 
 export async function writeInventory(root: string, component: Component, host: ComponentHost) {
- const files = await fileInventory(root, host.fs);
+ const { join } = host.path;
+ const files = await fileInventory(root, host.fs, host.path);
  if (!files[component.entryPoint]) throw new Error(`Component entry point missing: ${component.entryPoint}`);
  await host.fs.writeFile(join(root, inventoryName), JSON.stringify({ schemaVersion: 1, id: component.id, version: component.version, platform: host.platform, arch: host.arch, files }, null, 2), { flag: "wx" });
 }
 
 export async function checkInventory(root: string, component: Component, host: ComponentHost): Promise<"intact" | "damaged" | "absent"> {
+ const { join } = host.path;
  let raw: string;
  try { if ((await host.fs.lstat(join(root, inventoryName))).isSymbolicLink()) return "damaged"; raw = await host.fs.readFile(join(root, inventoryName), "utf8"); }
  catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return "absent"; throw e; }
  try {
   const record = JSON.parse(raw);
   if (record.schemaVersion !== 1 || record.id !== component.id || record.version !== component.version || record.platform !== host.platform || record.arch !== host.arch) return "damaged";
-  const actual = await fileInventory(root, host.fs);
+  const actual = await fileInventory(root, host.fs, host.path);
   if (!actual[component.entryPoint] || !record.files || typeof record.files !== "object") return "damaged";
   const keys = Object.keys(actual).sort();
   return JSON.stringify(keys) === JSON.stringify(Object.keys(record.files).sort()) && keys.every(key => actual[key] === record.files[key]) ? "intact" : "damaged";
@@ -192,6 +197,7 @@ export async function checkInventory(root: string, component: Component, host: C
 }
 
 async function executablePath(host: ComponentHost, value: string) {
+ const { join, resolve } = host.path;
  const candidates = /[\\/]/.test(value) ? [resolve(value)] : (variable(host, "PATH") ?? "").split(host.platform === "win32" ? ";" : ":").filter(Boolean).flatMap(dir => host.platform === "win32" ? [join(dir, value), ...[".exe", ".cmd", ".bat"].map(ext => join(dir, value + ext))] : [join(dir, value)]);
  for (const path of candidates) {
   try { if ((await host.fs.stat(path)).isFile()) return path; }
@@ -201,6 +207,7 @@ async function executablePath(host: ComponentHost, value: string) {
 }
 
 export async function resolveComponent(host: ComponentHost, id: ComponentId, explicit?: string, options: { probeVersion?: boolean } = {}): Promise<ComponentResolution> {
+ const { join, resolve } = host.path;
  const component = (await componentDefinitions(host)).find(item => item.id === id)!;
  const missing = (inventory: ComponentResolution["inventory"] = "absent", path: string | null = null): ComponentResolution => ({ id, usable: false, source: null, path, version: null, pinned: null, inventory, reason: `${id === "browser" ? "Browser" : id === "java" ? "Java 17 or newer" : "veraPDF"} is ${inventory === "damaged" ? "damaged" : "not installed"}; checks not run. Run check setup ${component.checks.join(" ")}.` });
  let value = explicit;
