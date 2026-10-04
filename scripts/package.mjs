@@ -88,7 +88,11 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 					if (/\.(?:exe|com|dll|node|so(?:\.\d+)*|dylib|a|lib)$/i.test(name) || /^(?:node|nodejs)$/i.test(basename(path)) || bytes.subarray(0, 2).toString() === "MZ" || ["7f454c46", "feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"].includes(magic) || ["!<arch>\n", "!<thin>\n"].includes(bytes.subarray(0, 8).toString())) throw new Error(`Portable artifact contains a native binary: ${relative(output, path)}`);
 					const script = /\.(?:[cm]?js|ts|sh|bash|cmd|bat|ps1|vbs)$/i.test(name) || bytes.subarray(0, 2).toString() === "#!";
 					if (script && bytes.includes(13)) {
-						bytes = Buffer.from(bytes.toString("utf8").replace(/\r\n?/g, "\n"));
+						// Rewriting is only safe for UTF-8 text. NUL bytes catch UTF-16 without a BOM, which decodes as valid UTF-8.
+						let text;
+						try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { text = undefined; }
+						if (text === undefined || bytes.includes(0)) throw new Error(`Portable artifact contains a script with CRLF line endings that is not UTF-8: ${relative(output, path).split(/[\\/]/).join("/")}`);
+						bytes = Buffer.from(text.replace(/\r\n?/g, "\n"));
 						await writeFile(path, bytes);
 					}
 					await chmod(path, bytes.subarray(0, 2).toString() === "#!" ? 0o755 : 0o644);

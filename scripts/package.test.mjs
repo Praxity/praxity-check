@@ -400,6 +400,18 @@ test("portable builds reject native extensions, Node names and executable signat
 	}
 });
 
+test("portable builds normalize UTF-8 script line endings and refuse other encodings", async t => {
+	const root = await scratch(t), dependency = join(root, "dependency");
+	await mkdir(dependency);
+	await writeFile(join(dependency, "package.json"), JSON.stringify({ version: "1.0.0" }));
+	await writeFile(join(dependency, "run.js"), "console.log('é');\r\n");
+	const [first] = Object.keys(JSON.parse(await readFile(join(repository, "package.json"), "utf8")).dependencies);
+	const artifact = await packageArtifact({ portable: true, output: join(root, "artifact") }, () => { throw new Error("must not inspect Node"); }, async () => dependency);
+	assert.equal(await readFile(join(artifact, "node_modules", first, "run.js"), "utf8"), "console.log('é');\n");
+	await writeFile(join(dependency, "run.ps1"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Write-Host 'x'\r\n", "utf16le")]));
+	await assert.rejects(packageArtifact({ portable: true, output: join(root, "utf16") }, () => { throw new Error("must not inspect Node"); }, async () => dependency), /not UTF-8: node_modules\/.*run\.ps1/);
+});
+
 test("portable build excludes Playwright's optional native macOS test watcher", async t => {
 	const root = await scratch(t), dependency = join(root, "dependency"), playwright = join(root, "playwright");
 	await mkdir(dependency); await mkdir(playwright);
