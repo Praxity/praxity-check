@@ -256,6 +256,21 @@ been removed.
 hashes describe the package contents; run `doctor` to check installed components.
 Test the artifact on its build platform and architecture.
 
+For a portable build that runs on a Node runtime supplied by the host:
+
+```sh
+node scripts/package.mjs --portable --output /new/path/praxity-check
+node /new/path/praxity-check/lib/cli.js --help
+```
+
+This mode includes compiled JavaScript, production dependencies, PDFium wasm,
+the skill and all notices. It omits Node and launchers. `package.json` retains
+the required Node range; the CLI rejects older runtimes before handling input.
+`inventory.json` hashes every payload file except itself. The payload is shared
+across macOS, Linux and Windows. Playwright's optional macOS test-runner watcher
+is excluded, and packaging rejects native binaries. Optional components still
+require consent through `node lib/cli.js setup`.
+
 ### Compare PDF engines during development
 
 The development oracle uses native Poppler. It is excluded from the distributable.

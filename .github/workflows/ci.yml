@@ -206,3 +206,70 @@ jobs:
           export CHECK_NODE_DIST="$RUNNER_TEMP/check-node"
           export CHECK_ARTIFACT="$artifact"
           corepack pnpm test:package
+      - name: Build, extract and prove the portable archive with only the runner Node on PATH
+        shell: bash
+        run: |
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')
+          name="praxity-check-$version"
+          mkdir "$RUNNER_TEMP/portable-build" "$RUNNER_TEMP/portable-extracted" "$RUNNER_TEMP/portable-node" "$RUNNER_TEMP/portable-clean"
+          cp "$(command -v node)" "$RUNNER_TEMP/portable-node/node"
+          cp bench/wcag/focus-indicator-removed/clean.html "$RUNNER_TEMP/portable-clean/"
+          node scripts/package.mjs --portable --output "$RUNNER_TEMP/portable-build/$name"
+          cd "$RUNNER_TEMP/portable-build"
+          find "$name" -type f | LC_ALL=C sort > "$RUNNER_TEMP/portable-files.txt"
+          tar -czf "$RUNNER_TEMP/check-portable.tar.gz" -T "$RUNNER_TEMP/portable-files.txt"
+          tar -xzf "$RUNNER_TEMP/check-portable.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/portable-extracted"
+          cd "$GITHUB_WORKSPACE"
+          artifact="$RUNNER_TEMP/portable-extracted"
+          test ! -e "$artifact/runtime"
+          test ! -e "$artifact/bin"
+          export CHECK_COMPONENTS_DIR="$RUNNER_TEMP/portable-components"
+          unset JAVA_HOME JAVACMD VERAPDF VERAPDF_JAVA VERAPDF_CLASSPATH PLAYWRIGHT_BROWSERS_PATH PLAYWRIGHT_HOST_PLATFORM_OVERRIDE
+          unset npm_config_playwright_browsers_path npm_package_config_playwright_browsers_path
+          export PATH="$RUNNER_TEMP/portable-node"
+          expect_exit() {
+            label="$1"
+            expected="$2"
+            shift 2
+            code=0
+            "$@" || code=$?
+            echo "$label exit code: $code" >&2
+            test "$code" -eq "$expected"
+          }
+          expect_exit help 0 node "$artifact/lib/cli.js" --help
+          expect_exit setup 0 node "$artifact/lib/cli.js" setup --yes pdf html
+          expect_exit doctor 0 node "$artifact/lib/cli.js" doctor --json > "$RUNNER_TEMP/portable-doctor.json"
+          expect_exit PDF 1 node "$artifact/lib/cli.js" check test/fixtures/pdf-facts.pdf --checks accessibility --tier deterministic --json "$RUNNER_TEMP/portable-pdf.json"
+          expect_exit HTML 0 node "$artifact/lib/cli.js" check "$RUNNER_TEMP/portable-clean" --min-confidence medium --json "$RUNNER_TEMP/portable-html.json"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, lstatSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const read = name => JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/${name}`, 'utf8'));
+          const directory = `${process.env.RUNNER_TEMP}/portable-extracted`;
+          const inventory = JSON.parse(readFileSync(`${directory}/inventory.json`, 'utf8'));
+          for (const file of inventory.files) {
+            const path = `${directory}/${file.path}`;
+            assert.ok(lstatSync(path).isFile(), file.path);
+            const bytes = readFileSync(path);
+            assert.equal(bytes.length, file.size, file.path);
+            assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256, file.path);
+          }
+          const doctor = read('portable-doctor.json');
+          assert.deepEqual(doctor.components.map(component => component.id).sort(), ['browser', 'java', 'verapdf']);
+          for (const component of doctor.components) {
+            assert.equal(component.usable, true, component.id);
+            assert.equal(component.source, 'setup', component.id);
+            assert.equal(component.pinned, true, component.id);
+            assert.equal(component.inventory, 'intact', component.id);
+          }
+          const pdf = read('portable-pdf.json');
+          assert.equal(pdf.machineStatus, 'complete');
+          assert.equal(pdf.pdfuaValidation.coverage.status, 'complete');
+          assert.ok(pdf.findings.length > 0);
+          const html = read('portable-html.json');
+          assert.equal(html.pages.length, 1);
+          assert.ok(html.pages.every(page => page.audited));
+          assert.equal(html.environment.components[0].source, 'setup');
+          assert.equal(html.counts.confidence.high, 0);
+          NODE

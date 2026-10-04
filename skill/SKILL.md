@@ -5,9 +5,11 @@ description: Check HTML course folders, ZIP exports or PDFs for access barriers.
 
 # Check a course and retain evidence
 
-Use the artifact's absolute launcher path, `bin/praxity-check.cmd` on Windows
-or `bin/praxity-check` on macOS. The launcher uses bundled Node and dependencies.
-Quote paths with spaces. Run `--help` for options.
+Through the Praxity command, use `praxity check` as the command prefix.
+For a standalone installation, use `praxity-check` or its absolute launcher
+path. The examples below use the standalone prefix; replace it with
+`praxity check` when running through Praxity. Quote paths with spaces.
+Run `--help` for options.
 
 Check a folder, ZIP export, or PDF and write a JSON report outside the input:
 
