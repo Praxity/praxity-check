@@ -8,7 +8,7 @@ import test from "node:test";
 import { checkPdfAccessibility } from "../src/pdf-accessibility.ts";
 import { componentHost, componentDirectory, componentManifest, componentsDirectory, doctorCli, resolveComponent, writeInventory, veraPdfCommand, type ComponentHost, type ComponentId } from "../src/components.ts";
 
-async function fixture(t: test.TestContext, platform = process.platform as string, arch = process.arch as string) {
+async function fixture(t: test.TestContext, platform = process.platform as string, arch = platform === "win32" ? "x64" : process.arch as string) {
  const root = await fs.mkdtemp(join(tmpdir(), "check components "));
  t.after(() => fs.rm(root, { recursive: true, force: true }));
  const foreignPosix = process.platform === "win32" && platform !== "win32";
@@ -519,6 +519,35 @@ test("POSIX Java home and OS discovery match veraPDF 1.30.2", async t => {
   assert.equal(java.path, ibm); assert.equal(java.source, "system"); assert.equal(java.usable, true);
   host.run = async () => ({ stdout: "", stderr: "discovery failed", code: 1 });
   assert.equal((await resolveComponent(host, "java")).usable, false);
+ });
+});
+
+test("macOS Java discovery preserves damaged managed inventory", async t => {
+ for (const state of ["available", "missing", "failed probe"]) await t.test(state, async t => {
+  const host = await fixture(t, "darwin", "arm64");
+  const managed = await install(host, "java");
+  await install(host, "verapdf");
+  await host.fs.writeFile(managed, "changed managed Java");
+  const system = host.path.join(host.home, "bin", "java");
+  if (state !== "missing") {
+   await host.fs.mkdir(host.path.dirname(system), { recursive: true });
+   await host.fs.writeFile(system, "system Java", { mode: 0o700 });
+  }
+  if (state === "failed probe") {
+   const run = host.run;
+   host.run = (file, args, env) => file === system
+    ? Promise.resolve({ stdout: "", stderr: "Cannot start system Java", code: 2 }) : run(file, args, env);
+  }
+  const java = await resolveComponent(host, "java");
+  assert.equal(java.inventory, "damaged");
+  assert.equal(java.usable, state === "available");
+  assert.equal(java.path, system);
+  if (state === "available") assert.equal(java.source, "system");
+  const printed: string[] = [];
+  assert.equal(await doctorCli(["pdf", "--json"], host, text => printed.push(text)), state === "available" ? 0 : 1);
+  const reported = JSON.parse(printed[0]!).components.find((component: { id: string }) => component.id === "java");
+  assert.equal(reported.inventory, "damaged");
+  assert.equal(reported.usable, state === "available");
  });
 });
 

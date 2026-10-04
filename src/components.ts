@@ -347,7 +347,7 @@ export async function resolveComponent(host: ComponentHost, id: ComponentId, exp
    const value = await posixJavaHome(host, home), path = await executablePath(host, value);
    const result = path ? await found(path, "system", "unmanaged") : missing("unmanaged", value);
    if (discoveryDiagnostic) result.reason = [discoveryDiagnostic, result.reason].filter(Boolean).join(" ");
-   return result;
+   return { ...result, ...(inventory === "damaged" ? { inventory } : {}) };
   }
  }
  if (id === "java" || id === "verapdf") {
