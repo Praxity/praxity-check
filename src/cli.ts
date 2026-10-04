@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-import { open, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
+import { requireNode } from "./node-runtime.ts";
 
 const args = process.argv.slice(2);
 try {
+	const metadata = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+	requireNode(process.version, metadata.engines.node);
 	const target = args[1] ? resolve(args[1]) : undefined;
 	let pdf = false;
 	if (["check", "prepare-review"].includes(args[0] ?? "") && target && !["--help", "-h"].includes(args[1]!) && (await stat(target)).isFile()) {

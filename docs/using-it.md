@@ -19,6 +19,12 @@ node /absolute/path/to/praxity-check/src/cli.ts check ./dist --min-confidence me
 Add `--json report.json` for the complete result set. Run with `--help` for all
 options.
 
+In a standalone installation, use `praxity-check` in place of
+`node /absolute/path/to/praxity-check/src/cli.ts`. Through the Praxity command,
+use `praxity check`, for example `praxity check check ./dist`.
+Portable builds use the host's Node with `node /path/to/check/lib/cli.js`.
+The same command prefix applies to `setup`, `doctor` and `prepare-review`.
+
 During `check` and `prepare-review`, ordinary web requests outside the local
 check server, including WebSocket connections, are blocked by default. Only
 run it on packages you trust; Praxity Check is not designed to contain deliberately

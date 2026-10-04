@@ -308,3 +308,112 @@ test("package excludes hermetic browser caches inside npm dependencies", async t
 	assert.ok(manifest.files.some(file => file.path.endsWith("/index.js")));
 	assert.ok(!manifest.files.some(file => file.path.includes(".local-browsers") || file.path.endsWith("/browser.exe")));
 });
+
+test("portable build relocates, retains its inventory and runs with only external Node on PATH", async t => {
+	const root = await scratch(t);
+	const staged = join(root, "staged");
+	execFileSync(process.execPath, [fileURLToPath(new URL("package.mjs", import.meta.url)), "--portable", "--output", staged]);
+	const artifact = join(root, "portable Check with spaces");
+	await rename(staged, artifact);
+	for (const path of ["runtime", "bin"]) await assert.rejects(lstat(join(artifact, path)), /ENOENT/);
+	const metadata = JSON.parse(await readFile(join(artifact, "package.json"), "utf8"));
+	assert.deepEqual(metadata.engines, { node: ">=22.18" });
+	const capabilities = JSON.parse(await readFile(join(artifact, "capabilities.json"), "utf8"));
+	assert.equal(capabilities.entryPoint, "lib/cli.js");
+	assert.equal(capabilities.nodeRequirement, ">=22.18");
+	assert.equal(capabilities.platform, "any");
+	assert.equal(capabilities.arch, "any");
+	assert.equal(capabilities.node, null);
+	const inventory = JSON.parse(await readFile(join(artifact, "inventory.json"), "utf8"));
+	const paths = [];
+	async function walk(directory) {
+		for (const name of await readdir(directory)) {
+			const path = join(directory, name), stat = await lstat(path);
+			if (stat.isDirectory()) await walk(path);
+			else {
+				assert.ok(stat.isFile(), path);
+				if (path !== join(artifact, "inventory.json")) paths.push(path.slice(artifact.length + 1).replaceAll("\\", "/"));
+				const bytes = await readFile(path);
+				assert.doesNotMatch(name, /^(?:node|nodejs)(?:\.exe)?$|\.(?:exe|dll|node|so|dylib)$/i);
+				assert.notEqual(bytes.subarray(0, 2).toString(), "MZ");
+				assert.notEqual(bytes.subarray(0, 4).toString("hex"), "7f454c46");
+				if (/\.(?:[cm]?js|ts|sh|bash|cmd|bat|ps1|vbs)$/i.test(name)) assert.ok(!bytes.includes(13), path);
+				if (!windows) assert.equal(stat.mode & 0o777, bytes.subarray(0, 2).toString() === "#!" ? 0o755 : 0o644, path);
+			}
+		}
+	}
+	await walk(artifact);
+	assert.deepEqual(inventory.files.map(file => file.path).sort(), paths.sort());
+	for (const file of inventory.files) {
+		const bytes = await readFile(join(artifact, file.path));
+		assert.equal(file.size, bytes.length, file.path);
+		assert.equal(file.sha256, createHash("sha256").update(bytes).digest("hex"), file.path);
+	}
+	for (const path of ["skill/SKILL.md", "NOTICE.md", "THIRD-PARTY-NOTICES.md", "LICENSE", "LICENSING.md", "node_modules/@embedpdf/pdfium/dist/pdfium.wasm", "notices/pdfium/FreeType-FTL.TXT", "notices/pdfium/PDFium-LICENSE", "notices/pdfium/OpenJPEG-LICENSE", "node_modules/playwright-core/ThirdPartyNotices.txt"]) assert.ok(paths.includes(path), path);
+	assert.doesNotMatch(await readFile(join(artifact, "THIRD-PARTY-NOTICES.md"), "utf8"), /runtime\/LICENSE/);
+	assert.match(await readFile(join(artifact, "skill/SKILL.md"), "utf8"), /praxity check/);
+	const external = join(root, "external Node");
+	await mkdir(external);
+	const node = join(external, windows ? "node.exe" : "node");
+	await cp(process.execPath, node);
+	await chmod(node, 0o755);
+	const env = { PATH: external, HOME: root, USERPROFILE: root, TEMP: root, TMP: root, TMPDIR: root, SystemRoot: process.env.SystemRoot, CHECK_COMPONENTS_DIR: join(root, "absent components") };
+	const cli = join(artifact, "lib/cli.js");
+	const invoke = args => spawnSync(node, [cli, ...args], { cwd: root, env, encoding: "utf8" });
+	const help = invoke(["--help"]);
+	assert.equal(help.status, 0, help.stderr || String(help.error));
+	assert.match(help.stdout, /compare-pdf/);
+	const doctor = invoke(["doctor", "--json"]);
+	assert.equal(doctor.status, 1, doctor.stderr);
+	assert.equal(JSON.parse(doctor.stdout).exitCode, 1);
+	assert.deepEqual(JSON.parse(doctor.stdout).components.map(component => component.id).sort(), ["browser", "java", "verapdf"]);
+	const setup = invoke(["setup", "--list"]);
+	assert.equal(setup.status, 0, setup.stderr);
+	await assert.rejects(lstat(env.CHECK_COMPONENTS_DIR), /ENOENT/);
+	const reportPath = join(root, "pdf.json");
+	const pdf = invoke(["check", join(repository, "test/fixtures/pdf-facts.pdf"), "--pdfua", "off", "--json", reportPath]);
+	assert.equal(pdf.status, 1, pdf.stderr);
+	const report = JSON.parse(await readFile(reportPath, "utf8"));
+	assert.equal(report.machineStatus, "complete");
+	assert.deepEqual(report.facts.words.map(word => word.text), ["PDF", "facts", "fixture"]);
+	// Simulate an older runtime at the process boundary, before any CLI input is read.
+	const oldVersion = join(root, "old-version.cjs");
+	await writeFile(oldVersion, 'Object.defineProperty(process, "version", { value: "v22.17.0" });\n');
+	await rm(join(artifact, "node_modules"), { recursive: true });
+	for (const args of [["--help"], ["check", join(root, "missing.pdf")], ["setup", "--yes"]]) {
+		const old = spawnSync(node, ["--require", oldVersion, cli, ...args], { cwd: root, env, encoding: "utf8" });
+		assert.equal(old.status, 2);
+		assert.equal(old.stdout, "");
+		assert.equal(old.stderr.trim(), "praxity-check: Check requires Node >=22.18; received v22.17.0");
+	}
+});
+
+test("portable builds reject native extensions, Node names and executable signatures", async t => {
+	const root = await scratch(t);
+	const signatures = [["addon.node", "fixture"], ["node", "fixture"], ["helper.exe", "fixture"], ["helper", "MZfixture"], ["elf", Buffer.from("7f454c460000", "hex")], ["macho", Buffer.from("cffaedfe0000", "hex")], ["fat", Buffer.from("cafebabe0000", "hex")], ["archive", "!<arch>\nfixture"]];
+	for (const [index, [name, bytes]] of signatures.entries()) {
+		const dependency = join(root, `dependency-${index}`);
+		await mkdir(dependency);
+		await writeFile(join(dependency, "package.json"), JSON.stringify({ version: "1.0.0" }));
+		await writeFile(join(dependency, name), bytes);
+		await assert.rejects(packageArtifact({ portable: true, output: join(root, `artifact-${index}`) }, () => { throw new Error("must not inspect Node"); }, async () => dependency), /Portable artifact contains a native binary/);
+	}
+});
+
+test("portable build excludes Playwright's optional native macOS test watcher", async t => {
+	const root = await scratch(t), dependency = join(root, "dependency"), playwright = join(root, "playwright");
+	await mkdir(dependency); await mkdir(playwright);
+	await writeFile(join(dependency, "package.json"), JSON.stringify({ version: "1.0.0" }));
+	await writeFile(join(playwright, "package.json"), JSON.stringify({ version: "1.0.0", optionalDependencies: { fsevents: "2.3.2" } }));
+	const artifact = await packageArtifact({ portable: true, output: join(root, "artifact") }, () => { throw new Error("must not inspect Node"); }, async name => {
+		assert.notEqual(name, "fsevents", "native watcher must not be resolved on any build platform");
+		return name === "playwright" ? playwright : dependency;
+	});
+	await assert.rejects(lstat(join(artifact, "node_modules/fsevents")), /ENOENT/);
+});
+
+test("portable packaging refuses bundled Node and target options", async t => {
+	const root = await scratch(t);
+	for (const values of [{ node: root }, { platform: "darwin" }, { arch: "arm64" }]) await assert.rejects(packageArtifact({ portable: true, output: join(root, "artifact"), ...values }), /omit --node, --platform and --arch/);
+	await assert.rejects(lstat(join(root, "artifact")), /ENOENT/);
+});
