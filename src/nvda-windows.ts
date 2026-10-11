@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { createServer, type Server as NetworkServer } from "node:net";
 import { chromium, type Browser } from "playwright";
 import { isAuditServerUrl } from "./serve.ts";
+import { blockWebRtc, OFFLINE_WEBRTC_ARG } from "./audit-network.ts";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
@@ -540,7 +541,7 @@ export class ChromiumJourneyBrowser implements JourneyBrowser {
 			const address = deny.address();
 			if (!address || typeof address === "string") throw new Error("network deny proxy did not bind");
 			const allowed = new URL(url);
-			networkArgs.push(`--proxy-server=http://127.0.0.1:${address.port}`, `--proxy-bypass-list=<-loopback>;${allowed.protocol}//${allowed.hostname}:${allowed.port || (allowed.protocol === "https:" ? "443" : "80")}`, "--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+			networkArgs.push(`--proxy-server=http://127.0.0.1:${address.port}`, `--proxy-bypass-list=<-loopback>;${allowed.protocol}//${allowed.hostname}:${allowed.port || (allowed.protocol === "https:" ? "443" : "80")}`, OFFLINE_WEBRTC_ARG);
 		}
 		this.#profile = await mkdtemp(join(tmpdir(), "praxity-nvda-browser-"));
 		await writeFile(join(this.#profile, "First Run"), "");
@@ -610,13 +611,7 @@ export class ChromiumJourneyBrowser implements JourneyBrowser {
 		if (!this.#options.allowNetwork) {
 			// Chromium's UDP policy switch does not suppress STUN consistently.
 			// These trusted-content journeys have no RTC use in offline mode.
-			await context.addInitScript(() => {
-				for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection"]) {
-					Object.defineProperty(globalThis, name, { configurable: false, writable: false, value: class {
-						constructor() { throw new Error("WebRTC is blocked by Praxity Check; use --allow-network"); }
-					} });
-				}
-			});
+			await context.addInitScript(blockWebRtc);
 			await context.route("**/*", async (route) => {
 				if (isAuditServerUrl(route.request().url(), new URL(url).origin)) await route.continue();
 				else await route.abort("blockedbyclient");

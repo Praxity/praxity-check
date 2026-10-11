@@ -26,9 +26,19 @@ Portable builds use the host's Node with `node /path/to/check/lib/cli.js`.
 The same command prefix applies to `setup`, `doctor` and `prepare-review`.
 
 During `check` and `prepare-review`, ordinary web requests outside the local
-check server, including WebSocket connections, are blocked by default. Only
+check server, including redirects and worker WebSocket connections, are blocked
+by default. Blocked attempts appear in the report's `network.blockedRequests`.
+WebRTC peer connections are denied too. Their evidence names the requesting
+page URL with method `RTCPEERCONNECTION` and resource type `webrtc`; ICE
+credentials are not collected. Use `--allow-network` for a course that needs them.
+If browser events cannot identify a tunneled request, its evidence records the
+destination as `connect://host:port` with method `CONNECT`, without a path. Only
 run it on packages you trust; Praxity Check is not designed to contain deliberately
 malicious HTML.
+
+Each initial page audit starts with fresh browser storage, so progress or
+preferences saved by a previous page cannot hide defects. Declared states also
+start fresh, and keep their storage across their own actions and navigation.
 
 ## Confidence threshold
 

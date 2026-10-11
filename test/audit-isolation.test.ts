@@ -1,0 +1,346 @@
+import assert from "node:assert/strict";
+import { createSocket } from "node:dgram";
+import { createServer, request as httpRequest, type RequestListener } from "node:http";
+import { createConnection, createServer as createTcpServer, type AddressInfo, type Socket } from "node:net";
+import { test, type TestContext } from "node:test";
+import { chromium } from "playwright";
+import { auditHtml, withAuditContext } from "../src/html-audit.ts";
+import { blockAuditNetwork } from "../src/audit-network.ts";
+import type { BlockedRequest } from "../src/report.ts";
+import { observeMdns } from "./fixtures/mdns-listener.ts";
+
+async function listener(t: TestContext, handler: RequestListener) {
+	const server = createServer(handler);
+	const sockets = new Set<Socket>();
+	server.on("connection", socket => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+	await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+	t.after(async () => {
+		for (const socket of sockets) socket.destroy();
+		await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+	});
+	return { server, origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+
+test("a closing page's delayed CONNECT cannot mark the next clean page unchecked", async t => {
+	let outsideConnections = 0;
+	const outside = await listener(t, (_, response) => response.end());
+	outside.server.on("connection", () => outsideConnections++);
+	const target = outside.origin.replace("http:", "https:") + "/late";
+	let deliver: (() => void) | undefined;
+	let heldResolve!: () => void;
+	const held = new Promise<void>(resolve => { heldResolve = resolve; });
+	const sockets = new Set<Socket>();
+	let proxy: URL;
+	const relay = createTcpServer(socket => {
+		sockets.add(socket);
+		socket.on("error", () => {}); // Closing a denied tunnel can reset its peer.
+		let bytes = Buffer.alloc(0);
+		socket.on("data", chunk => {
+			bytes = Buffer.concat([bytes, chunk]);
+			if (!bytes.includes("\r\n\r\n")) return;
+			socket.removeAllListeners("data");
+			assert.match(bytes.toString(), new RegExp(`^CONNECT 127\\.0\\.0\\.1:${new URL(target).port} `));
+			const upstream = createConnection({ host: proxy.hostname, port: Number(proxy.port) });
+			sockets.add(upstream);
+			upstream.on("error", () => {});
+			upstream.on("data", data => socket.write(data));
+			upstream.on("end", () => socket.end());
+			upstream.once("connect", () => {
+				// Keep the final header bytes in flight until the next page navigates.
+				upstream.write(bytes.subarray(0, -2), () => {
+					deliver = () => { if (!upstream.destroyed) upstream.write(bytes.subarray(-2)); };
+					heldResolve();
+				});
+			});
+		});
+	});
+	await new Promise<void>(resolve => relay.listen(0, "127.0.0.1", resolve));
+	t.after(async () => {
+		for (const socket of sockets) socket.destroy();
+		await new Promise<void>((resolve, reject) => relay.close(error => error ? reject(error) : resolve()));
+	});
+	let closed = false;
+	const local = await listener(t, (request, response) => {
+		if (request.url === "/clean.html") {
+			assert.equal(closed, true);
+			assert.ok(deliver, "the first page did not issue its delayed request");
+			deliver();
+		}
+		response.end(`<html lang="en"><title>${request.url}</title><main><h1>Local</h1>${request.url === "/clean.html" ? '<img id="defect" src="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'20\' height=\'20\'/%3E">' : ""}</main></html>`);
+	});
+	const launch = chromium.launch.bind(chromium);
+	t.mock.method(chromium, "launch", async (options: NonNullable<Parameters<typeof chromium.launch>[0]>) => {
+		const args = options.args ?? [];
+		const proxyArg = args.find(arg => arg.startsWith("--proxy-server="))!;
+		proxy = new URL(proxyArg.slice("--proxy-server=".length));
+		const browser = await launch({ ...options, args: args.map(arg => arg === proxyArg
+			? `--proxy-server=http://127.0.0.1:${(relay.address() as AddressInfo).port}` : arg) });
+		const newContext = browser.newContext.bind(browser);
+		browser.newContext = async options => {
+			if (options?.proxy) proxy = new URL(options.proxy.server);
+			const context = await newContext(options?.proxy ? { ...options, proxy: { ...options.proxy,
+				server: `http://127.0.0.1:${(relay.address() as AddressInfo).port}` } } : options);
+			context.on("page", page => {
+				const close = page.close.bind(page);
+				page.close = async options => {
+					if (page.url().endsWith("/late.html")) {
+						await page.evaluate(url => {
+							new SharedWorker(URL.createObjectURL(new Blob([`fetch(${JSON.stringify(url)}).catch(()=>{})`], { type: "text/javascript" })));
+						}, target);
+						let timer: NodeJS.Timeout;
+						try { await Promise.race([held, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("delayed CONNECT did not reach the proxy")), 5_000); })]); }
+						finally { clearTimeout(timer!); }
+						await close(options);
+						closed = true;
+					} else await close(options);
+				};
+			});
+			return context;
+		};
+		return browser;
+	});
+	const result = await auditHtml({ pages: ["late.html", "clean.html"].map(file => ({ file, url: `${local.origin}/${file}` })),
+		scenarios: [], auditOrigin: local.origin, allowNetwork: false });
+	assert.equal(outsideConnections, 0);
+	assert.equal(result.pages[1]!.audited, true, result.pages[1]!.triage.reason);
+	assert.ok(result.pages[1]!.findings.some(finding => finding.rule === "axe:image-alt" && finding.selector === "img#defect"));
+});
+
+for (const allowNetwork of [false, true]) {
+	test(`TURN username cannot leave an offline page, network permission ${allowNetwork}`, async t => {
+		const udp = createSocket("udp4");
+		const packets: Buffer[] = [];
+		udp.on("message", (message, remote) => {
+			packets.push(message);
+			if (message.readUInt16BE(0) !== 3 || message.includes(Buffer.from("secret-"))) return;
+			const attribute = (type: number, value: Buffer) => {
+				const header = Buffer.alloc(4);
+				header.writeUInt16BE(type); header.writeUInt16BE(value.length, 2);
+				return Buffer.concat([header, value, Buffer.alloc((4 - value.length % 4) % 4)]);
+			};
+			const attributes = Buffer.concat([
+				attribute(9, Buffer.from([0, 0, 4, 1, ...Buffer.from("Unauthorized")])),
+				attribute(0x14, Buffer.from("r")), attribute(0x15, Buffer.from("n0nce")),
+			]);
+			const header = Buffer.alloc(20);
+			header.writeUInt16BE(0x113); header.writeUInt16BE(attributes.length, 2);
+			message.copy(header, 4, 4, 20);
+			udp.send(Buffer.concat([header, attributes]), remote.port, remote.address);
+		});
+		await new Promise<void>(resolve => udp.bind(0, "127.0.0.1", resolve));
+		t.after(() => new Promise<void>(resolve => udp.close(resolve)));
+		const port = udp.address().port;
+		const local = await listener(t, (_, response) => response.end(`<html lang="en"><title>webrtc</title><main><h1>WebRTC</h1><script>
+			const pc = new RTCPeerConnection({iceServers:[{urls:'stun:127.0.0.1:${port}'},{urls:'turn:127.0.0.1:${port}?transport=udp',username:'secret-webrtc-course-answer-key',credential:'x'}]});
+			pc.createDataChannel('x');pc.createOffer().then(offer=>pc.setLocalDescription(offer));
+		</script></main></html>`));
+		const result = await auditHtml({ pages: [{ file: "a.html", url: `${local.origin}/a.html` }], scenarios: [], auditOrigin: local.origin, allowNetwork });
+		if (allowNetwork) {
+			assert.ok(packets.some(packet => packet.includes(Buffer.from("secret-webrtc-course-answer-key"))));
+			assert.deepEqual(result.blockedRequests, []);
+		} else {
+			assert.equal(packets.length, 0);
+			assert.deepEqual(result.blockedRequests, [{ url: `${local.origin}/a.html`, method: "RTCPEERCONNECTION", resourceType: "webrtc" }]);
+			assert.equal(result.pages[0]!.audited, false);
+		}
+	});
+}
+
+for (const closeImmediately of [false, true]) {
+	test(`a same-origin popup preserves its opener's audit, immediately closed ${closeImmediately}`, async t => {
+		const hits: string[] = [];
+		const local = await listener(t, (request, response) => {
+			hits.push(request.url!);
+			response.end(`<html lang="en"><title>Popup</title><main><h1>Popup</h1>${request.url === "/a.html" ? `<script>const popup=window.open('/glossary.html');${closeImmediately ? "popup.close();" : ""}</script>` : ""}</main></html>`);
+		});
+		const result = await auditHtml({ pages: [{ file: "a.html", url: `${local.origin}/a.html` }], scenarios: [], auditOrigin: local.origin, allowNetwork: false });
+		assert.equal(result.pages[0]!.audited, true);
+		assert.deepEqual(result.blockedRequests, []);
+		if (!closeImmediately) assert.ok(hits.includes("/glossary.html"));
+	});
+}
+
+for (const variant of ["child frame", "popup", "data channel", "mDNS host candidates"]) {
+	test(`offline WebRTC blocks and records ${variant} without UDP or mDNS activity`, async t => {
+		const mdns = await observeMdns();
+		t.after(() => mdns.close());
+		const udp = createSocket("udp4");
+		let packets = 0;
+		udp.on("message", () => packets++);
+		await new Promise<void>(resolve => udp.bind(0, "127.0.0.1", resolve));
+		t.after(() => new Promise<void>(resolve => udp.close(resolve)));
+		const script = `<script>
+			window.rtcResult = { blocked: false, candidates: 0, channels: 0 };
+			try {
+				const pc = new RTCPeerConnection(${variant === "mDNS host candidates" ? "{}" : `{iceServers:[{urls:'stun:127.0.0.1:${udp.address().port}'}]}`});
+				pc.onicecandidate = event => { if (event.candidate) window.rtcResult.candidates++; };
+				pc.createDataChannel('offline-probe'); window.rtcResult.channels++;
+				pc.createOffer().then(offer => pc.setLocalDescription(offer));
+			} catch (error) { window.rtcResult.blocked = String(error).includes('WebRTC is blocked by Praxity Check'); }
+		</script>`;
+		const local = await listener(t, (request, response) => response.end(`<html lang="en"><title>RTC</title><main><h1>RTC</h1>${request.url === "/rtc.html" ? script : variant === "child frame" ? '<iframe src="/rtc.html"></iframe>' : '<script>window.open("/rtc.html")</script>'}</main></html>`));
+		await withAuditContext({ auditOrigin: local.origin, allowNetwork: false }, async (context, blocked) => {
+			const page = await context.newPage();
+			let target;
+			if (variant === "popup") {
+				const opened = context.waitForEvent("page");
+				await page.goto(local.origin);
+				target = await opened;
+				await target.waitForLoadState();
+			} else if (variant === "child frame") {
+				await page.goto(local.origin);
+				target = page.frames().find(frame => frame.url() === `${local.origin}/rtc.html`)!;
+			} else { await page.goto(`${local.origin}/rtc.html`); target = page; }
+			assert.deepEqual(await target.evaluate(() => (window as any).rtcResult), { blocked: true, candidates: 0, channels: 0 });
+			assert.deepEqual(blocked, [{ url: `${local.origin}/rtc.html`, method: "RTCPEERCONNECTION", resourceType: "webrtc" }]);
+		});
+		assert.equal(packets, 0);
+		assert.deepEqual(mdns.names, []);
+		assert.equal(mdns.controls, 2);
+	});
+}
+
+test("closed worker sockets cannot erase a later shared worker's blocked fetch", async t => {
+	let outsideConnections = 0;
+	const outside = await listener(t, (_, response) => response.end());
+	outside.server.on("connection", () => outsideConnections++);
+	const endpoint = outside.origin.slice("http://".length);
+	const scripts: Record<string, string> = {
+		"/a.html": `new Worker(URL.createObjectURL(new Blob(["for(let i=0;i<20;i++){const s=new WebSocket('wss://${endpoint}/arm'+i);s.close()}"],{type:'text/javascript'})))`,
+		"/b.html": `new SharedWorker(URL.createObjectURL(new Blob(["fetch('https://${endpoint}/lesson.json').catch(()=>{})"],{type:'text/javascript'})))`,
+	};
+	const local = await listener(t, (request, response) => response.end(`<html lang="en"><title>Shell</title><main><h1>Shell</h1><script>${scripts[request.url!] ?? ""}</script>${request.url === "/b.html" ? '<img src="x.png">' : ""}</main></html>`));
+	for (const files of [["b.html"], ["a.html", "b.html"]]) {
+		const result = await auditHtml({ pages: files.map(file => ({ file, url: `${local.origin}/${file}` })), scenarios: [], auditOrigin: local.origin, allowNetwork: false });
+		const page = result.pages.find(page => page.page.file === "b.html")!;
+		assert.equal(page.audited, false);
+		assert.match(page.triage.reason!, /Check blocked 1 request\./);
+		assert.ok(result.blockedRequests.some(request => request.url === `connect://${endpoint}` && request.method === "CONNECT"));
+	}
+	assert.equal(outsideConnections, 0);
+});
+
+test("both WebRTC constructor names deny attempts from a child frame", async t => {
+	const local = await listener(t, (request, response) => response.end(request.url === "/" ? '<title>RTC</title><iframe src="/frame"></iframe>' : '<title>RTC frame</title>'));
+	await withAuditContext({ auditOrigin: local.origin, allowNetwork: false }, async (context, blocked) => {
+		const page = await context.newPage();
+		await page.goto(local.origin);
+		const frame = page.frames().find(frame => frame.url() === `${local.origin}/frame`)!;
+		const messages = await frame.evaluate(() => {
+			Reflect.set(globalThis, "__praxityBlockedRtc", async () => {});
+			Reflect.set(globalThis, "RTCPeerConnection", class {});
+			return ["RTCPeerConnection", "webkitRTCPeerConnection"].map(name => {
+				try { new (globalThis as any)[name](); return "allowed"; }
+				catch (error) { return (error as Error).message; }
+			});
+		});
+		for (const message of messages) assert.match(message, /WebRTC is blocked by Praxity Check/);
+		assert.deepEqual(blocked, Array.from({ length: 2 }, () => ({ url: `${local.origin}/frame`, method: "RTCPEERCONNECTION", resourceType: "webrtc" })));
+	});
+});
+
+test("a live target's protocol failure preserves an unchecked page instead of crashing", async t => {
+	const launch = chromium.launch.bind(chromium);
+	const originalLaunch = chromium.launch;
+	t.after(() => { chromium.launch = originalLaunch; });
+	chromium.launch = async options => {
+		const browser = await launch(options);
+		const newContext = browser.newContext.bind(browser);
+		browser.newContext = async options => {
+			const context = await newContext(options);
+			context.newCDPSession = async () => { throw new Error("probe protocol unavailable"); };
+			return context;
+		};
+		return browser;
+	};
+	const local = await listener(t, (_, response) => response.end('<title>Live</title><main><h1>Live</h1></main>'));
+	const result = await auditHtml({ pages: [{ file: "a.html", url: `${local.origin}/a.html` }], scenarios: [], auditOrigin: local.origin, allowNetwork: false });
+	assert.equal(result.pages[0]!.audited, false);
+	assert.match(result.pages[0]!.triage.reason!, /network observation failed: probe protocol unavailable/);
+	assert.ok(result.pages[0]!.untested!.some(item => item.check === "page-audit"));
+});
+
+async function connect(guard: Awaited<ReturnType<typeof blockAuditNetwork>>, endpoint: string) {
+	const proxy = new URL(guard.args[0]!.slice("--proxy-server=".length));
+	await new Promise<void>((resolve, reject) => {
+		const request = httpRequest({ hostname: proxy.hostname, port: proxy.port, method: "CONNECT", path: endpoint });
+		request.once("connect", (response, socket) => {
+			socket.destroy();
+			if (response.statusCode === 403) resolve();
+			else reject(new Error(`CONNECT returned ${response.statusCode}`));
+		});
+		request.once("error", reject); request.end();
+	});
+}
+
+test("closed page and state guards cannot change a new context's proxy entry", async t => {
+	const blocked: BlockedRequest[] = [];
+	const previousPage = await blockAuditNetwork("http://127.0.0.1:4321", blocked);
+	t.after(() => previousPage.close());
+	previousPage.record({ url: "wss://127.0.0.1:9876/closed", method: "WEBSOCKET", resourceType: "websocket" });
+	await previousPage.close();
+	const currentState = await blockAuditNetwork("http://127.0.0.1:4321", blocked);
+	t.after(() => currentState.close());
+	await connect(currentState, "127.0.0.1:9876");
+	previousPage.record({ url: "wss://127.0.0.1:9876/late", method: "WEBSOCKET", resourceType: "websocket" });
+	previousPage.record({ url: "http://127.0.0.1:9876/late", method: "GET", resourceType: "fetch" }, false);
+	previousPage.fail("late observation error");
+	assert.deepEqual(previousPage.errors, []);
+	assert.deepEqual(blocked, [{ url: "connect://127.0.0.1:9876", method: "CONNECT", resourceType: "other" }]);
+	currentState.record({ url: "https://127.0.0.1:9876/lesson", method: "GET", resourceType: "fetch" });
+	await currentState.close();
+	const nextContext = await blockAuditNetwork("http://127.0.0.1:4321", blocked);
+	t.after(() => nextContext.close());
+	await connect(nextContext, "127.0.0.1:9876");
+	currentState.record({ url: "https://127.0.0.1:9876/late", method: "GET", resourceType: "fetch" });
+	assert.deepEqual(blocked, [
+		{ url: "https://127.0.0.1:9876/lesson", method: "GET", resourceType: "fetch" },
+		{ url: "connect://127.0.0.1:9876", method: "CONNECT", resourceType: "other" },
+	]);
+});
+
+for (const partial of ["", "GET http://127.0.0.1:9876/late HTTP/1.1\r\n", "CONNECT 127.0.0.1:9876 HTTP/1.1\r\n"]) {
+	test(`context close retires an unfinished proxy connection ${JSON.stringify(partial)}`, async t => {
+		const blocked: BlockedRequest[] = [];
+		const guard = await blockAuditNetwork("http://127.0.0.1:4321", blocked);
+		t.after(() => guard.close());
+		const proxy = new URL(guard.args[0]!.slice("--proxy-server=".length));
+		const socket = createConnection({ host: proxy.hostname, port: Number(proxy.port) });
+		t.after(() => socket.destroy());
+		socket.on("error", () => {});
+		const closed = new Promise<void>(resolve => socket.once("close", resolve));
+		await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
+		if (partial) await new Promise<void>(resolve => socket.write(partial, () => resolve()));
+		await guard.close();
+		let timer: NodeJS.Timeout;
+		try { await Promise.race([closed, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("old proxy connection remained open")), 5_000); })]); }
+		finally { clearTimeout(timer!); }
+		assert.deepEqual(blocked, []);
+		const nextContext = await blockAuditNetwork("http://127.0.0.1:4321", blocked);
+		t.after(() => nextContext.close());
+		await connect(nextContext, "127.0.0.1:9876");
+		assert.deepEqual(blocked, [{ url: "connect://127.0.0.1:9876", method: "CONNECT", resourceType: "other" }]);
+	});
+}
+
+test("every proxy attempt counts even when a browser-only socket never reaches the wire", async t => {
+	const blocked: BlockedRequest[] = [];
+	const guard = await blockAuditNetwork("http://127.0.0.1:4321", blocked);
+	t.after(() => guard.close());
+	for (let i = 0; i < 20; i++) guard.record({ url: `wss://127.0.0.1:9876/closed${i}`, method: "WEBSOCKET", resourceType: "websocket" });
+	await connect(guard, "127.0.0.1:9876");
+	await connect(guard, "127.0.0.1:9876");
+	assert.equal(blocked.length, 2);
+});
+
+test("the deny proxy survives an origin-form request line", async t => {
+	const blocked: BlockedRequest[] = [];
+	const guard = await blockAuditNetwork("http://127.0.0.1:4321", blocked);
+	t.after(() => guard.close());
+	const proxy = new URL(guard.args[0]!.slice("--proxy-server=".length));
+	await assert.rejects(new Promise<void>((resolve, reject) => {
+		const request = httpRequest({ hostname: proxy.hostname, port: proxy.port, path: "/" });
+		request.once("response", () => resolve()); request.once("error", reject); request.end();
+	}), { code: "ECONNRESET" });
+	assert.deepEqual(blocked, [{ url: "/", method: "GET", resourceType: "other" }]);
+});
