@@ -24,7 +24,7 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 	const record = (request: BlockedRequest, expectProxy = true) => {
 		const existing = expectProxy ? proxyPending.get(key(request))?.shift() : undefined;
 		if (existing) {
-			if (existing.resourceType === "other") Object.assign(existing, request);
+			Object.assign(existing, request);
 		} else {
 			blocked.push(request);
 			if (expectProxy) remember(browserPending, request);

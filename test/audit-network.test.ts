@@ -50,6 +50,25 @@ for (const [url, destination] of [["ws://127.0.0.1/worker", "127.0.0.1:80"], ["w
 	}
 }
 
+test("browser evidence overrides a redirect hint from an earlier request to the same URL", async (t) => {
+	const blocked: BlockedRequest[] = [];
+	const guard = await blockAuditNetwork("http://127.0.0.1:4321", blocked);
+	t.after(() => guard.close());
+	const target = "http://127.0.0.1:9876/shared";
+	guard.redirect("http://127.0.0.1:4321/redirect", 302, target, "fetch");
+	const proxy = new URL(guard.args[0]!.slice("--proxy-server=".length));
+	await assert.rejects(new Promise<void>((resolve, reject) => {
+		const request = httpRequest({ hostname: proxy.hostname, port: proxy.port, path: target });
+		request.once("response", () => resolve());
+		request.setTimeout(5000, () => request.destroy(new Error("proxy did not finish")));
+		request.once("error", reject);
+		request.end();
+	}), { code: "ECONNRESET" });
+	const evidence = { url: target, method: "GET", resourceType: "image" };
+	guard.record(evidence);
+	assert.deepEqual(blocked, [evidence]);
+});
+
 for (const transport of ["fetch", "redirect", "worker"] as const) {
 	test(`repeated blocked ${transport} requests retain each initial page's triage evidence`, async (t) => {
 		let connections = 0;
