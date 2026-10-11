@@ -239,6 +239,19 @@ async function createAuditContext(
 	context.setDefaultTimeout(ACTION_TIMEOUT_MS);
 	context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
 	if (guard) {
+		const observeRedirects = async (page: Page) => {
+			const session = await context.newCDPSession(page);
+			// Chromium can omit Playwright's request/response events when a redirected
+			// fetch fails before its next interception. The protocol still reports it.
+			session.on("Network.requestWillBeSent", ({ redirectResponse, type }) => {
+				if (!redirectResponse) return;
+				const location = Object.entries(redirectResponse.headers as Record<string, string>)
+					.find(([name]) => name.toLowerCase() === "location")?.[1];
+				guard.redirect(redirectResponse.url, redirectResponse.status, location, type?.toLowerCase() ?? "other");
+			});
+			return { enabled: session.send("Network.enable") };
+		};
+		const observedPages = new WeakMap<Page, ReturnType<typeof observeRedirects>>();
 		context.on("page", (page) => page.on("websocket", (socket) => {
 			if (isAuditServerUrl(socket.url(), auditOrigin)) return;
 			guard.record({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" });
@@ -255,7 +268,12 @@ async function createAuditContext(
 		await context.route("**/*", async (route) => {
 			const request = route.request();
 			if (isAuditServerUrl(request.url(), auditOrigin)) {
+				const page = request.frame().page();
+				if (!observedPages.has(page)) observedPages.set(page, observeRedirects(page));
+				const observation = await observedPages.get(page);
 				await route.continue();
+				// Network.enable can wait for a paused navigation to resume.
+				await observation!.enabled;
 				return;
 			}
 			await route.abort("blockedbyclient");

@@ -183,6 +183,28 @@ test("a POST redirect drops the body and blocks the GET destination, excluding i
 	});
 });
 
+test("a same-origin child frame retains fetch redirect evidence", async (t) => {
+	let connections = 0;
+	const outside = await listener(t, (_, response) => response.end());
+	outside.server.on("connection", () => connections++);
+	const target = `${outside.origin}/private`;
+	const local = await listener(t, (request, response) => {
+		if (request.url === "/redirect") response.writeHead(302, { location: target });
+		response.end(request.url === "/" ? '<title>Local</title><iframe src="/frame"></iframe>' : "<title>Child</title>");
+	});
+	await withAuditContext({ auditOrigin: local.origin, allowNetwork: false }, async (context, blocked) => {
+		const page = await context.newPage();
+		await page.goto(local.origin);
+		const frame = page.frames().find(frame => frame.url() === `${local.origin}/frame`)!;
+		const result = await frame.evaluate(async () => {
+			try { return await (await fetch("/redirect")).text(); } catch { return "blocked"; }
+		});
+		assert.equal(result, "blocked");
+		assert.equal(connections, 0);
+		assert.deepEqual(blocked, [{ url: target, method: "GET", resourceType: "fetch" }]);
+	});
+});
+
 test("manual and malformed redirects do not create blocked-request evidence", async (t) => {
 	let hits = 0;
 	const outside = await listener(t, (_, response) => { hits++; response.end(); });
