@@ -41,8 +41,11 @@ preferences saved by a previous page cannot hide defects. Declared states also
 start fresh, and keep their storage across their own actions and navigation.
 Initial audits show what a new visitor reaches. A Guided player can send several
 input files to its first slide; when their final URLs match, report notes flag
-the shared destination. Those inputs do not establish coverage of distinct
-slides. Use declared states with explicit navigation to audit later content.
+the shared destination. Each repeated input has an untested `distinct-destination`
+evaluation with that reason. It contributes to "Checks not run" and "Pages not
+checked", and does not increase the "Checked" page count. Its observed findings
+remain in the report and declared states still run. Use explicit scenario
+navigation to audit later content. The initial scan follows the learner's view.
 
 ## Confidence threshold
 
