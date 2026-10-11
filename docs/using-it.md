@@ -29,7 +29,7 @@ During `check` and `prepare-review`, ordinary web requests outside the local
 check server, including redirects and worker WebSocket connections, are blocked
 by default. Blocked attempts appear in the report's `network.blockedRequests`.
 If browser events cannot identify a tunneled request, its evidence records the
-destination host and port with method `CONNECT`, without a path. Only
+destination as `connect://host:port` with method `CONNECT`, without a path. Only
 run it on packages you trust; Praxity Check is not designed to contain deliberately
 malicious HTML.
 

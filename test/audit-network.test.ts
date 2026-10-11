@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { createServer, type RequestListener } from "node:http";
+import { createServer, request as httpRequest, type RequestListener } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { test, type TestContext } from "node:test";
 import { withAuditContext } from "../src/html-audit.ts";
+import { blockAuditNetwork } from "../src/audit-network.ts";
+import type { BlockedRequest } from "../src/report.ts";
 
 async function listener(t: TestContext, handler: RequestListener) {
 	const server = createServer(handler);
@@ -17,6 +19,35 @@ async function listener(t: TestContext, handler: RequestListener) {
 		await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 	});
 	return { server, origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+
+for (const [url, destination] of [["ws://127.0.0.1/worker", "127.0.0.1:80"], ["wss://127.0.0.1/worker", "127.0.0.1:443"]]) {
+	for (const timing of ["before", "after"]) {
+		test(`${url} retains full evidence when the browser event arrives ${timing} CONNECT`, async (t) => {
+			const blocked: BlockedRequest[] = [];
+			const guard = await blockAuditNetwork("http://127.0.0.1:4321", blocked);
+			t.after(() => guard.close());
+			const evidence = { url: url!, method: "WEBSOCKET", resourceType: "websocket" };
+			if (timing === "before") guard.record(evidence);
+			const proxy = new URL(guard.args[0]!.slice("--proxy-server=".length));
+			await new Promise<void>((resolve, reject) => {
+				const request = httpRequest({ hostname: proxy.hostname, port: proxy.port, method: "CONNECT", path: destination });
+				request.once("connect", (response, socket) => {
+					socket.destroy();
+					if (response.statusCode === 403) resolve();
+					else reject(new Error(`CONNECT returned ${response.statusCode}`));
+				});
+				request.setTimeout(5000, () => request.destroy(new Error("CONNECT did not finish")));
+				request.once("error", reject);
+				request.end();
+			});
+			if (timing === "after") {
+				assert.deepEqual(blocked, [{ url: `connect://${destination}`, method: "CONNECT", resourceType: "other" }]);
+				guard.record(evidence);
+			}
+			assert.deepEqual(blocked, [evidence]);
+		});
+	}
 }
 
 for (const allowNetwork of [false, true]) {
