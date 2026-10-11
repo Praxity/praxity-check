@@ -54,6 +54,8 @@ export interface HtmlAuditResult {
  * context lifetimes and time limits; probe restoration keeps its locality in
  * checks.ts. Returns page results, blocked requests and the browser version,
  * viewport and colour scheme.
+ * Each initial page and declared state has fresh storage. Storage persists
+ * across navigation within that page or state's checks and actions.
  *
  * A failed check retains earlier check results and records unchecked coverage.
  * The 60s limit covers checks only, after settling, triage and title retrieval.
@@ -310,7 +312,7 @@ async function auditPages(
 	timeoutMs: number,
 	guard: AuditNetworkGuard | undefined,
 ): Promise<PageAudit[]> {
-	const context = await createAuditContext(browser, auditOrigin, guard);
+	let context: BrowserContext | undefined = await createAuditContext(browser, auditOrigin, guard);
 	const audits: PageAudit[] = [];
 	try {
 		for (const discoveredPage of pages) {
@@ -322,8 +324,10 @@ async function auditPages(
 			audits.push(audit);
 			let page: Page | undefined;
 			try {
-				let phase = "page creation";
+				let phase = "context creation";
 				try {
+					context ??= await createAuditContext(browser, auditOrigin, guard);
+					phase = "page creation";
 					page = await context.newPage();
 					phase = "navigation";
 					const response = await page.goto(discoveredPage.url, {
@@ -408,13 +412,19 @@ async function auditPages(
 				} catch (error) {
 					audit.notes.push(`page cleanup failed on ${discoveredPage.file}: ${error instanceof Error ? error.message : String(error)}`);
 				}
+				try {
+					await context?.close();
+				} catch (error) {
+					audit.notes.push(`initial context cleanup failed on ${discoveredPage.file}: ${error instanceof Error ? error.message : String(error)}`);
+				}
+				context = undefined;
 			}
 		}
 	} finally {
 		try {
-			await context.close();
+			await context?.close();
 		} catch (error) {
-			// Keep cleanup evidence with the last page; it applies to the shared context.
+			// The context remains unused when discovery is empty.
 			audits.at(-1)?.notes.push(`initial context cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}

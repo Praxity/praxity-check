@@ -33,6 +33,10 @@ destination as `connect://host:port` with method `CONNECT`, without a path. Only
 run it on packages you trust; Praxity Check is not designed to contain deliberately
 malicious HTML.
 
+Each initial page audit starts with fresh browser storage, so progress or
+preferences saved by a previous page cannot hide defects. Declared states also
+start fresh, and keep their storage across their own actions and navigation.
+
 ## Confidence threshold
 
 `--min-confidence high|medium|low` (default `high`) controls both what the
