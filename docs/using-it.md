@@ -28,6 +28,9 @@ The same command prefix applies to `setup`, `doctor` and `prepare-review`.
 During `check` and `prepare-review`, ordinary web requests outside the local
 check server, including redirects and worker WebSocket connections, are blocked
 by default. Blocked attempts appear in the report's `network.blockedRequests`.
+WebRTC peer connections are denied too. Their evidence names the requesting
+page URL with method `RTCPEERCONNECTION` and resource type `webrtc`; ICE
+credentials are not collected. Use `--allow-network` for a course that needs them.
 If browser events cannot identify a tunneled request, its evidence records the
 destination as `connect://host:port` with method `CONNECT`, without a path. Only
 run it on packages you trust; Praxity Check is not designed to contain deliberately
