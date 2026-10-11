@@ -356,10 +356,10 @@ test("a scenario timeout keeps completed checks and continues to later states", 
 test("an initial page creation failure records the page and continues", async (t) => {
 	observeBrowser(t, (browser) => {
 		const newContext = browser.newContext.bind(browser);
+		let attempts = 0;
 		t.mock.method(browser, "newContext", async (options: Parameters<typeof browser.newContext>[0]) => {
 			const context = await newContext(options);
 			const newPage = context.newPage.bind(context);
-			let attempts = 0;
 			t.mock.method(context, "newPage", () => ++attempts === 1
 				? Promise.reject(new Error("page creation fixture failed")) : newPage());
 			return context;
@@ -421,6 +421,31 @@ for (const cleanup of ["page", "scenario context", "initial context"] as const) 
 		assert.match(result.pages.flatMap((page) => page.notes).join("\n"), new RegExp(`${cleanup} cleanup fixture failed`));
 	});
 }
+
+test("a later initial context failure records the page and continues", async (t) => {
+	observeBrowser(t, (browser) => {
+		const newContext = browser.newContext.bind(browser);
+		let attempts = 0;
+		t.mock.method(browser, "newContext", (options: Parameters<typeof browser.newContext>[0]) => ++attempts === 2
+			? Promise.reject(new Error("later initial context fixture failed")) : newContext(options));
+	});
+	const options = await fixture(t, {
+		"a-before.html": `${CONTENT}</main></body></html>`,
+		"b-failed.html": `${CONTENT}</main></body></html>`,
+		"c-after.html": `${CONTENT}</main></body></html>`,
+	});
+	const result = await auditHtml({ ...options, scenarios: [
+		{ id: "skipped", page: "b-failed.html", actions: [{ action: "waitFor", selector: "button" }] },
+	] });
+	for (const index of [0, 2]) {
+		assert.ok(result.pages[index]?.audited);
+		assert.ok(result.pages[index]?.findings.some(finding => finding.rule === "axe:image-alt"));
+	}
+	const failed = result.pages[1]!;
+	assert.equal(failed.audited, false);
+	assert.equal(failed.triage.reason, "context creation failed: later initial context fixture failed");
+	assert.deepEqual(failed.untested?.map(item => item.check), ["page-audit", "scenario:skipped"]);
+});
 
 test("initial context creation failure still rejects the audit", async (t) => {
 	observeBrowser(t, (browser) => {

@@ -30,8 +30,7 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 	const browserPending = new Map<string, { request: BlockedRequest; at: number }[]>();
 	const proxyPending = new Map<string, { request: BlockedRequest; at: number }[]>();
 	const errors: string[] = [];
-	let epoch = 0;
-	let blockedStart = 0;
+	let closing: Promise<void> | undefined;
 	const key = (request: BlockedRequest) => {
 		try {
 			if (request.method === "CONNECT" || request.method === "WEBSOCKET" || new URL(request.url).protocol === "https:") return `tunnel\n${authority(request.url)}`;
@@ -50,14 +49,15 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 			if (Date.now() - item.at <= EVIDENCE_WINDOW_MS) return item.request;
 		}
 	};
-	const record = (request: BlockedRequest, expectProxy = true, observedEpoch = epoch) => {
+	const record = (request: BlockedRequest, expectProxy = true) => {
+		if (closing) return;
 		if (!expectProxy) { blocked.push(request); return; }
-		if (observedEpoch !== epoch) return;
 		const existing = recent(proxyPending, request);
 		if (existing) Object.assign(existing, request);
 		else remember(browserPending, request);
 	};
 	const proxyRecord = (request: BlockedRequest) => {
+		if (closing) return;
 		// Every denied wire attempt owns an entry; browser metadata can never erase it.
 		if (redirects.has(request.url)) request.resourceType = redirects.get(request.url)!;
 		const browser = recent(browserPending, request);
@@ -65,22 +65,14 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 		blocked.push(request);
 		if (!browser) remember(proxyPending, request);
 	};
-	const redirect = (responseUrl: string, status: number, location: string | undefined, resourceType: string, observedEpoch = epoch) => {
-		if (observedEpoch !== epoch || ![301, 302, 303, 307, 308].includes(status) || !location) return;
+	const redirect = (responseUrl: string, status: number, location: string | undefined, resourceType: string) => {
+		if (closing || ![301, 302, 303, 307, 308].includes(status) || !location) return;
 		let target: URL;
 		try { target = new URL(location, responseUrl); }
 		catch { return; } // An invalid Location cannot produce an outbound request.
 		target.hash = "";
 		redirects.set(target.href, resourceType);
-		for (const item of blocked.slice(blockedStart)) if (item.url === target.href && item.resourceType === "other") item.resourceType = resourceType;
-	};
-	const scope = () => {
-		const observedEpoch = epoch;
-		return {
-			record: (request: BlockedRequest, expectProxy = true) => record(request, expectProxy, observedEpoch),
-			redirect: (url: string, status: number, location: string | undefined, type: string) => redirect(url, status, location, type, observedEpoch),
-			fail: (error: unknown) => { if (observedEpoch === epoch) errors.push(error instanceof Error ? error.message : String(error)); },
-		};
+		for (const item of blocked) if (item.url === target.href && item.resourceType === "other") item.resourceType = resourceType;
 	};
 	const server = createServer((request, response) => {
 		proxyRecord({ url: request.url!, method: request.method!, resourceType: "other" });
@@ -102,26 +94,26 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 	});
 	const websocket = new URL(origin);
 	websocket.protocol = origin.protocol === "https:" ? "wss:" : "ws:";
+	const proxy = {
+		server: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+		bypass: `<-loopback>,${origin.protocol}//${authority(origin.href)},${websocket.protocol}//${authority(websocket.href)}`,
+	};
 	return {
 		record,
 		redirect,
-		scope,
+		fail: (error: unknown) => { if (!closing) errors.push(error instanceof Error ? error.message : String(error)); },
 		errors,
-		reset: () => {
-			epoch++;
-			blockedStart = blocked.length;
-			browserPending.clear(); proxyPending.clear(); redirects.clear(); errors.length = 0;
-		},
+		proxy,
 		args: [
-			`--proxy-server=http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+			`--proxy-server=${proxy.server}`,
 			// Subtract Chromium's implicit loopback exemption before adding the exact origin.
-			`--proxy-bypass-list=<-loopback>;${origin.protocol}//${authority(origin.href)};${websocket.protocol}//${authority(websocket.href)}`,
+			`--proxy-bypass-list=${proxy.bypass.replaceAll(",", ";")}`,
 			OFFLINE_WEBRTC_ARG,
 		],
-		close: async () => {
+		close: () => closing ??= new Promise<void>((resolve, reject) => {
 			for (const socket of sockets) socket.destroy();
-			await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-		},
+			server.close(error => error ? reject(error) : resolve());
+		}),
 	};
 }
 

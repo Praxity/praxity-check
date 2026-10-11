@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext, type Page, type Request } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { componentHost, resolveComponent, type ComponentResolution } from "./components.ts";
 import {
 	altTextQuality,
@@ -28,7 +28,7 @@ import type { DiscoveredPage } from "./discover.ts";
 import type { AuditEnvironment, BlockedRequest, PageAudit } from "./report.ts";
 import { runScenarioActions, type Scenario } from "./scenarios.ts";
 import { isAuditServerUrl } from "./serve.ts";
-import { blockAuditNetwork, blockWebRtc, type AuditNetworkGuard } from "./audit-network.ts";
+import { blockAuditNetwork, blockWebRtc } from "./audit-network.ts";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const ACTION_TIMEOUT_MS = 10_000;
@@ -54,6 +54,8 @@ export interface HtmlAuditResult {
  * context lifetimes and time limits; probe restoration keeps its locality in
  * checks.ts. Returns page results, blocked requests and the browser version,
  * viewport and colour scheme.
+ * Each initial page and declared state has fresh storage. Storage persists
+ * across navigation within that page or state's checks and actions.
  *
  * A failed check retains earlier check results and records unchecked coverage.
  * The 60s limit covers checks only, after settling, triage and title retrieval.
@@ -84,8 +86,8 @@ export async function auditHtml(
 			pages: options.pages.map(page => ({ page, audited: false, triage: { ok: false, reason }, findings: [], notes: [reason],
 				untested: [{ type: "check", check: "page-audit", page: page.file, state: "initial", outcome: "untested", reason }] })) };
 	}
-	return withAuditBrowser(options, async (browser, blockedRequests, guard) => ({
-		pages: await auditPages(browser, options.pages, blockedRequests, options.scenarios, options.auditOrigin, testOptions.pageAuditTimeoutMs ?? PAGE_AUDIT_TIMEOUT_MS, guard),
+	return withAuditBrowser(options, async (browser, blockedRequests) => ({
+		pages: await auditPages(browser, options.pages, blockedRequests, options.scenarios, options.auditOrigin, testOptions.pageAuditTimeoutMs ?? PAGE_AUDIT_TIMEOUT_MS, options.allowNetwork),
 		blockedRequests,
 		environment: {
 			browser: { engine: "chromium", version: browser.version() },
@@ -106,17 +108,28 @@ export async function withAuditContext<T>(
 	options: Pick<HtmlAuditOptions, "auditOrigin" | "allowNetwork">,
 	run: (context: BrowserContext, blockedRequests: BlockedRequest[]) => Promise<T>,
 ): Promise<T> {
-	return withAuditBrowser(options, async (browser, blockedRequests, guard) => {
-		const context = await createAuditContext(browser, options.auditOrigin, guard);
-		const result = await run(context, blockedRequests);
-		if (guard?.errors.length) throw new Error(`network observation failed: ${guard.errors.join("; ")}`);
-		return result;
+	return withAuditBrowser(options, async (browser, blockedRequests) => {
+		const audit = await createAuditContext(browser, options.auditOrigin, options.allowNetwork, blockedRequests);
+		let failure: unknown;
+		let failed = false;
+		try {
+			const result = await run(audit.context, audit.blockedRequests);
+			if (audit.errors.length) throw new Error(`network observation failed: ${audit.errors.join("; ")}`);
+			return result;
+		} catch (error) { failed = true; failure = error; throw error; }
+		finally {
+			try { await audit.close(); }
+			catch (cleanup) {
+				if (failed) throw new AggregateError([failure, cleanup], "audit callback and cleanup failed");
+				throw cleanup;
+			}
+		}
 	});
 }
 
 async function withAuditBrowser<T>(
 	options: Pick<HtmlAuditOptions, "auditOrigin" | "allowNetwork">,
-	run: (browser: Browser, blockedRequests: BlockedRequest[], guard: AuditNetworkGuard | undefined) => Promise<T>,
+	run: (browser: Browser, blockedRequests: BlockedRequest[]) => Promise<T>,
 	selected?: ComponentResolution,
 ): Promise<T> {
 	const component = selected ?? await resolveComponent(componentHost(), "browser");
@@ -132,7 +145,7 @@ async function withAuditBrowser<T>(
 			timeout: NAVIGATION_TIMEOUT_MS,
 			args: ["--autoplay-policy=no-user-gesture-required", ...(guard?.args ?? [])],
 		});
-		return await run(browser, blockedRequests, guard);
+		return await run(browser, blockedRequests);
 	} finally {
 		// Preserve the CLI's outcome when browser cleanup fails.
 		await browser?.close().catch(() => {});
@@ -228,74 +241,88 @@ async function runChecks(page: Page, pageId: string, timeoutMs: number): Promise
 async function createAuditContext(
 	browser: Browser,
 	auditOrigin: string,
-	guard: AuditNetworkGuard | undefined,
+	allowNetwork: boolean,
+	allBlockedRequests: BlockedRequest[],
 ) {
-	// A fresh context has no registrations to clear; blocking service workers
-	// also prevents the package from installing one during the run (spec §4).
-	const context = await browser.newContext({
-		serviceWorkers: "block",
-		viewport: VIEWPORT,
-		colorScheme: "light",
-	});
-	await instrumentShadowRoots(context);
-	context.setDefaultTimeout(ACTION_TIMEOUT_MS);
-	context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-	if (guard) {
-		const contextObserver = guard.scope();
-		const observers = new WeakMap<Page, ReturnType<AuditNetworkGuard["scope"]>>();
-		const observerFor = (request: Request) => {
-			try { return observers.get(request.frame().page()) ?? contextObserver; }
-			catch { return contextObserver; } // Initial popup and worker requests may have no frame.
-		};
-		await context.exposeBinding("__praxityBlockedRtc", ({ frame }) => {
-			guard.record({ url: frame.url(), method: "RTCPEERCONNECTION", resourceType: "webrtc" }, false);
+	// Separate listeners and counts keep every wire attempt with its issuing context.
+	const blockedRequests: BlockedRequest[] = [];
+	const guard = allowNetwork ? undefined : await blockAuditNetwork(auditOrigin, blockedRequests);
+	let context: BrowserContext | undefined;
+	let closing: Promise<void> | undefined;
+	const close = () => closing ??= (async () => {
+		const results = await Promise.allSettled([guard?.close(), context?.close()]);
+		allBlockedRequests.push(...blockedRequests);
+		const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+		if (errors.length === 1) throw errors[0];
+		if (errors.length) throw new AggregateError(errors, "audit context cleanup failed");
+	})();
+	try {
+		// A fresh context has no registrations to clear; blocking service workers
+		// also prevents the package from installing one during the run (spec §4).
+		context = await browser.newContext({
+			serviceWorkers: "block",
+			viewport: VIEWPORT,
+			colorScheme: "light",
+			...(guard ? { proxy: guard.proxy } : {}),
 		});
-		await context.addInitScript(blockWebRtc, { binding: "__praxityBlockedRtc" });
-		context.on("page", page => {
-			const observer = guard.scope();
-			observers.set(page, observer);
-			page.on("websocket", socket => {
-				if (!isAuditServerUrl(socket.url(), auditOrigin)) observer.record({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" });
+		await instrumentShadowRoots(context);
+		context.setDefaultTimeout(ACTION_TIMEOUT_MS);
+		context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
+		if (guard) {
+			await context.exposeBinding("__praxityBlockedRtc", ({ frame }) => {
+				guard.record({ url: frame.url(), method: "RTCPEERCONNECTION", resourceType: "webrtc" }, false);
 			});
-			void (async () => {
-				const session = await context.newCDPSession(page);
-				// Chromium can omit Playwright redirect events before the next interception.
-				session.on("Network.requestWillBeSent", ({ redirectResponse, type }) => {
-					if (!redirectResponse) return;
-					const location = Object.entries(redirectResponse.headers as Record<string, string>)
-						.find(([name]) => name.toLowerCase() === "location")?.[1];
-					observer.redirect(redirectResponse.url, redirectResponse.status, location, type?.toLowerCase() ?? "other");
+			await context.addInitScript(blockWebRtc, { binding: "__praxityBlockedRtc" });
+			context.on("page", page => {
+				page.on("websocket", socket => {
+					if (!isAuditServerUrl(socket.url(), auditOrigin)) guard.record({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" });
 				});
-				await session.send("Network.enable");
-			})().catch(error => { if (!page.isClosed()) observer.fail(error); });
-		});
-		context.on("response", (response) => {
-			observerFor(response.request()).redirect(response.url(), response.status(), response.headers().location, response.request().resourceType());
-		});
-		// Redirects emit requests even when Playwright skips their route handler.
-		context.on("request", (request) => {
-			if (!isAuditServerUrl(request.url(), auditOrigin)) observerFor(request).record({
-				url: request.url(), method: request.method(), resourceType: request.resourceType(),
-			}, request.redirectedFrom() !== null);
-		});
-		await context.route("**/*", async (route) => {
-			const request = route.request();
-			try {
-				if (isAuditServerUrl(request.url(), auditOrigin)) await route.continue();
-				else await route.abort("blockedbyclient");
-			} catch (error) { observerFor(request).fail(error); }
-		});
-		await context.routeWebSocket(/.*/, async (socket) => {
-			if (isAuditServerUrl(socket.url(), auditOrigin)) {
-				socket.connectToServer();
-				return;
-			}
-			guard.record({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" }, false);
-			await socket.close({ code: 1008, reason: "outbound network blocked by praxity-check" });
-		});
+				void (async () => {
+					const session = await context!.newCDPSession(page);
+					// Chromium can omit Playwright redirect events before the next interception.
+					session.on("Network.requestWillBeSent", ({ redirectResponse, type }) => {
+						if (!redirectResponse) return;
+						const location = Object.entries(redirectResponse.headers as Record<string, string>)
+							.find(([name]) => name.toLowerCase() === "location")?.[1];
+						guard.redirect(redirectResponse.url, redirectResponse.status, location, type?.toLowerCase() ?? "other");
+					});
+					await session.send("Network.enable");
+				})().catch(error => { if (!page.isClosed()) guard.fail(error); });
+			});
+			context.on("response", (response) => {
+				guard.redirect(response.url(), response.status(), response.headers().location, response.request().resourceType());
+			});
+			// Redirects emit requests even when Playwright skips their route handler.
+			context.on("request", (request) => {
+				if (!isAuditServerUrl(request.url(), auditOrigin)) guard.record({
+					url: request.url(), method: request.method(), resourceType: request.resourceType(),
+				}, request.redirectedFrom() !== null);
+			});
+			await context.route("**/*", async (route) => {
+				const request = route.request();
+				try {
+					if (isAuditServerUrl(request.url(), auditOrigin)) await route.continue();
+					else await route.abort("blockedbyclient");
+				} catch (error) { guard.fail(error); }
+			});
+			await context.routeWebSocket(/.*/, async (socket) => {
+				if (isAuditServerUrl(socket.url(), auditOrigin)) {
+					socket.connectToServer();
+					return;
+				}
+				guard.record({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" }, false);
+				await socket.close({ code: 1008, reason: "outbound network blocked by praxity-check" });
+			});
+		}
+		return { context, blockedRequests, errors: guard?.errors ?? [], close };
+	} catch (error) {
+		try { await close(); }
+		catch (cleanup) { throw new AggregateError([error, cleanup], "audit context creation and cleanup failed"); }
+		throw error;
 	}
-	return context;
 }
+
+type AuditContext = Awaited<ReturnType<typeof createAuditContext>>;
 
 function uncheckedState(pageId: string, scenario: Scenario, reason: string): CheckResult {
 	return {
@@ -315,14 +342,12 @@ async function auditPages(
 	scenarios: Scenario[],
 	auditOrigin: string,
 	timeoutMs: number,
-	guard: AuditNetworkGuard | undefined,
+	allowNetwork: boolean,
 ): Promise<PageAudit[]> {
-	const context = await createAuditContext(browser, auditOrigin, guard);
+	let context: AuditContext | undefined = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
 	const audits: PageAudit[] = [];
 	try {
 		for (const discoveredPage of pages) {
-			guard?.reset();
-			const blockedBefore = blockedRequests.length;
 			const declaredStates = scenarios.filter((candidate) => candidate.page === discoveredPage.file);
 			const audit: PageAudit = {
 				page: discoveredPage, triage: { ok: false }, audited: false, findings: [], notes: [],
@@ -330,9 +355,11 @@ async function auditPages(
 			audits.push(audit);
 			let page: Page | undefined;
 			try {
-				let phase = "page creation";
+				let phase = "context creation";
 				try {
-					page = await context.newPage();
+					context ??= await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
+					phase = "page creation";
+					page = await context.context.newPage();
 					phase = "navigation";
 					const response = await page.goto(discoveredPage.url, {
 						waitUntil: "load", timeout: NAVIGATION_TIMEOUT_MS,
@@ -340,9 +367,9 @@ async function auditPages(
 					phase = "settling";
 					const settleNote = await settle(page);
 					if (settleNote) audit.notes.push(`${discoveredPage.file}: ${settleNote}`);
-					if (guard?.errors.length) throw new Error(`network observation failed: ${guard.errors.join("; ")}`);
+					if (context.errors.length) throw new Error(`network observation failed: ${context.errors.join("; ")}`);
 					phase = "triage";
-					audit.triage = await triage(page, response?.status() ?? null, blockedRequests.length - blockedBefore);
+					audit.triage = await triage(page, response?.status() ?? null, context.blockedRequests.length);
 					if (audit.triage.ok) {
 						phase = "title retrieval";
 						audit.title = await page.title();
@@ -367,19 +394,17 @@ async function auditPages(
 					const reason = `initial page audit exceeded ${timeoutMs / 1000}s`;
 					stateResults.push(...declaredStates.map((scenario) => uncheckedState(discoveredPage.file, scenario, reason)));
 				} else for (const scenario of declaredStates) {
-					let stateContext: BrowserContext | undefined;
+					let stateContext: AuditContext | undefined;
 					try {
-						guard?.reset();
-						stateContext = await createAuditContext(browser, auditOrigin, guard);
-						const statePage = await stateContext.newPage();
-						const blockedBeforeState = blockedRequests.length;
+						stateContext = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
+						const statePage = await stateContext.context.newPage();
 						const response = await statePage.goto(discoveredPage.url, {
 							waitUntil: "load", timeout: NAVIGATION_TIMEOUT_MS,
 						});
 						const settleNote = await settle(statePage);
-						if (guard?.errors.length) throw new Error(`network observation failed: ${guard.errors.join("; ")}`);
+						if (stateContext.errors.length) throw new Error(`network observation failed: ${stateContext.errors.join("; ")}`);
 						const stateVerdict = await triage(
-							statePage, response?.status() ?? null, blockedRequests.length - blockedBeforeState,
+							statePage, response?.status() ?? null, stateContext.blockedRequests.length,
 						);
 						if (!stateVerdict.ok) throw new Error(stateVerdict.reason ?? "page triage failed");
 						await runScenarioActions(statePage, scenario);
@@ -419,13 +444,19 @@ async function auditPages(
 				} catch (error) {
 					audit.notes.push(`page cleanup failed on ${discoveredPage.file}: ${error instanceof Error ? error.message : String(error)}`);
 				}
+				try {
+					await context?.close();
+				} catch (error) {
+					audit.notes.push(`initial context cleanup failed on ${discoveredPage.file}: ${error instanceof Error ? error.message : String(error)}`);
+				}
+				context = undefined;
 			}
 		}
 	} finally {
 		try {
-			await context.close();
+			await context?.close();
 		} catch (error) {
-			// Keep cleanup evidence with the last page; it applies to the shared context.
+			// The context remains unused when discovery is empty.
 			audits.at(-1)?.notes.push(`initial context cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
