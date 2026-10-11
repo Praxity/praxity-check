@@ -7,6 +7,7 @@ import { chromium } from "playwright";
 import { auditHtml, withAuditContext } from "../src/html-audit.ts";
 import { blockAuditNetwork } from "../src/audit-network.ts";
 import type { BlockedRequest } from "../src/report.ts";
+import { observeMdns } from "./fixtures/mdns-listener.ts";
 
 async function listener(t: TestContext, handler: RequestListener) {
 	const server = createServer(handler);
@@ -71,6 +72,46 @@ for (const closeImmediately of [false, true]) {
 		assert.equal(result.pages[0]!.audited, true);
 		assert.deepEqual(result.blockedRequests, []);
 		if (!closeImmediately) assert.ok(hits.includes("/glossary.html"));
+	});
+}
+
+for (const variant of ["child frame", "popup", "data channel", "mDNS host candidates"]) {
+	test(`offline WebRTC blocks and records ${variant} without UDP or mDNS activity`, async t => {
+		const mdns = await observeMdns();
+		t.after(() => mdns.close());
+		const udp = createSocket("udp4");
+		let packets = 0;
+		udp.on("message", () => packets++);
+		await new Promise<void>(resolve => udp.bind(0, "127.0.0.1", resolve));
+		t.after(() => new Promise<void>(resolve => udp.close(resolve)));
+		const script = `<script>
+			window.rtcResult = { blocked: false, candidates: 0, channels: 0 };
+			try {
+				const pc = new RTCPeerConnection(${variant === "mDNS host candidates" ? "{}" : `{iceServers:[{urls:'stun:127.0.0.1:${udp.address().port}'}]}`});
+				pc.onicecandidate = event => { if (event.candidate) window.rtcResult.candidates++; };
+				pc.createDataChannel('offline-probe'); window.rtcResult.channels++;
+				pc.createOffer().then(offer => pc.setLocalDescription(offer));
+			} catch (error) { window.rtcResult.blocked = String(error).includes('WebRTC is blocked by Praxity Check'); }
+		</script>`;
+		const local = await listener(t, (request, response) => response.end(`<html lang="en"><title>RTC</title><main><h1>RTC</h1>${request.url === "/rtc.html" ? script : variant === "child frame" ? '<iframe src="/rtc.html"></iframe>' : '<script>window.open("/rtc.html")</script>'}</main></html>`));
+		await withAuditContext({ auditOrigin: local.origin, allowNetwork: false }, async (context, blocked) => {
+			const page = await context.newPage();
+			let target;
+			if (variant === "popup") {
+				const opened = context.waitForEvent("page");
+				await page.goto(local.origin);
+				target = await opened;
+				await target.waitForLoadState();
+			} else if (variant === "child frame") {
+				await page.goto(local.origin);
+				target = page.frames().find(frame => frame.url() === `${local.origin}/rtc.html`)!;
+			} else { await page.goto(`${local.origin}/rtc.html`); target = page; }
+			assert.deepEqual(await target.evaluate(() => (window as any).rtcResult), { blocked: true, candidates: 0, channels: 0 });
+			assert.deepEqual(blocked, [{ url: `${local.origin}/rtc.html`, method: "RTCPEERCONNECTION", resourceType: "webrtc" }]);
+		});
+		assert.equal(packets, 0);
+		assert.deepEqual(mdns.names, []);
+		assert.equal(mdns.controls, 2);
 	});
 }
 
