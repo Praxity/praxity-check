@@ -346,6 +346,7 @@ async function auditPages(
 ): Promise<PageAudit[]> {
 	let context: AuditContext | undefined = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
 	const audits: PageAudit[] = [];
+	const initialDestinations = new Map<string, string>();
 	try {
 		for (const discoveredPage of pages) {
 			const declaredStates = scenarios.filter((candidate) => candidate.page === discoveredPage.file);
@@ -373,6 +374,11 @@ async function auditPages(
 					if (audit.triage.ok) {
 						phase = "title retrieval";
 						audit.title = await page.title();
+						const destination = page.url();
+						const firstInput = initialDestinations.get(destination);
+						if (firstInput && firstInput !== discoveredPage.file) {
+							audit.notes.push(`Initial navigation ended at the same URL as ${firstInput}: ${destination}. Use explicit scenario actions to reach the intended content; these inputs do not establish distinct rendered-page coverage.`);
+						} else initialDestinations.set(destination, discoveredPage.file);
 					}
 				} catch (error) {
 					audit.triage = { ok: false, reason: `${phase} failed: ${error instanceof Error ? error.message : String(error)}` };

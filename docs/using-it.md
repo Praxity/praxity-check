@@ -39,6 +39,10 @@ malicious HTML.
 Each initial page audit starts with fresh browser storage, so progress or
 preferences saved by a previous page cannot hide defects. Declared states also
 start fresh, and keep their storage across their own actions and navigation.
+Initial audits show what a new visitor reaches. A Guided player can send several
+input files to its first slide; when their final URLs match, report notes flag
+the shared destination. Those inputs do not establish coverage of distinct
+slides. Use declared states with explicit navigation to audit later content.
 
 ## Confidence threshold
 
