@@ -83,6 +83,65 @@ for (const allowNetwork of [false, true]) {
 	}
 }
 
+test("different resource types retain separate evidence for the same blocked URL", async (t) => {
+	let hits = 0;
+	const outside = await listener(t, (_, response) => { hits++; response.end(); });
+	const target = `${outside.origin}/target`;
+	const local = await listener(t, (_, response) => response.end("<title>Local</title>"));
+	await withAuditContext({ auditOrigin: local.origin, allowNetwork: false }, async (context, blocked) => {
+		const page = await context.newPage();
+		await page.goto(local.origin);
+		await page.evaluate(async (url) => {
+			await Promise.all([
+				fetch(url).catch(() => {}),
+				new Promise<void>(resolve => { const image = new Image(); image.onerror = () => resolve(); image.src = url; }),
+			]);
+		}, target);
+		assert.equal(hits, 0);
+		assert.deepEqual(blocked.sort((a, b) => a.resourceType.localeCompare(b.resourceType)), [
+			{ url: target, method: "GET", resourceType: "fetch" },
+			{ url: target, method: "GET", resourceType: "image" },
+		]);
+	});
+});
+
+test("a POST redirect drops the body and blocks the GET destination, excluding its fragment", async (t) => {
+	let hits = 0;
+	const outside = await listener(t, (_, response) => { hits++; response.end(); });
+	const target = `${outside.origin}/target?course=private`;
+	const local = await listener(t, (request, response) => {
+		if (request.url === "/redirect") response.writeHead(303, { location: `${target}#bookmark` });
+		response.end("<title>Local</title>");
+	});
+	await withAuditContext({ auditOrigin: local.origin, allowNetwork: false }, async (context, blocked) => {
+		const page = await context.newPage();
+		await page.goto(local.origin);
+		await page.evaluate(async () => { await fetch("/redirect", { method: "POST", body: "private" }).catch(() => {}); });
+		assert.equal(hits, 0);
+		assert.deepEqual(blocked, [{ url: target, method: "GET", resourceType: "fetch" }]);
+	});
+});
+
+test("manual and malformed redirects do not create blocked-request evidence", async (t) => {
+	let hits = 0;
+	const outside = await listener(t, (_, response) => { hits++; response.end(); });
+	const local = await listener(t, (request, response) => {
+		if (request.url === "/manual") response.writeHead(302, { location: `${outside.origin}/target` });
+		if (request.url === "/malformed") response.writeHead(302, { location: "http://[" });
+		response.end("<title>Local</title>");
+	});
+	await withAuditContext({ auditOrigin: local.origin, allowNetwork: false }, async (context, blocked) => {
+		const page = await context.newPage();
+		await page.goto(local.origin);
+		await page.evaluate(async () => {
+			await fetch("/manual", { redirect: "manual" });
+			await fetch("/malformed").catch(() => {});
+		});
+		assert.equal(hits, 0);
+		assert.deepEqual(blocked, []);
+	});
+});
+
 test("dedicated workers may still open WebSockets to the audit origin", async (t) => {
 	let handshakes = 0;
 	const local = await listener(t, (_, response) => response.end("<title>Local</title>"));
@@ -99,7 +158,7 @@ test("dedicated workers may still open WebSockets to the audit origin", async (t
 				worker.onmessage = () => { clearTimeout(timer); worker.terminate(); resolve(); };
 			});
 		});
-		assert.equal(handshakes, 1);
+		assert.equal(handshakes, 1, JSON.stringify(blocked));
 		assert.deepEqual(blocked, []);
 	});
 });
