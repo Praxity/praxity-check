@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page, type Request } from "playwright";
 import { componentHost, resolveComponent, type ComponentResolution } from "./components.ts";
 import {
 	altTextQuality,
@@ -28,6 +28,7 @@ import type { DiscoveredPage } from "./discover.ts";
 import type { AuditEnvironment, BlockedRequest, PageAudit } from "./report.ts";
 import { runScenarioActions, type Scenario } from "./scenarios.ts";
 import { isAuditServerUrl } from "./serve.ts";
+import { blockAuditNetwork, blockWebRtc, type AuditNetworkGuard } from "./audit-network.ts";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const ACTION_TIMEOUT_MS = 10_000;
@@ -83,8 +84,8 @@ export async function auditHtml(
 			pages: options.pages.map(page => ({ page, audited: false, triage: { ok: false, reason }, findings: [], notes: [reason],
 				untested: [{ type: "check", check: "page-audit", page: page.file, state: "initial", outcome: "untested", reason }] })) };
 	}
-	return withAuditBrowser(async (browser, blockedRequests) => ({
-		pages: await auditPages(browser, options.pages, blockedRequests, options.scenarios, options.auditOrigin, options.allowNetwork, testOptions.pageAuditTimeoutMs ?? PAGE_AUDIT_TIMEOUT_MS),
+	return withAuditBrowser(options, async (browser, blockedRequests, guard) => ({
+		pages: await auditPages(browser, options.pages, blockedRequests, options.scenarios, options.auditOrigin, testOptions.pageAuditTimeoutMs ?? PAGE_AUDIT_TIMEOUT_MS, guard),
 		blockedRequests,
 		environment: {
 			browser: { engine: "chromium", version: browser.version() },
@@ -105,27 +106,37 @@ export async function withAuditContext<T>(
 	options: Pick<HtmlAuditOptions, "auditOrigin" | "allowNetwork">,
 	run: (context: BrowserContext, blockedRequests: BlockedRequest[]) => Promise<T>,
 ): Promise<T> {
-	return withAuditBrowser(async (browser, blockedRequests) => {
-		const context = await createAuditContext(browser, options.auditOrigin, options.allowNetwork, blockedRequests);
-		return run(context, blockedRequests);
+	return withAuditBrowser(options, async (browser, blockedRequests, guard) => {
+		const context = await createAuditContext(browser, options.auditOrigin, guard);
+		const result = await run(context, blockedRequests);
+		if (guard?.errors.length) throw new Error(`network observation failed: ${guard.errors.join("; ")}`);
+		return result;
 	});
 }
 
-async function withAuditBrowser<T>(run: (browser: Browser, blockedRequests: BlockedRequest[]) => Promise<T>, selected?: ComponentResolution): Promise<T> {
+async function withAuditBrowser<T>(
+	options: Pick<HtmlAuditOptions, "auditOrigin" | "allowNetwork">,
+	run: (browser: Browser, blockedRequests: BlockedRequest[], guard: AuditNetworkGuard | undefined) => Promise<T>,
+	selected?: ComponentResolution,
+): Promise<T> {
 	const component = selected ?? await resolveComponent(componentHost(), "browser");
 	if (!component.usable) throw new Error(component.reason);
+	const blockedRequests: BlockedRequest[] = [];
+	const guard = options.allowNetwork ? undefined : await blockAuditNetwork(options.auditOrigin, blockedRequests);
+	let browser: Browser | undefined;
 	// Auditing author intent requires a browser that does not silently suppress
 	// autoplay before the 1.4.2 probe can observe it.
-	const browser = await chromium.launch({
-		executablePath: component.path!,
-		timeout: NAVIGATION_TIMEOUT_MS,
-		args: ["--autoplay-policy=no-user-gesture-required"],
-	});
 	try {
-		return await run(browser, []);
+		browser = await chromium.launch({
+			executablePath: component.path!,
+			timeout: NAVIGATION_TIMEOUT_MS,
+			args: ["--autoplay-policy=no-user-gesture-required", ...(guard?.args ?? [])],
+		});
+		return await run(browser, blockedRequests, guard);
 	} finally {
 		// Preserve the CLI's outcome when browser cleanup fails.
-		await browser.close().catch(() => {});
+		await browser?.close().catch(() => {});
+		await guard?.close();
 	}
 }
 
@@ -217,8 +228,7 @@ async function runChecks(page: Page, pageId: string, timeoutMs: number): Promise
 async function createAuditContext(
 	browser: Browser,
 	auditOrigin: string,
-	allowNetwork: boolean,
-	blockedRequests: BlockedRequest[],
+	guard: AuditNetworkGuard | undefined,
 ) {
 	// A fresh context has no registrations to clear; blocking service workers
 	// also prevents the package from installing one during the run (spec §4).
@@ -230,26 +240,57 @@ async function createAuditContext(
 	await instrumentShadowRoots(context);
 	context.setDefaultTimeout(ACTION_TIMEOUT_MS);
 	context.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-	if (!allowNetwork) {
+	if (guard) {
+		const contextObserver = guard.scope();
+		const observers = new WeakMap<Page, ReturnType<AuditNetworkGuard["scope"]>>();
+		const observerFor = (request: Request) => {
+			try { return observers.get(request.frame().page()) ?? contextObserver; }
+			catch { return contextObserver; } // Initial popup and worker requests may have no frame.
+		};
+		await context.exposeBinding("__praxityBlockedRtc", ({ frame }) => {
+			guard.record({ url: frame.url(), method: "RTCPEERCONNECTION", resourceType: "webrtc" }, false);
+		});
+		await context.addInitScript(blockWebRtc, { binding: "__praxityBlockedRtc" });
+		context.on("page", page => {
+			const observer = guard.scope();
+			observers.set(page, observer);
+			page.on("websocket", socket => {
+				if (!isAuditServerUrl(socket.url(), auditOrigin)) observer.record({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" });
+			});
+			void (async () => {
+				const session = await context.newCDPSession(page);
+				// Chromium can omit Playwright redirect events before the next interception.
+				session.on("Network.requestWillBeSent", ({ redirectResponse, type }) => {
+					if (!redirectResponse) return;
+					const location = Object.entries(redirectResponse.headers as Record<string, string>)
+						.find(([name]) => name.toLowerCase() === "location")?.[1];
+					observer.redirect(redirectResponse.url, redirectResponse.status, location, type?.toLowerCase() ?? "other");
+				});
+				await session.send("Network.enable");
+			})().catch(error => { if (!page.isClosed()) observer.fail(error); });
+		});
+		context.on("response", (response) => {
+			observerFor(response.request()).redirect(response.url(), response.status(), response.headers().location, response.request().resourceType());
+		});
+		// Redirects emit requests even when Playwright skips their route handler.
+		context.on("request", (request) => {
+			if (!isAuditServerUrl(request.url(), auditOrigin)) observerFor(request).record({
+				url: request.url(), method: request.method(), resourceType: request.resourceType(),
+			}, request.redirectedFrom() !== null);
+		});
 		await context.route("**/*", async (route) => {
 			const request = route.request();
-			if (isAuditServerUrl(request.url(), auditOrigin)) {
-				await route.continue();
-				return;
-			}
-			blockedRequests.push({
-				url: request.url(),
-				method: request.method(),
-				resourceType: request.resourceType(),
-			});
-			await route.abort("blockedbyclient");
+			try {
+				if (isAuditServerUrl(request.url(), auditOrigin)) await route.continue();
+				else await route.abort("blockedbyclient");
+			} catch (error) { observerFor(request).fail(error); }
 		});
 		await context.routeWebSocket(/.*/, async (socket) => {
 			if (isAuditServerUrl(socket.url(), auditOrigin)) {
 				socket.connectToServer();
 				return;
 			}
-			blockedRequests.push({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" });
+			guard.record({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" }, false);
 			await socket.close({ code: 1008, reason: "outbound network blocked by praxity-check" });
 		});
 	}
@@ -273,13 +314,14 @@ async function auditPages(
 	blockedRequests: BlockedRequest[],
 	scenarios: Scenario[],
 	auditOrigin: string,
-	allowNetwork: boolean,
 	timeoutMs: number,
+	guard: AuditNetworkGuard | undefined,
 ): Promise<PageAudit[]> {
-	const context = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
+	const context = await createAuditContext(browser, auditOrigin, guard);
 	const audits: PageAudit[] = [];
 	try {
 		for (const discoveredPage of pages) {
+			guard?.reset();
 			const blockedBefore = blockedRequests.length;
 			const declaredStates = scenarios.filter((candidate) => candidate.page === discoveredPage.file);
 			const audit: PageAudit = {
@@ -298,6 +340,7 @@ async function auditPages(
 					phase = "settling";
 					const settleNote = await settle(page);
 					if (settleNote) audit.notes.push(`${discoveredPage.file}: ${settleNote}`);
+					if (guard?.errors.length) throw new Error(`network observation failed: ${guard.errors.join("; ")}`);
 					phase = "triage";
 					audit.triage = await triage(page, response?.status() ?? null, blockedRequests.length - blockedBefore);
 					if (audit.triage.ok) {
@@ -326,13 +369,15 @@ async function auditPages(
 				} else for (const scenario of declaredStates) {
 					let stateContext: BrowserContext | undefined;
 					try {
-						stateContext = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
+						guard?.reset();
+						stateContext = await createAuditContext(browser, auditOrigin, guard);
 						const statePage = await stateContext.newPage();
 						const blockedBeforeState = blockedRequests.length;
 						const response = await statePage.goto(discoveredPage.url, {
 							waitUntil: "load", timeout: NAVIGATION_TIMEOUT_MS,
 						});
 						const settleNote = await settle(statePage);
+						if (guard?.errors.length) throw new Error(`network observation failed: ${guard.errors.join("; ")}`);
 						const stateVerdict = await triage(
 							statePage, response?.status() ?? null, blockedRequests.length - blockedBeforeState,
 						);
