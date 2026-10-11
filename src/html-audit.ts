@@ -250,7 +250,7 @@ async function createAuditContext(
 		context.on("request", (request) => {
 			if (!isAuditServerUrl(request.url(), auditOrigin)) guard.record({
 				url: request.url(), method: request.method(), resourceType: request.resourceType(),
-			});
+			}, request.redirectedFrom() !== null);
 		});
 		await context.route("**/*", async (route) => {
 			const request = route.request();
@@ -265,7 +265,7 @@ async function createAuditContext(
 				socket.connectToServer();
 				return;
 			}
-			guard.record({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" });
+			guard.record({ url: socket.url(), method: "WEBSOCKET", resourceType: "websocket" }, false);
 			await socket.close({ code: 1008, reason: "outbound network blocked by praxity-check" });
 		});
 	}

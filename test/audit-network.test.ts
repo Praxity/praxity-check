@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, request as httpRequest, type RequestListener } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { test, type TestContext } from "node:test";
-import { withAuditContext } from "../src/html-audit.ts";
+import { auditHtml, withAuditContext } from "../src/html-audit.ts";
 import { blockAuditNetwork } from "../src/audit-network.ts";
 import type { BlockedRequest } from "../src/report.ts";
 
@@ -48,6 +48,36 @@ for (const [url, destination] of [["ws://127.0.0.1/worker", "127.0.0.1:80"], ["w
 			assert.deepEqual(blocked, [evidence]);
 		});
 	}
+}
+
+for (const transport of ["fetch", "redirect", "worker"] as const) {
+	test(`repeated blocked ${transport} requests retain each initial page's triage evidence`, async (t) => {
+		let connections = 0;
+		const outside = await listener(t, (_, response) => response.end());
+		outside.server.on("connection", () => connections++);
+		const target = `${outside.origin}/content`;
+		const socketUrl = target.replace("http:", "ws:");
+		const script = transport === "worker"
+			? `new Worker(URL.createObjectURL(new Blob([${JSON.stringify(`new WebSocket('${socketUrl}')`)}], { type: 'text/javascript' })))`
+			: `fetch('${transport === "redirect" ? "/redirect" : target}').catch(() => {})`;
+		const local = await listener(t, (request, response) => {
+			if (request.url === "/redirect") response.writeHead(302, { location: target });
+			response.end(`<html lang="en"><title>Shell</title><body><main><h1>Shell</h1><script>${script}</script></main></body></html>`);
+		});
+		const result = await auditHtml({
+			pages: ["a.html", "b.html"].map(file => ({ file, url: `${local.origin}/${file}` })),
+			scenarios: [], auditOrigin: local.origin, allowNetwork: false,
+		});
+		assert.equal(connections, 0);
+		const evidence = transport === "worker"
+			? { url: socketUrl, method: "WEBSOCKET", resourceType: "websocket" }
+			: { url: target, method: "GET", resourceType: "fetch" };
+		assert.deepEqual(result.blockedRequests, [evidence, evidence]);
+		for (const page of result.pages) {
+			assert.equal(page.audited, false);
+			assert.match(page.triage.reason!, /Check blocked 1 request\./);
+		}
+	});
 }
 
 for (const allowNetwork of [false, true]) {

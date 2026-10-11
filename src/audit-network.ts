@@ -11,26 +11,38 @@ function authority(value: string): string {
 export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedRequest[]) {
 	const origin = new URL(auditOrigin);
 	const redirects = new Map<string, string>();
-	const record = (request: BlockedRequest) => {
-		if (request.resourceType === "other" && redirects.has(request.url)) request.resourceType = redirects.get(request.url)!;
-		const existing = blocked.find((item) => item.url === request.url && item.method === request.method
-			&& (item.resourceType === request.resourceType || item.resourceType === "other" || request.resourceType === "other")
-			|| item.method === "CONNECT" && authority(item.url) === authority(request.url));
+	const browserPending = new Map<string, BlockedRequest[]>();
+	const proxyPending = new Map<string, BlockedRequest[]>();
+	const key = (request: BlockedRequest) => request.method === "CONNECT" || request.method === "WEBSOCKET" || new URL(request.url).protocol === "https:"
+		? `tunnel\n${authority(request.url)}` : `${request.method}\n${request.url}`;
+	const remember = (pending: Map<string, BlockedRequest[]>, request: BlockedRequest) => {
+		const id = key(request);
+		if (!pending.has(id)) pending.set(id, []);
+		pending.get(id)!.push(request);
+	};
+	// Pair browser and proxy evidence for one attempt; never deduplicate later attempts.
+	const record = (request: BlockedRequest, expectProxy = true) => {
+		const existing = expectProxy ? proxyPending.get(key(request))?.shift() : undefined;
 		if (existing) {
-			if (existing.resourceType === "other" || request.resourceType !== "other") Object.assign(existing, request);
+			if (existing.resourceType === "other") Object.assign(existing, request);
+		} else {
+			blocked.push(request);
+			if (expectProxy) remember(browserPending, request);
 		}
-		else blocked.push(request);
+	};
+	const proxyRecord = (request: BlockedRequest) => {
+		if (browserPending.get(key(request))?.shift()) return;
+		if (redirects.has(request.url)) request.resourceType = redirects.get(request.url)!;
+		blocked.push(request);
+		remember(proxyPending, request);
 	};
 	const server = createServer((request, response) => {
-		record({ url: request.url!, method: request.method!, resourceType: "other" });
+		proxyRecord({ url: request.url!, method: request.method!, resourceType: "other" });
 		response.destroy();
 	});
 	server.on("connect", (request, socket) => {
 		// Chromium tunnels both WS and TLS. Browser events usually supply the full URL.
-		const url = `connect://${request.url}`;
-		if (!blocked.some((item) => authority(item.url) === authority(url))) {
-			record({ url, method: "CONNECT", resourceType: "other" });
-		}
+		proxyRecord({ url: `connect://${request.url}`, method: "CONNECT", resourceType: "other" });
 		socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
 	});
 	const sockets = new Set<Socket>();
