@@ -73,6 +73,8 @@ export interface HtmlAuditResult {
  * states continue. Page and context cleanup failures become notes, preserving the
  * evidence. Only browser launch and initial context creation failures reject the
  * audit. Browser-close failures do not replace the outcome.
+ * Repeated initial destinations retain findings and declared-state results but
+ * mark the input's distinct-destination coverage unchecked and unaudited.
  */
 export async function auditHtml(
 	options: HtmlAuditOptions,
@@ -346,6 +348,7 @@ async function auditPages(
 ): Promise<PageAudit[]> {
 	let context: AuditContext | undefined = await createAuditContext(browser, auditOrigin, allowNetwork, blockedRequests);
 	const audits: PageAudit[] = [];
+	const initialDestinations = new Map<string, string>();
 	try {
 		for (const discoveredPage of pages) {
 			const declaredStates = scenarios.filter((candidate) => candidate.page === discoveredPage.file);
@@ -354,6 +357,7 @@ async function auditPages(
 			};
 			audits.push(audit);
 			let page: Page | undefined;
+			let sharedDestinationReason: string | undefined;
 			try {
 				let phase = "context creation";
 				try {
@@ -373,6 +377,12 @@ async function auditPages(
 					if (audit.triage.ok) {
 						phase = "title retrieval";
 						audit.title = await page.title();
+						const destination = page.url();
+						const firstInput = initialDestinations.get(destination);
+						if (firstInput && firstInput !== discoveredPage.file) {
+							sharedDestinationReason = `Initial navigation ended at the same URL as ${firstInput}: ${destination}. Use explicit scenario actions to reach the intended content; these inputs do not establish distinct rendered-page coverage.`;
+							audit.notes.push(sharedDestinationReason);
+						} else initialDestinations.set(destination, discoveredPage.file);
 					}
 				} catch (error) {
 					audit.triage = { ok: false, reason: `${phase} failed: ${error instanceof Error ? error.message : String(error)}` };
@@ -431,13 +441,18 @@ async function auditPages(
 						}
 					}
 				}
-				audit.audited = true;
+				audit.audited = !sharedDestinationReason;
+				if (sharedDestinationReason) audit.triage = { ok: false, reason: sharedDestinationReason };
 				audit.findings = stateResults.flatMap((state) => state.findings);
 				audit.needsReview = stateResults.flatMap((state) => state.needsReview ?? []);
 				audit.notes.push(...stateResults.flatMap((state) => state.notes));
 				audit.evaluations = stateResults.flatMap((state) => state.evaluations ?? []);
 				audit.rules = stateResults.flatMap((state) => state.rules ?? []);
-				audit.untested = stateResults.flatMap((state) => state.untested ?? []);
+				audit.untested = [
+					...(sharedDestinationReason ? [{ type: "check" as const, check: "distinct-destination", page: discoveredPage.file,
+						state: "initial", outcome: "untested" as const, reason: sharedDestinationReason }] : []),
+					...stateResults.flatMap((state) => state.untested ?? []),
+				];
 			} finally {
 				try {
 					if (page && !page.isClosed()) await page.close();
