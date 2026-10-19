@@ -290,12 +290,13 @@ const COLOR_HELPERS = `((evidence = {}) => {
 		const alpha = c[3] * Number(s[kind + "Opacity"]);
 		return alpha === 0 ? absent("Transparent " + kind + ".") : measured({ color: c.slice(0, 3), alpha });
 	};
-	const band = (r, w) => [
-		{ left:r.left-w, right:r.right+w, top:r.top-w, bottom:Math.min(r.top+w,r.bottom+w) },
-		{ left:r.left-w, right:r.right+w, top:Math.max(r.bottom-w,r.top-w), bottom:r.bottom+w },
-		{ left:r.left-w, right:r.left+w, top:r.top+w, bottom:r.bottom-w },
-		{ left:r.right-w, right:r.right+w, top:r.top+w, bottom:r.bottom-w },
-	].filter((b) => b.left < b.right && b.top < b.bottom);
+	const band = (r, w) => {
+		const outer=expand(r,w),inner=expand(r,-w);
+		if(inner.left>=inner.right||inner.top>=inner.bottom)return [outer];
+		return [{...outer,bottom:inner.top},{...outer,top:inner.bottom},
+			{left:outer.left,right:inner.left,top:inner.top,bottom:inner.bottom},
+			{left:inner.right,right:outer.right,top:inner.top,bottom:inner.bottom}];
+	};
 	const axisAligned = (el) => { const m = el.getScreenCTM(); return m && m.b === 0 && m.c === 0; };
 	const strokeWidth = (el) => {
 		const s = css(el), m = el.getScreenCTM();
@@ -413,6 +414,30 @@ const COLOR_HELPERS = `((evidence = {}) => {
 		const radius = Math.min(Math.max(Number.parseFloat(s.rx) || el.rx.baseVal.value, Number.parseFloat(s.ry) || el.ry.baseVal.value), Math.min(el.width.baseVal.value,el.height.baseVal.value)/2) * scale.value;
 		return expand(rect,-radius);
 	};
+	const polygon = (r) => [[r.left,r.top],[r.right,r.top],[r.right,r.bottom],[r.left,r.bottom]];
+	const cross = (a,b,p) => (b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]);
+	const area = (p) => p.length<3?0:Math.abs(p.slice(1,-1).reduce((sum,v,i)=>sum+cross(p[0],v,p[i+2]),0));
+	const clip = (points,a,b,inside) => {
+		const result=[];
+		for(let i=0;i<points.length;i++){
+			const start=points[i],end=points[(i+1)%points.length],d1=cross(a,b,start)*inside,d2=cross(a,b,end)*inside;
+			if(d1>=0)result.push(start);
+			if((d1<0&&d2>0)||(d1>0&&d2<0)){const t=d1/(d1-d2);result.push([start[0]+t*(end[0]-start[0]),start[1]+t*(end[1]-start[1])]);}
+		}
+		return result;
+	};
+	// Partition the entire region, so later paint replaces only the area it covers.
+	// Keeping merely a set of possible colours would retain fully hidden layers.
+	const overlay = (cells,shape,paint) => cells.flatMap((cell)=>{
+		let remaining=cell.polygon;const result=[];
+		for(let i=0;i<shape.length&&area(remaining)>0;i++){
+			const a=shape[i],b=shape[(i+1)%shape.length],outside=clip(remaining,a,b,-1);
+			if(area(outside)>0)result.push({...cell,polygon:outside});
+			remaining=clip(remaining,a,b,1);
+		}
+		if(area(remaining)>0)result.push({polygon:remaining,color:composite(paint,cell.color)});
+		return result;
+	});
 	const backdrop = (node, region) => {
 		let svg = node.ownerSVGElement;
 		while (svg?.ownerSVGElement) svg = svg.ownerSVGElement;
@@ -439,6 +464,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 		}
 		const candidates=indexSvg(svg)(region).sort((a,b)=>a.order-b.order);
 		if(candidates.length>256)return blocked(node,"Too many overlapping objects cover this label; check its contrast by hand");
+		let cells=[{polygon:polygon(region),color:colorsUnder[0]}];
 		for (const item of candidates) {
 			const el=item.el;
 			if(el===node)continue;
@@ -454,7 +480,10 @@ const COLOR_HELPERS = `((evidence = {}) => {
 			if(fill.status==="review" || stroke.status==="review"){uncertainty=fill.status==="review"?fill:stroke;continue;}
 			if(fill.status==="measured" && intersects(rect,region)) {
 				const interior=el.localName==="rect"?radiusInterior(el,rect):null;
-				operations.push({paint:fill.value,covers:!!interior&&contains(interior,region)});
+				if(interior && contains(interior,region))operations.push({paint:fill.value,covers:true,polygon:polygon(region)});
+				else if(interior && (Number.parseFloat(s.rx)||el.rx.baseVal.value)===0 && (Number.parseFloat(s.ry)||el.ry.baseVal.value)===0)operations.push({paint:fill.value,polygon:polygon(rect)});
+				else if(el.matches("circle,ellipse") && polygon(region).every(([x,y])=>{const box=el.getBBox(),point=new DOMPoint(x,y).matrixTransform(el.getScreenCTM().inverse());return ((point.x-box.x-box.width/2)/(box.width/2))**2+((point.y-box.y-box.height/2)/(box.height/2))**2<=1;}))operations.push({paint:fill.value,covers:true,polygon:polygon(region)});
+				else {fail("The curved or complex edge crosses this label's region; check the text against every colour it crosses");continue;}
 			}
 			if(stroke.status==="measured" && Number.parseFloat(s.strokeWidth)>0){
 				const scale=scaleOf(el), width=s.vectorEffect==="non-scaling-stroke"?Number.parseFloat(s.strokeWidth):scale.status==="measured"?Number.parseFloat(s.strokeWidth)*scale.value:undefined;
@@ -462,17 +491,18 @@ const COLOR_HELPERS = `((evidence = {}) => {
 				const half=width/2;
 				if(el.localName==="rect" && axisAligned(el) && radiusInterior(el,rect) && (Number.parseFloat(s.rx)||el.rx.baseVal.value)===0 && (Number.parseFloat(s.ry)||el.ry.baseVal.value)===0){
 					const strips=band(rect,half);
-					if(strips.some((r)=>intersects(r,region)))operations.push({paint:stroke.value,covers:strips.some((r)=>contains(r,region))});
+					for(const strip of strips)if(intersects(strip,region))operations.push({paint:stroke.value,covers:contains(strip,region),polygon:polygon(strip)});
 				}else if(el instanceof SVGLineElement && s.strokeLinecap==="butt"){
 					const m=el.getScreenCTM(), a=new DOMPoint(el.x1.baseVal.value,el.y1.baseVal.value).matrixTransform(m), b=new DOMPoint(el.x2.baseVal.value,el.y2.baseVal.value).matrixTransform(m);
 					const length=Math.hypot(b.x-a.x,b.y-a.y);
 					if(length>0){const dx=(b.x-a.x)/length,dy=(b.y-a.y)/length;
 						const points=[[region.left,region.top],[region.right,region.top],[region.left,region.bottom],[region.right,region.bottom]].map(([x,y])=>[(x-a.x)*dx+(y-a.y)*dy,(x-a.x)*-dy+(y-a.y)*dx]);
 						const l=Math.min(...points.map((p)=>p[0])),r=Math.max(...points.map((p)=>p[0])),t=Math.min(...points.map((p)=>p[1])),bottom=Math.max(...points.map((p)=>p[1]));
-						if(l<length&&r>0&&t<half&&bottom>-half)operations.push({paint:stroke.value,covers:l>=0&&r<=length&&t>=-half&&bottom<=half});
+						if(l<length&&r>0&&t<half&&bottom>-half)operations.push({paint:stroke.value,covers:l>=0&&r<=length&&t>=-half&&bottom<=half,polygon:[[a.x+dy*half,a.y-dx*half],[b.x+dy*half,b.y-dx*half],[b.x-dy*half,b.y+dx*half],[a.x-dy*half,a.y+dx*half]]});
 					}
-				}else if(intersects(expand(rect,half),region) && !(el.localName==="rect" && axisAligned(el) && radiusInterior(el,rect) && contains(expand(radiusInterior(el,rect),-half),region)))operations.push({paint:stroke.value,covers:false});
+				}else if(intersects(expand(rect,half),region) && !(el.localName==="rect" && axisAligned(el) && radiusInterior(el,rect) && contains(expand(radiusInterior(el,rect),-half),region))){fail("The curved or capped stroke crosses this label's region; check the text against its paint");continue;}
 				if(width<1 && operations.some((o)=>o.paint===stroke.value)){fail("A line thinner than one screen pixel overlaps this label; check its rendered contrast");continue;}
+				if(el.localName==="rect" && operations.some((o)=>o.paint===stroke.value) && (s.strokeLinejoin!=="miter"||Number(s.strokeMiterlimit)<Math.SQRT2)){fail("The box has rounded or bevelled stroke joins; check the text against those corners");continue;}
 				if(s.strokeDasharray!=="none" && operations.some((o)=>o.paint===stroke.value)){fail("A dashed line overlaps the label; check the text against the dashes and gaps");continue;}
 			}
 			if(!operations.length)continue;
@@ -482,14 +512,12 @@ const COLOR_HELPERS = `((evidence = {}) => {
 			for(const op of operations){
 				const p={...op.paint,alpha:op.paint.alpha*Number(s.opacity)};
 				if(p.alpha<1 && s.colorInterpolation.toLowerCase()!=="srgb"){fail("This translucent paint uses a different colour blend; check the text against it");continue;}
-				const over=colorsUnder.map((c)=>composite(p,c));
-				colorsUnder=op.covers?over:[...colorsUnder,...over];
-				if(op.covers&&p.alpha===1)uncertainty=undefined;
-				colorsUnder=[...new Map(colorsUnder.map((c)=>[c.join(","),c])).values()];
-				if(colorsUnder.length>16){fail("Several translucent layers overlap the label; check all resulting colours");colorsUnder=colorsUnder.slice(0,1);}
+				if(op.covers&&p.alpha===1){uncertainty=undefined;cells=[{polygon:polygon(region),color:p.color}];}
+				else cells=overlay(cells,op.polygon,p);
+				if(cells.length>256){fail("Too many paint edges cross this label; check all resulting colours");cells=[{polygon:polygon(region),color:cells[0].color}];}
 			}
 		}
-		return uncertainty || measured(colorsUnder);
+		return uncertainty || measured([...new Map(cells.map((cell)=>[cell.color.join(","),cell.color])).values()]);
 	};
 	const fontNodes=Array.from(document.querySelectorAll("svg text, svg text *"));
 	const fontEvidence=new Map(fontNodes.map((node,i)=>[node,evidence.fonts?.[i]]));

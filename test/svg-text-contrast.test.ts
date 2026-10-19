@@ -98,6 +98,21 @@ test("round 1 P1: overflowing white text fails against white outside its box", a
 	assert.deepEqual(textReviews(result), []);
 });
 
+test("known solid regions use their worst colour and discard fully covered page paint", async () => {
+	const result = await check(diagram('<rect width="200" height="200" fill="black"/><rect x="200" width="200" height="200" fill="#111"/><text x="150" y="55" fill="white">Complete label</text>'));
+	assert.deepEqual(textFailures(result), []);
+	assert.deepEqual(textReviews(result), []);
+	assert.deepEqual(outcome(result), ["passed"]);
+});
+
+test("a circular box proves coverage only when the complete label is inside", async () => {
+	const result = await check(diagram('<circle cx="160" cy="90" r="80" fill="black"/><text x="120" y="95" fill="white">Complete</text>'));
+	assert.deepEqual(textFailures(result), []);
+	assert.deepEqual(textReviews(result), []);
+	assert.deepEqual(outcome(result), ["passed"]);
+	expectReview(await check(diagram('<circle id="circle" cx="80" cy="90" r="60" fill="black"/><text x="120" y="95" fill="white">Complete</text>')), /curved or complex edge.*#circle/);
+});
+
 test("round 1 P1: paint-order cannot invent a black backdrop below white text", async () => {
 	expectReview(await check(diagram('<rect id="box" x="10" y="10" width="220" height="80" fill="white" stroke="black" stroke-width="200" paint-order="stroke fill"/><text x="30" y="55" fill="white">Complete</text>')), /fill over its border.*#box/);
 });
