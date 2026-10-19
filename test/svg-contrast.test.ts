@@ -270,3 +270,21 @@ test("tiny focus width growth requires review rather than a temporal pass", asyn
 	assert.deepEqual(result.findings, []);
 	assert.match(result.needsReview!.find((item) => item.evidence.startsWith("focus;"))!.evidence, /width change/);
 });
+
+test("CSS paint with unproved bounds cannot establish a text backdrop", async () => {
+	for (const css of [
+		"main { background:#fff; border-radius:100px; }",
+		"main { overflow:hidden; }",
+		'main::before { content:""; position:absolute; inset:0; background:#000; }',
+	]) {
+		await page.setContent(diagram(`<text x="30" y="55">Complete</text>`, css));
+		await expectTextReview(/CSS background|Generated paint/);
+	}
+});
+
+test("overlapping sibling tspans require whole-box review", async () => {
+	await page.setContent(diagram(`<text><tspan x="30" y="55">Complete</tspan><tspan x="30" y="55">Complete</tspan></text>`));
+	const result = await runAxe(page, "overlapping-spans.html");
+	assert.deepEqual(result.needsReview?.filter((item) => item.rule === "svg-text-contrast").map((item) => item.selector), ["tspan:nth-of-type(1)", "tspan:nth-of-type(2)"]);
+	assert.ok(!result.evaluations?.some((item) => item.rule === "svg-text-contrast" && item.outcome === "passed"));
+});

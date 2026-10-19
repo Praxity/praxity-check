@@ -220,6 +220,7 @@ const COLOR_HELPERS = `(() => {
 		if (!svgVisible(el)) return absent("Element paints no visible content");
 		for (let node = el; node; node = node.parentElement) {
 			const style = getComputedStyle(node);
+			if (node instanceof SVGElement && (style.markerStart !== "none" || style.markerMid !== "none" || style.markerEnd !== "none")) return review("Marker paint bounds are not measured");
 			if (style.filter !== "none" || style.maskImage !== "none" || style.clipPath !== "none" || style.mixBlendMode !== "normal" || style.clip !== "auto") return review("Filter, mask, clipping or blend paint is not measured");
 			if (node !== el && Number(style.opacity) < 1) return review("Ancestor opacity composites a group of paint operations");
 			if (style.perspective !== "none" || style.transform.startsWith("matrix3d")) return review("Three-dimensional transform is not measured");
@@ -257,6 +258,12 @@ const COLOR_HELPERS = `(() => {
 		if (!declared) return review("Unresolved " + kind + " paint");
 		const alpha = declared[3] * Number(style[kind + "Opacity"]) * opacity(el);
 		if (alpha === 0) return absent("Transparent " + kind + " paint");
+		if (alpha < 1 && style.colorInterpolation.toLowerCase() !== "srgb") return review("Paint colour interpolation is not measured");
+		if (kind === "fill" && el instanceof SVGGeometryElement) {
+			const rect = el.getBBox();
+			if (rect.width === 0 || rect.height === 0) return absent("Fill has no painted area");
+			if (!["rect", "circle", "ellipse"].includes(el.localName)) return review("Filled path geometry requires review");
+		}
 		let width = 0;
 		if (kind === "stroke") {
 			if (Number.parseFloat(style.strokeWidth) === 0 || el.getTotalLength() === 0) return absent("Stroke has no painted geometry");
@@ -296,16 +303,20 @@ const COLOR_HELPERS = `(() => {
 			const style = getComputedStyle(node);
 			if (node instanceof SVGSVGElement && style.overflow !== "visible" && !region.boxes.every((r) => contains(node.getBoundingClientRect(), r))) return review("Measured region crosses an SVG viewport clip");
 			if (!(node instanceof SVGElement) && node !== document.documentElement && parse(style.backgroundColor)?.[3] > 0 && !region.boxes.every((r) => contains(node.getBoundingClientRect(), r))) return review("CSS background does not cover the entire measured region");
+			if (!(node instanceof SVGElement) && (
+				style.overflowX !== "visible" || style.overflowY !== "visible" || style.boxShadow !== "none" ||
+				(parse(style.backgroundColor)?.[3] > 0 && (style.backgroundClip !== "border-box" || [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomLeftRadius, style.borderBottomRightRadius].some((r) => Number.parseFloat(r) !== 0)))
+			)) return review("CSS background clipping, rounding or shadow is not measured");
 		}
 		for (const other of document.body.querySelectorAll("*")) {
+			if (svgVisible(other) && ["::before", "::after"].some((pseudo) => !["none", "normal"].includes(getComputedStyle(other, pseudo).content))) return review("Generated paint bounds are not measured");
 			if (other === svg || other.contains(svg) || svg.contains(other) || !svgVisible(other)) continue;
 			if (region.boxes.some((r) => intersects(r, other.getBoundingClientRect()))) return review("Other page content intersects the measured region");
 		}
 		let under = base;
-		for (const shape of svg.querySelectorAll(svgShapes + ", text, image, use, foreignObject")) {
+		for (const shape of svg.querySelectorAll(svgShapes + ", text, tspan, image, use, foreignObject")) {
 			if (shape === el || shape.contains(el) || el.contains(shape) || !svgVisible(shape)) continue;
 			const style = getComputedStyle(shape), rect = shape.getBoundingClientRect();
-			if (style.markerStart !== "none" || style.markerMid !== "none" || style.markerEnd !== "none") return review("Marker paint bounds are not measured");
 			const scale = svgScale(shape);
 			if (scale.status !== "measured") return scale;
 			const strokeExtent = style.stroke !== "none" ? Number.parseFloat(style.strokeWidth) * scale.value / 2 * Math.max(1, Number.parseFloat(style.strokeMiterlimit)) : 0;
@@ -313,7 +324,7 @@ const COLOR_HELPERS = `(() => {
 			// Effects and instances can paint beyond their geometric bounding box.
 			const guarded = svgGuard(shape);
 			if (guarded.status === "review") return guarded;
-			if (shape.localName === "use") return review("SVG use instance paint is not measured");
+			if (shape.matches("use, foreignObject")) return review("SVG instance or foreign content paint bounds are not measured");
 			if (!region.boxes.some((r) => intersects(r, extent))) continue;
 			if (!(shape instanceof SVGGeometryElement)) return review("Other SVG content intersects the measured region");
 			if (shape.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) return review("Later SVG paint intersects the measured region");
@@ -397,7 +408,6 @@ const COLOR_HELPERS = `(() => {
 				const stroke = svgPaint(node, "stroke");
 				if (stroke.status === "review") return stroke;
 				if (stroke.status === "measured") {
-					if (style.markerStart !== "none" || style.markerMid !== "none" || style.markerEnd !== "none") return review("Focus marker paint is not measured");
 					const fill = svgPaint(node, "fill");
 					if (fill.status === "review") return fill;
 					if (fill.status === "measured" && (opacity(node) < 1 || style.paintOrder !== "normal")) return review("Focus fill and stroke compositing requires review");
@@ -419,7 +429,8 @@ const COLOR_HELPERS = `(() => {
 				if (backdrop.status !== "measured") return backdrop;
 				const color = composite(item.paint, backdrop.value);
 				cues.push({ name: item.name, target: locate(node), ratio: contrast(color, backdrop.value), color, under: backdrop.value,
-					width: item.paint.width, signature: item.paint.signature, geometry: [rect.left, rect.top, rect.right, rect.bottom].join(" ") });
+					width: item.paint.width, signature: item.paint.signature, geometry: [rect.left, rect.top, rect.right, rect.bottom, style.d, style.transform,
+						...Array.from(node.attributes).filter((a) => !["style", "stroke", "stroke-width", "stroke-opacity", "opacity"].includes(a.name)).map((a) => a.name + "=" + a.value)].join(" ") });
 			}
 		}
 		return cues.length ? measured(cues) : absent("No painted stroke or outline focus cue");
