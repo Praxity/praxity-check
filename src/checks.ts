@@ -384,7 +384,60 @@ const COLOR_HELPERS = `(() => {
 		const strongest = cues.sort((a, b) => b.ratio - a.ratio)[0];
 		return measured({ ...strongest, fillMeaning: strongest.name === "stroke" && strongest.ratio >= 3 && cues.some((cue) => cue.name === "fill" && cue.ratio < 3) });
 	};
-	return { parse, paint, contrast, background, colors, opacity, svgShapes, svgVisible, svgGuard, svgScale, svgRegion, svgPaint, svgBackdrop, svgBoundary, textContrast, composite, measured, absent, review };
+	const svgFocus = (el, locate) => {
+		const guard = svgGuard(el);
+		if (guard.status !== "measured") return guard;
+		const cues = [];
+		for (const node of [el, ...el.querySelectorAll(svgShapes + ", use")]) {
+			if (!svgVisible(node)) continue;
+			if (node.localName === "use") return review("Focus paint on an SVG use instance is not measured");
+			const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+			const paints = [];
+			if (node instanceof SVGGeometryElement) {
+				const stroke = svgPaint(node, "stroke");
+				if (stroke.status === "review") return stroke;
+				if (stroke.status === "measured") {
+					if (style.markerStart !== "none" || style.markerMid !== "none" || style.markerEnd !== "none") return review("Focus marker paint is not measured");
+					const fill = svgPaint(node, "fill");
+					if (fill.status === "review") return fill;
+					if (fill.status === "measured" && (opacity(node) < 1 || style.paintOrder !== "normal")) return review("Focus fill and stroke compositing requires review");
+					paints.push({ name: "stroke", paint: stroke.value, region: svgRegion(node, true) });
+				}
+			}
+			if (style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0) {
+				const declared = parse(style.outlineColor), scale = svgScale(node);
+				if (!declared) return review("Outline colour is unresolved");
+				if (declared[3] === 0) continue;
+				if (scale.status !== "measured" || scale.value !== 1 || Number.parseFloat(style.outlineOffset) < 0 || !["solid", "auto"].includes(style.outlineStyle)) return review("Outline geometry is not measured");
+				const width = Number.parseFloat(style.outlineWidth);
+				if (width < 1) return review("Subpixel outline visibility requires review");
+				paints.push({ name: "outline", paint: { color: declared.slice(0, 3), alpha: declared[3] * opacity(node), width,
+					signature: style.outline + " " + style.outlineOffset + " " + opacity(node) }, region: svgRegion(node, true, width + Number.parseFloat(style.outlineOffset)) });
+			}
+			for (const item of paints) {
+				const backdrop = svgBackdrop(node, item.region);
+				if (backdrop.status !== "measured") return backdrop;
+				const color = composite(item.paint, backdrop.value);
+				cues.push({ name: item.name, target: locate(node), ratio: contrast(color, backdrop.value), color, under: backdrop.value,
+					width: item.paint.width, signature: item.paint.signature, geometry: [rect.left, rect.top, rect.right, rect.bottom].join(" ") });
+			}
+		}
+		return cues.length ? measured(cues) : absent("No painted stroke or outline focus cue");
+	};
+	const svgFocusChange = (before, after) => {
+		if (before.status === "review") return before;
+		if (after.status !== "measured") return after;
+		const changes = [];
+		for (const cue of after.value) {
+			const previous = before.status === "measured" ? before.value.find((p) => p.target === cue.target && p.name === cue.name) : undefined;
+			if (previous && previous.geometry !== cue.geometry) return review("Focus changed indicator geometry");
+			if (previous && previous.width !== cue.width) return review("Focus indicator width change requires rendered-area review");
+			if (previous?.signature === cue.signature) continue;
+			changes.push({ name: cue.name, ratio: Math.min(cue.ratio, contrast(cue.color, previous?.color ?? cue.under)) });
+		}
+		return changes.length ? measured(changes.sort((a, b) => b.ratio - a.ratio)[0]) : absent("No painted focus cue changed");
+	};
+	return { parse, paint, contrast, background, colors, opacity, svgShapes, svgVisible, svgGuard, svgScale, svgRegion, svgPaint, svgBackdrop, svgBoundary, svgFocus, svgFocusChange, textContrast, composite, measured, absent, review };
 })()`;
 
 /**
@@ -1699,6 +1752,7 @@ export async function keyboardScrollableRegions(page: Page, pageId: string): Pro
  */
 export async function focusIndicators(page: Page, pageId: string): Promise<CheckResult> {
 	const findings: Finding[] = [];
+	const needsReview: ReviewItem[] = [];
 	const notes: string[] = [];
 	await page.addStyleTag({ content: NO_MOTION });
 
@@ -1709,10 +1763,11 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 	const results = await page.evaluate(
 		([attr, count, locate, indicatorNodes, colorHelpers]) => {
 			const sampleNodes = (0, eval)(indicatorNodes) as (el: HTMLElement) => HTMLElement[];
-			const { opacity, svgVisible, parse } = (0, eval)(colorHelpers) as {
-				opacity: (el: Element) => number; svgVisible: (el: Element) => boolean;
-				parse: (value: string) => number[] | undefined;
+			const { svgFocus, svgFocusChange } = (0, eval)(colorHelpers) as {
+				svgFocus: (el: Element, locate: (el: Element) => string) => PaintResult<SvgFocusCue[]>;
+				svgFocusChange: (before: PaintResult<SvgFocusCue[]>, after: PaintResult<SvgFocusCue[]>) => PaintResult<{ name: string; ratio: number }>;
 			};
+			const selector = (0, eval)(locate) as (el: Element) => string;
 			const paintedColor = (value: string): string => {
 				const channels = value.match(/[\d.]+/g)?.map(Number) ?? [];
 				return channels.length > 3 && channels[3] === 0 ? "transparent" : value;
@@ -1748,7 +1803,6 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 				// reported no visible focus indicator for a control that is plainly focused, which
 				// would have accused every page using that very common pattern.
 				for (const node of sampleNodes(el)) {
-					if (node instanceof SVGElement && !svgVisible(node)) continue;
 					for (const pseudo of [null, "::before", "::after"]) {
 						const style = getComputedStyle(node, pseudo);
 						// A non-generated pseudo-element has computed styles but paints
@@ -1784,17 +1838,13 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 							filter(style.filter),
 							style.opacity,
 						);
-						if (!pseudo && node instanceof SVGGeometryElement && style.stroke !== "none" &&
-							Number.parseFloat(style.strokeWidth) > 0 && (parse(style.stroke)?.[3] ?? 0) * Number(style.strokeOpacity) * opacity(node) > 0) {
-							parts.push(style.stroke, style.strokeWidth, style.strokeOpacity, String(opacity(node)));
-						}
 						if (pseudo) parts.push(style.content, style.width, style.height);
 					}
 				}
 				return parts.join("|");
 			};
 
-			const out: Array<{ index: number; changed: boolean; label: string; where: string }> = [];
+			const out: Array<{ index: number; changed: boolean; label: string; where: string; review?: string }> = [];
 			for (let i = 0; i < count; i++) {
 				const el = document.querySelector<HTMLElement>(`[${attr}="${i}"]`);
 				if (!el) continue;
@@ -1803,13 +1853,17 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 				if (getComputedStyle(el).visibility === "hidden") continue;
 
 				(document.activeElement as HTMLElement | null)?.blur();
-				const before = snapshot(el);
+				const svg = el instanceof SVGElement;
+				const beforePaint = svg ? svgFocus(el, selector) : null;
+				const before = svg ? "" : snapshot(el);
 				el.focus();
 				if (document.activeElement !== el) continue;
-				const after = snapshot(el);
+				const change = beforePaint ? svgFocusChange(beforePaint, svgFocus(el, selector)) : null;
+				const after = svg ? "" : snapshot(el);
 				out.push({
 					index: i,
-					changed: before !== after,
+					changed: change ? change.status === "measured" && change.value.ratio > 1 : before !== after,
+					review: change?.status === "review" ? change.reason : undefined,
 					label: (el.getAttribute("aria-label") || el.innerText || el.tagName).trim().slice(0, 40),
 					where: (0, eval)(locate)(el) as string,
 				});
@@ -1820,6 +1874,12 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 	);
 
 	for (const result of results) {
+		if (result.review) {
+			needsReview.push({ what: "Review this SVG control's focus indicator. Its visible paint could not be established.",
+				page: pageId, selector: result.where || undefined, evidence: result.review, lens: "a11y",
+				basis: "WCAG 2.4.7 Focus Visible (AA)", rule: "focus-visible" });
+			continue;
+		}
 		if (result.changed) continue;
 		findings.push({
 			what: "This control has no visible focus indicator.",
@@ -1842,28 +1902,43 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 			`the focus indicator test measured none of ${limit} controls on ${pageId}. Treat it as not run, not as passed.`,
 		);
 	}
-	return { findings, notes };
+	return { findings, needsReview, notes };
+}
+
+interface SvgFocusCue {
+	name: string;
+	target: string;
+	ratio: number;
+	color: number[];
+	under: number[];
+	width: number;
+	signature: string;
+	geometry: string;
 }
 
 interface StateContrastSnapshot {
 	selector: string;
 	label: string;
 	text?: TextContrast;
-	cues: Array<{ name: string; ratio: number; signature: string; target?: string; color?: number[]; under?: number[]; width?: number }>;
+	cues: Array<{ name: string; ratio: number; signature: string; target?: string }>;
 	cueSignature: string;
 	manual: boolean;
 	hidden?: boolean;
 	svg?: boolean;
+	focus?: PaintResult<SvgFocusCue[]>;
+	focusChange?: PaintResult<{ name: string; ratio: number }>;
+	reasons?: string[];
 }
 
 const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true, pseudo = null) => {
-	const { parse, paint, contrast, background, colors, svgBackdrop, textContrast, opacity } = (0, eval)(colorHelpers);
+	const { parse, paint, contrast, background, colors, svgFocus, textContrast } = (0, eval)(colorHelpers);
 	const selector = (0, eval)(locate);
 	const style = getComputedStyle(el, pseudo);
 	const rect = el.getBoundingClientRect();
 	if ((!pseudo && (rect.width === 0 || rect.height === 0)) || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return null;
 	if (pseudo && (style.content === "none" || style.content === "normal")) return null;
 	let manual = false;
+	const reasons = [];
 	// Chromium marks its unmodified browser focus ring with outline style auto.
 	// WCAG 1.4.11 exempts component appearance that the author did not modify.
 	// ponytail: compare cascade origins if another scan engine stops exposing
@@ -1876,13 +1951,18 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true,
 	}) : [];
 	const text = textNodes.flatMap((node) => {
 		const measurement = textContrast(node);
-		if (measurement.status === "review") manual = true;
+		if (measurement.status === "review") { manual = true; reasons.push(measurement.reason); }
 		return measurement.status === "measured" ? [measurement.value] : [];
 	}).sort((a, b) => a.ratio / a.threshold - b.ratio / b.threshold)[0];
 
 	const svg = el instanceof SVGElement;
-	const backdrop = svg ? svgBackdrop(el) : null;
-	const outer = svg ? (backdrop.status === "measured" ? backdrop.value : undefined) : background(pseudo ? el : el.parentElement);
+	if (svg) {
+		const focus = svgFocus(el, selector);
+		if (focus.status === "review") { manual = true; reasons.push(focus.reason); }
+		return { selector: selector(el), label: (el.getAttribute("aria-label") || el.textContent || el.tagName).trim().slice(0, 80),
+			text, cues: [], cueSignature: "", manual, reasons, svg: true, focus };
+	}
+	const outer = background(pseudo ? el : el.parentElement);
 	const cues = [];
 	if (!outer || style.backgroundImage !== "none") manual = true;
 	else {
@@ -1905,18 +1985,11 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true,
 			});
 		}
 		if (authoredOutline) {
-			const color = paint(style.outlineColor, outer, svg ? opacity(el) : 1);
+			const color = paint(style.outlineColor, outer);
 			if (color) cues.push({
 				name: "outline", ratio: contrast(color, outer),
 				signature: style.outlineWidth + " " + style.outlineStyle + " " + style.outlineColor + " " + style.outlineOffset,
-				...(svg ? { color, under: outer, width: Number.parseFloat(style.outlineWidth) } : {}),
 			});
-		}
-		if (svg && !pseudo && el instanceof SVGGeometryElement && style.stroke !== "none" && Number.parseFloat(style.strokeWidth) > 0) {
-			const color = paint(style.stroke, outer, opacity(el) * Number(style.strokeOpacity));
-			if (!color) manual = true;
-			else cues.push({ name: "stroke", ratio: contrast(color, outer), color, under: outer,
-				width: Number.parseFloat(style.strokeWidth), signature: style.stroke + " " + style.strokeWidth + " " + style.strokeOpacity + " " + opacity(el) });
 		}
 		for (const value of colors(style.boxShadow)) {
 			const color = paint(value, outer);
@@ -1929,7 +2002,7 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true,
 		label: (el.getAttribute("aria-label") || el.innerText || el.getAttribute("title") || el.tagName).replace(/\\s+/g, " ").trim().slice(0, 80),
 		text, cues,
 		cueSignature: [
-			style.backgroundColor, style.backgroundImage, svg ? style.stroke + style.strokeWidth + style.strokeOpacity : "",
+			style.backgroundColor, style.backgroundImage,
 			style.borderTop, style.borderRight, style.borderBottom, style.borderLeft,
 			authoredOutline ? style.outline : "", style.boxShadow,
 		].join("|"),
@@ -1948,7 +2021,9 @@ async function stateContrastSnapshots(
 			const snapshot = (0, eval)(probe) as (el: HTMLElement, colors: string, selector: string, text?: boolean, pseudo?: string | null) => StateContrastSnapshot | null;
 			const sampleNodes = (0, eval)(indicatorNodes) as (el: HTMLElement) => HTMLElement[];
 			const selector = (0, eval)(locate) as (el: HTMLElement) => string;
-			const { contrast } = (0, eval)(colorHelpers) as { contrast: (a: number[], b: number[]) => number };
+			const { svgFocusChange } = (0, eval)(colorHelpers) as {
+				svgFocusChange: (before: PaintResult<SvgFocusCue[]>, after: PaintResult<SvgFocusCue[]>) => PaintResult<{ name: string; ratio: number }>;
+			};
 			const hidden = (el: HTMLElement, includeBox = true): boolean => {
 				const rect = el.getBoundingClientRect();
 				if (includeBox && (rect.width <= 1 || rect.height <= 1)) return true;
@@ -1972,31 +2047,28 @@ async function stateContrastSnapshots(
 					if (document.activeElement !== el) { out.push(null); continue; }
 				}
 				const own = snapshot(el, colorHelpers, locate);
-				const svg = el instanceof SVGElement;
-				if (!hidden(el) && !svg) { out.push(own); continue; }
+				if (own?.svg) {
+					if (shouldFocus && own.focus && before[i]?.focus) {
+						own.focusChange = svgFocusChange(before[i]!.focus!, own.focus);
+						if (own.focusChange.status === "review") { own.manual = true; own.reasons?.push(own.focusChange.reason); }
+					}
+					out.push(own); continue;
+				}
+				if (!hidden(el)) { out.push(own); continue; }
 				// Compare the same visible representatives before and after focus.
 				// Static decoration must not count as a focus change.
-				const representatives = sampleNodes(el).filter((node) => node !== el && (!svg || (el.contains(node) && node instanceof SVGGeometryElement)))
+				const representatives = sampleNodes(el).filter((node) => node !== el)
 					.flatMap((node) => [null, "::before", "::after"].flatMap((pseudo) => {
 						if (hidden(node, !pseudo)) return [];
 						const paint = snapshot(node, colorHelpers, locate, false, pseudo);
 						return paint ? [{ ...paint, target: selector(node) + (pseudo ?? "") }] : [];
 					}));
-				const combined = {
-					selector: selector(el), label: own?.label ?? el.tagName, hidden: hidden(el), svg,
-					text: svg ? own?.text : undefined,
-					cues: [...(svg ? own?.cues ?? [] : []), ...representatives.flatMap((paint) => paint.cues.map((cue) => ({ ...cue, target: paint.target })))],
-					cueSignature: (svg ? own?.cueSignature ?? "" : "") + representatives.map((paint) => paint.target + paint.cueSignature).join("|"),
-					manual: (svg && own?.manual) || representatives.some((paint) => paint.manual),
-				};
-				if (svg && shouldFocus) for (const cue of combined.cues) {
-					if (!cue.color || !cue.under) continue;
-					const previous = before[i]?.cues.find((item) => item.name === cue.name && item.target === cue.target);
-					// A wider ring paints new area. A recoloured ring must differ from its old pixels.
-					const oldColor = previous?.color && (previous.width ?? 0) >= (cue.width ?? 0) ? previous.color : cue.under;
-					cue.ratio = Math.min(cue.ratio, contrast(cue.color, oldColor));
-				}
-				out.push(combined);
+				out.push({
+					selector: selector(el), label: own?.label ?? el.tagName, hidden: true,
+					cues: representatives.flatMap((paint) => paint.cues.map((cue) => ({ ...cue, target: paint.target }))),
+					cueSignature: representatives.map((paint) => paint.target + paint.cueSignature).join("|"),
+					manual: representatives.some((paint) => paint.manual),
+				});
 			}
 			return out;
 		},
@@ -2048,7 +2120,7 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 						what: `Measure this control's ${state} contrast by hand. Check could not measure it automatically.`,
 						page: pageId,
 						selector: selector || undefined,
-						evidence: `${state}; image, gradient, or opacity-backed colour compositing requires review`,
+						evidence: `${state}; ${[...new Set([...(before.reasons ?? []), ...(after.reasons ?? [])])].join("; ") || "image, gradient, or opacity-backed colour compositing requires review"}`,
 						lens: "a11y",
 						basis: "WCAG 1.4.3 / 1.4.11 (AA)",
 						rule: "state-contrast-compositing",
@@ -2075,8 +2147,9 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 			// treating every subtle hover fill as 1.4.11 produced 160 false defects
 			// on one real export.
 			if (state === "hover" || (!after.svg && !after.hidden && before.cueSignature === after.cueSignature)) continue;
+			if (after.focusChange?.status === "review") continue;
 			const beforeCues = new Map(before.cues.map((cue) => [`${cue.target ?? ""}|${cue.name}`, cue.signature]));
-			const changed = after.cues
+			const changed = after.svg ? (after.focusChange?.status === "measured" ? after.focusChange.value : undefined) : after.cues
 				.filter((cue) => beforeCues.get(`${cue.target ?? ""}|${cue.name}`) !== cue.signature)
 				.sort((a, b) => b.ratio - a.ratio)[0];
 			if (changed && changed.ratio >= 3) continue;

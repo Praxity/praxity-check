@@ -226,3 +226,47 @@ test("fill meaning is one explicit 1.4.1 question per SVG", async () => {
 	assert.deepEqual(result.findings, []);
 	assert.deepEqual(result.needsReview?.map((item) => [item.rule, item.basis]), [["svg-fill-meaning", "WCAG 1.4.1 Use of Color (A)"]]);
 });
+
+test("P1: an empty butt-capped dash pattern is no focus indicator", async () => {
+	await page.setContent(diagram(`<a id="node" href="#next"><rect x="10" y="10" width="200" height="70"
+fill="#fff" stroke="#fff" stroke-width="3" stroke-dasharray="0 10000"/></a>`,
+	"a { outline:none; } a:focus-visible rect { stroke:#000; }"));
+	assert.deepEqual((await focusIndicators(page, "empty-dashes.html")).findings.map((item) => [item.rule, item.selector]), [["focus-visible", "a#node"]]);
+	assert.deepEqual((await stateContrast(page, "empty-dashes.html")).findings.map((item) => [item.rule, item.selector]), [["state-non-text-contrast", "a#node"]]);
+});
+
+test("both focus callers preserve hairline uncertainty and its reason", async () => {
+	for (const width of ["0.000001", "0.2"]) {
+		await page.setContent(CHILD_RING.replace('stroke-width="3"', `stroke-width="${width}"`));
+		const visible = await focusIndicators(page, "hairline.html");
+		assert.deepEqual(visible.findings, []);
+		assert.deepEqual(visible.needsReview?.map((item) => item.rule), ["focus-visible"]);
+		assert.match(visible.needsReview![0]!.evidence, /Subpixel stroke/);
+		const contrast = await stateContrast(page, "hairline.html");
+		assert.deepEqual(contrast.findings, []);
+		assert.match(contrast.needsReview!.find((item) => item.evidence.startsWith("focus;"))!.evidence, /Subpixel stroke/);
+	}
+});
+
+test("SVG focus review survives HTML ancestor opacity and use instances", async () => {
+	for (const html of [
+		CHILD_RING.replace("<svg ", '<div style="opacity:.4"><svg ').replace("</svg>", "</svg></div>"),
+		diagram(`<defs><rect id="shape" width="200" height="70"/></defs><a href="#next"><use href="#shape"/></a>`, "a { outline:none; }"),
+	]) {
+		await page.setContent(html);
+		const visible = await focusIndicators(page, "focus-review.html");
+		assert.deepEqual(visible.findings, []);
+		assert.deepEqual(visible.needsReview?.map((item) => item.rule), ["focus-visible"]);
+		const contrast = await stateContrast(page, "focus-review.html");
+		assert.deepEqual(contrast.findings, []);
+		assert.equal(contrast.needsReview?.filter((item) => item.evidence.startsWith("focus;")).length, 1);
+	}
+});
+
+test("tiny focus width growth requires review rather than a temporal pass", async () => {
+	await page.setContent(CHILD_RING.replace('stroke="#eee"', 'stroke="#111"')
+		.replace("a:focus-visible rect { stroke: #111; }", "a:focus-visible rect { stroke-width:3.1px; }"));
+	const result = await stateContrast(page, "width-change.html");
+	assert.deepEqual(result.findings, []);
+	assert.match(result.needsReview!.find((item) => item.evidence.startsWith("focus;"))!.evidence, /width change/);
+});
