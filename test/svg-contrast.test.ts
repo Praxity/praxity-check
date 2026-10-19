@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { focusIndicators, nonTextContrast, runAxe, stateContrast } from "../src/checks.ts";
 
 let browser: Browser;
+let context: BrowserContext;
 let page: Page;
 before(async () => {
 	browser = await chromium.launch();
-	page = await browser.newPage();
+	context = await browser.newContext();
+	page = await context.newPage();
 });
-after(async () => { await browser?.close(); });
+after(async () => { await context?.close(); await browser?.close(); });
 
 const diagram = (content: string, css = "") => `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><title>Concept map</title><style>
@@ -107,4 +109,77 @@ test("unsupported SVG text paint requires review", async () => {
 	await page.setContent(diagram(`<defs><linearGradient id="paint"><stop stop-color="#fff"/><stop offset="1" stop-color="#eee"/></linearGradient></defs>
 <rect width="240" height="100" fill="url(#paint)"/><text id="label" x="30" y="55">Complete</text>`));
 	assert.deepEqual((await runAxe(page, "gradient.html")).needsReview?.filter((item) => item.rule === "svg-text-contrast").map((item) => item.selector), ["text#label"]);
+});
+
+const expectTextReview = async (reason: RegExp) => {
+	const result = await runAxe(page, "review.html");
+	const reviews = result.needsReview?.filter((item) => item.rule === "svg-text-contrast");
+	assert.equal(reviews?.length, 1);
+	assert.match(reviews![0]!.evidence, reason);
+	assert.deepEqual(result.evaluations?.filter((item) => item.rule === "svg-text-contrast").map((item) => item.outcome), ["cantTell"]);
+};
+
+test("P1: a narrow stripe missed by every old sample cannot pass text contrast", async () => {
+	await page.setContent(diagram(`<rect width="240" height="100" fill="#fff"/>
+<rect id="stripe" x="20" width="20" height="100" fill="#000"/>
+<text id="label" x="10" y="55" style="font-size:24px">MMMMMMMMMM</text>`));
+	await page.evaluate(() => {
+		const bounds = document.querySelector<SVGTextElement>("#label")!.getBBox();
+		document.querySelector("#stripe")!.setAttribute("x", String(bounds.x + bounds.width * .08));
+		document.querySelector("#stripe")!.setAttribute("width", String(bounds.width * .12));
+	});
+	await expectTextReview(/partially intersects/);
+});
+
+test("P1: overflowing text requires proof for the whole box", async () => {
+	await page.setContent(diagram(`<rect id="box" width="100" height="40" fill="#003"/>
+<text id="over" x="5" y="25" font-size="16" fill="#fff">Overflowing label</text>`).replace('width="240" height="100" viewBox="0 0 240 100"', 'width="400" height="100" viewBox="0 0 400 100"'));
+	await expectTextReview(/partially intersects/);
+});
+
+test("P1: paint-order cannot invent a black backdrop under white text", async () => {
+	await page.setContent(diagram(`<rect x="10" y="10" width="220" height="80" fill="#fff" stroke="#000" stroke-width="200" paint-order="stroke fill"/>
+<text id="label" x="30" y="55" fill="#fff">Complete</text>`));
+	await expectTextReview(/Paint-order/);
+});
+
+test("P1: object opacity applies once to overlapping fill and stroke", async () => {
+	await page.setContent(diagram(`<rect x="10" y="10" width="220" height="80" fill="#fff" stroke="#fff" stroke-width="200" opacity="0.3"/>
+<text id="label" x="30" y="55" fill="#000" style="font-size:24px">Complete</text>`, "body { background:#000; }"));
+	await expectTextReview(/Object opacity/);
+});
+
+test("P1: viewBox scaling sets the delivered font-size threshold", async () => {
+	await page.setContent(diagram(`<text id="scaled" x="10" y="100" style="font-size:40px" fill="#888">Scaled text</text>`)
+		.replace('width="240" height="100" viewBox="0 0 240 100"', 'width="250" height="125" viewBox="0 0 1000 500"'));
+	const result = await runAxe(page, "scaled.html");
+	assert.deepEqual(result.findings.filter((item) => item.rule === "svg-text-contrast").map((item) => [item.selector, item.evidence]),
+		[["text#scaled", "rgb(136 136 136) on rgb(255 255 255); 3.54:1 (required: 4.5:1)"]]);
+});
+
+test("browser-resolved inherited currentColor has its literal solid contrast", async () => {
+	await page.setContent(diagram(`<g fill="currentColor" color="#777"><text id="label" x="30" y="55">Complete</text></g>`));
+	const result = await runAxe(page, "current-color.html");
+	assert.deepEqual(result.findings.filter((item) => item.rule === "svg-text-contrast").map((item) => item.evidence),
+		["rgb(119 119 119) on rgb(255 255 255); 4.48:1 (required: 4.5:1)"]);
+	for (const value of ["context-fill", "context-stroke"]) {
+		await page.setContent(diagram(`<text x="30" y="55" fill="${value}">Complete</text>`));
+		await expectTextReview(/Unresolved fill/);
+	}
+});
+
+test("HTML ancestor opacity requires text review", async () => {
+	await page.setContent(diagram(`<text x="30" y="55" fill="#fff">Complete</text>`)
+		.replace("<svg ", '<div style="background:#000;opacity:.4"><svg ').replace("</svg>", "</svg></div>"));
+	await expectTextReview(/Ancestor opacity/);
+});
+
+test("stroke-only text requires review rather than silent exclusion", async () => {
+	await page.setContent(diagram(`<text id="outline" x="5" y="30" fill="none" stroke="#eee">Outline</text>`));
+	await expectTextReview(/Stroked SVG text/);
+});
+
+test("use instances cannot silently pass SVG text coverage", async () => {
+	await page.setContent(diagram(`<defs><symbol id="used"><text x="30" y="55" fill="#eee">Complete</text></symbol></defs><use href="#used"/>`));
+	await expectTextReview(/use instance/);
 });
