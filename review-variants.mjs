@@ -18,3 +18,10 @@ try {
 const head=JSON.parse(readFileSync('review-evidence/head.json','utf8'));
 const baseline=JSON.parse(readFileSync('review-evidence/base.json','utf8'));
 for(const h of head){const b=baseline.find(x=>x.name===h.name);console.log(JSON.stringify({name:h.name,head:{presses:h.presses,ms:h.ms,findings:h.result.findings?.length,error:h.result.error},base:{presses:b.presses,ms:b.ms,findings:b.result.findings?.length,error:b.result.error}}))}
+const outcomes=variant=>[...readFileSync(`review-evidence/${variant}-existing.tap`,'utf8').matchAll(/^    (not ok|ok) \d+ - (keyboardWalk .+)$/gm)].map(([,state,name])=>({name,pass:state==='ok'}));
+const summary={head:outcomes('head'),base:outcomes('base')};
+writeFileSync('review-evidence/fail-first.json',JSON.stringify(summary,null,2));
+const additions=summary.base.filter(x=>x.name!=='keyboardWalk finds a focus trap');
+if(additions.length!==13||additions.some(x=>x.pass))throw new Error('The 13 new PR tests did not all fail against reverted source');
+console.log('Fail-first: all 13 new PR tests fail with source reverted.');
+if(summary.head.some(x=>!x.pass))process.exitCode=1;
