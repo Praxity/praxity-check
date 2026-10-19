@@ -166,6 +166,7 @@ test("overlapping sibling tspans cannot pass", async () => {
 test("local generated content and overlaid HTML remain review", async () => {
 	for (const [html, reason] of [
 		[diagram('<text x="30" y="55">Complete</text>', 'main::before { content:"";position:absolute;inset:0;background:black; }'), /Generated content ::before.*main/],
+		[diagram('<text x="30" y="55">Complete</text>', 'h1::before {content:"";position:relative;top:120px;display:block;width:400px;height:80px;background:black}'), /Generated content ::before.*h1/],
 		[diagram('<text x="30" y="55">Complete</text>').replace('</main>', '<div id="overlay" style="position:absolute;left:0;top:0;width:400px;height:400px;background:white"></div></main>'), /page element.*#overlay/],
 	] as const) expectReview(await check(html), reason);
 });
