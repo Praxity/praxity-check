@@ -97,6 +97,12 @@ const NO_MOTION = `*, *::before, *::after {
 const MAX_FOCUS_CHECKS = 60;
 /** Enough to show a page is riddled with them without walking forever. */
 const MAX_TRAPS = 5;
+const TRAP_REPEAT_TABS = 3;
+/** Ten extra Tabs cover native date/time segments and media buttons, with room to spare. */
+const MAX_ESCAPE_TABS = 10;
+/** Leave most of the page audit's time for its other checks, even on focus cycles. */
+const MAX_KEYBOARD_WALK_MS = 5_000;
+const MAX_KEYBOARD_PRESSES = 1_000;
 /**
  * `dataset.praxityCheckId` writes the attribute `data-praxity-check-id` -- camel case
  * on the property, kebab case on the attribute. Querying the camel-case form
@@ -1257,83 +1263,161 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 	const trapped = new Set<string>();
 	const total = await markFocusables(page);
 	if (total === 0) return { findings, notes };
+	const deadline = performance.now() + MAX_KEYBOARD_WALK_MS;
+	let presses = 0;
+	let budgetExhausted = false;
+	// Walking, confirmation and restoration all spend the same page budget.
+	const press = async (key: "Tab" | "Shift+Tab"): Promise<boolean> => {
+		if (presses >= MAX_KEYBOARD_PRESSES || performance.now() >= deadline) {
+			budgetExhausted = true;
+			return false;
+		}
+		presses++;
+		await page.keyboard.press(key);
+		return true;
+	};
 
 	await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
 	const order: string[] = [];
-	for (let i = 0; i < total + 2; i++) {
-		await page.keyboard.press("Tab");
-		const at = await page.evaluate(
-			([mark, attr, locate]) => {
-				const el = document.activeElement as HTMLElement | null;
-				if (!el || el === document.body) return null;
-				// Identity, not appearance. Tab reaches things the focusable selector
-				// does not list -- `<video controls>` is the common one -- and giving
-				// every unmarked element the same synthetic `<tag>` id made two
-				// different videos in a row look like one element focus never left.
-				// That fabricated four keyboard traps on a clean course.
-				if (el.dataset[mark] === undefined) {
-					el.dataset[mark] = `u${document.querySelectorAll(`[${attr}]`).length}`;
-				}
-				return {
-					id: el.dataset[mark] as string,
-					tag: el.tagName.toLowerCase(),
-					label: (el.getAttribute("aria-label") || el.innerText || el.getAttribute("title") || "").replace(/\s+/g, " ").trim().slice(0, 80),
-					where: (0, eval)(locate)(el) as string,
-				};
-			},
-			[MARK, MARK_ATTR, UNIQUE_SELECTOR] as const,
-		);
-		if (!at) break;
-
-		// `<video controls>` and `<audio controls>` hold focus on the host while Tab
-		// moves between their play, timeline and volume buttons -- those live in a
-		// user-agent shadow root Chromium will not let us read, so focus is moving
-		// and we cannot see it. Counting the repeat invented four keyboard traps on
-		// a course that has none.
-		const mediaControls = at.tag === "video" || at.tag === "audio";
-		if (!mediaControls && order.length >= 2 && order.at(-1) === at.id && order.at(-2) === at.id) {
-			findings.push({
-				what: "Keyboard focus is stuck here — pressing Tab does not move on.",
-				page: pageId,
-				selector: at.where || undefined,
-				evidence: `${at.label ? `accessible name ${JSON.stringify(at.label)}; ` : ""}Tab pressed 3 times, focus never left element ${at.id}`,
-				fix: "Let Tab leave the component, and close it on Escape.",
-				lens: "a11y",
-				confidence: "high",
-				basis: "WCAG 2.1.2 No Keyboard Trap (A)",
-				rule: "keyboard-trap",
-			});
-			// Step over the trap and keep walking. Returning here meant a page with
-			// two traps only ever reported one -- and when the player itself
-			// contains one (LiaScript does), every trap in the authored content
-			// downstream of it became invisible.
-			trapped.add(at.id);
-			if (trapped.size >= MAX_TRAPS) {
-				notes.push(`stopped the Tab key test on ${pageId} after ${MAX_TRAPS} focus traps`);
-				break;
-			}
-			const resumed = await page.evaluate(
-				([attr, seen]) => {
-					const all = Array.from(document.querySelectorAll<HTMLElement>(`[${attr}]`));
-					const next = all.find((el) => !seen.includes(el.getAttribute(attr) ?? ""));
-					if (!next) return false;
-					next.focus();
-					return document.activeElement === next;
+	let previous: string | undefined;
+	let repeats = 0;
+	let interrupted = false;
+	try {
+		while (await press("Tab")) {
+			const at = await page.evaluate(
+				([mark, attr, locate]) => {
+					const el = document.activeElement as HTMLElement | null;
+					if (!el || el === document.body) return null;
+					// Identity, not appearance. Tab reaches things the focusable selector
+					// does not list -- `<video controls>` is the common one -- and giving
+					// every unmarked element the same synthetic `<tag>` id made two
+					// different videos in a row look like one element focus never left.
+					// That fabricated four keyboard traps on a clean course.
+					if (el.dataset[mark] === undefined) {
+						el.dataset[mark] = `u${document.querySelectorAll(`[${attr}]`).length}`;
+					}
+					return {
+						id: el.dataset[mark] as string,
+						label: (el.getAttribute("aria-label") || el.innerText || el.getAttribute("title") || "").replace(/\s+/g, " ").trim().slice(0, 80),
+						where: (0, eval)(locate)(el) as string,
+					};
 				},
-				[MARK_ATTR, [...trapped, ...order]] as const,
+				[MARK, MARK_ATTR, UNIQUE_SELECTOR] as const,
 			);
-			if (!resumed) {
-				notes.push(`stopped the Tab key test on ${pageId}: Tab cannot reach any control past the focus trap`);
-				break;
+			if (!at) break;
+			repeats = at.id === previous ? repeats + 1 : 1;
+			previous = at.id;
+
+			// Native media buttons and date/time segments move focus inside an unreadable
+			// user-agent shadow root. Repeated host identity alone does not prove a trap.
+			if (!trapped.has(at.id) && repeats >= TRAP_REPEAT_TABS) {
+				// A handle keeps the original identity, including after cloning or removal,
+				// and never waits for a replacement node with the same marker to appear.
+				const target = await page.evaluateHandle(() => document.activeElement as HTMLElement);
+				const saved = await target.evaluate((el) => el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
+					? { value: el.value, start: el.selectionStart, end: el.selectionEnd, direction: el.selectionDirection } : null);
+				const canEscape = async (key: "Tab" | "Shift+Tab"): Promise<{ escaped: boolean; presses: number } | null> => {
+					for (let count = 1; count <= MAX_ESCAPE_TABS; count++) {
+						if (!await target.evaluate((el) => el.isConnected) || !await press(key)) return null;
+						const state = await target.evaluate((el) => ({ connected: el.isConnected, focused: document.activeElement === el }));
+						if (!state.connected) return null;
+						if (state.focused) continue;
+						// Reverse the probe to restore the native segment as well as its host.
+						for (let undo = 0; undo < count; undo++) {
+							if (!await target.evaluate((el) => el.isConnected) || !await press(key === "Tab" ? "Shift+Tab" : "Tab")) return null;
+						}
+						const restored = await target.evaluate((el) => {
+							if (!el.isConnected) return false;
+							// Page handlers may block the return trip even when escape succeeded.
+							if (document.activeElement !== el) el.focus();
+							return document.activeElement === el;
+						});
+						return restored ? { escaped: true, presses: count } : null;
+					}
+					return { escaped: false, presses: MAX_ESCAPE_TABS };
+				};
+				let forward: Awaited<ReturnType<typeof canEscape>> = null;
+				let backward: Awaited<ReturnType<typeof canEscape>> = null;
+				try {
+					forward = await canEscape("Tab");
+					if (forward && !forward.escaped) backward = await canEscape("Shift+Tab");
+				} finally {
+					// Tab-consuming editors may insert text. Probes must not leave those edits
+					// behind for later checks, or change the user's selection.
+					await target.evaluate((el, saved) => {
+						if (!saved || !el.isConnected || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+						el.value = saved.value;
+						if (saved.start !== null && saved.end !== null) el.setSelectionRange(saved.start, saved.end, saved.direction ?? undefined);
+					}, saved);
+					await target.dispose();
+				}
+				// Restoration can arm new page handlers. Reconfirm a fresh run of repeats.
+				repeats = 0;
+				if (!forward || (!forward.escaped && !backward)) {
+					notes.push(`could not confirm a keyboard trap at ${at.where} on ${pageId}: probe target changed, restoration failed, or the keyboard budget was exhausted`);
+					order.push(at.id);
+					// A removed target leaves focus at the probe's destination. Remember it
+					// so later trap recovery does not jump backwards to that control.
+					const surviving = await page.evaluate((mark) => (document.activeElement as HTMLElement | null)?.dataset[mark], MARK);
+					if (surviving && surviving !== at.id) order.push(surviving);
+					continue;
+				}
+				if (forward.escaped) {
+					order.push(at.id);
+					continue;
+				}
+				const reverseEscape = backward!.escaped;
+				findings.push({
+					what: reverseEscape
+						? "Tab cannot move past this control. Shift+Tab can, so this is not a full trap, but keyboard users cannot reach what comes after it."
+						: "Keyboard focus is trapped here. Neither Tab nor Shift+Tab moves it away.",
+					page: pageId,
+					selector: at.where || undefined,
+					evidence: `${at.label ? `accessible name ${JSON.stringify(at.label)}; ` : ""}Focus stayed here for ${TRAP_REPEAT_TABS + MAX_ESCAPE_TABS} Tab presses${reverseEscape ? `; Shift+Tab left after ${backward!.presses} presses.` : ` and ${MAX_ESCAPE_TABS} Shift+Tab presses.`}`,
+					fix: reverseEscape
+						? "Find the script that cancels Tab on this control and let Tab move to the next control."
+						: "Let Tab and Shift+Tab move focus out. If another key is needed, such as Escape, tell users which key.",
+					lens: "a11y",
+					confidence: reverseEscape ? "medium" : "high",
+					basis: reverseEscape ? "WCAG 2.1.1 Keyboard (A)" : "WCAG 2.1.2 No Keyboard Trap (A)",
+					rule: "keyboard-trap",
+				});
+				// Step over the trap and keep walking. Returning here meant a page with
+				// two traps only ever reported one -- and when the player itself
+				// contains one (LiaScript does), every trap in the authored content
+				// downstream of it became invisible.
+				trapped.add(at.id);
+				if (trapped.size >= MAX_TRAPS) {
+					notes.push(`stopped the Tab key test on ${pageId} after ${MAX_TRAPS} focus traps`);
+					break;
+				}
+				const resumed = await page.evaluate(
+					([attr, seen]) => {
+						const all = Array.from(document.querySelectorAll<HTMLElement>(`[${attr}]`));
+						const next = all.find((el) => !seen.includes(el.getAttribute(attr) ?? ""));
+						if (!next) return false;
+						next.focus();
+						return document.activeElement === next;
+					},
+					[MARK_ATTR, [...trapped, ...order]] as const,
+				);
+				if (!resumed) {
+					notes.push(`stopped the Tab key test on ${pageId}: Tab cannot reach any control past the focus trap`);
+					break;
+				}
+				order.push(at.id);
+				continue;
 			}
 			order.push(at.id);
-			continue;
 		}
-		order.push(at.id);
+	} catch (error) {
+		interrupted = true;
+		notes.push(`stopped the Tab key test on ${pageId}: ${error instanceof Error ? error.message : String(error)}`);
 	}
+	if (budgetExhausted) notes.push(`stopped the Tab key test on ${pageId}: shared keyboard budget exhausted (${MAX_KEYBOARD_PRESSES} presses or ${MAX_KEYBOARD_WALK_MS}ms); remaining controls were not tested`);
 
-	if (order.length === 0) {
+	if (order.length === 0 && !budgetExhausted && !interrupted) {
 		findings.push({
 			what: "Tab reaches none of this page's controls.",
 			page: pageId,
