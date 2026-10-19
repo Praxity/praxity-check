@@ -259,7 +259,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 	const where = (el) => el.id ? "#" + el.id : el.localName + (el.parentElement ? ":nth-of-type(" + (Array.from(el.parentElement.children).filter((n) => n.localName === el.localName).indexOf(el) + 1) + ")" : "");
 	const blocked = (el, reason) => review(reason + " (" + where(el) + ").");
 	const visible = (el) => {
-		if (el.closest("defs, clipPath, mask, symbol, [aria-hidden=true]")) return false;
+		if (el.closest("defs, clipPath, mask, symbol, title, desc, metadata, style, script, [aria-hidden=true]")) return false;
 		if (css(el).visibility !== "visible") return false;
 		for (let n = el; n; n = n.parentElement) if (css(n).display === "none" || Number(css(n).opacity) === 0) return false;
 		return true;
@@ -522,6 +522,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 			if(s.textShadow!=="none")return needs(blocked(node,"This label has a text shadow; check its fill against the shadow and background"));
 			if(s.stroke!=="none" && (parse(s.stroke)?.[3]??1)*Number(s.strokeOpacity)>0)return needs(blocked(node,"This label has an outline stroke; check the text against its background and outline"));
 			const fill=solid(node,"fill");if(fill.status!=="measured")return needs(fill);
+			if(fill.value.alpha*Number(s.opacity)<1 && s.colorInterpolation.toLowerCase()!=="srgb")return needs(blocked(node,"This translucent text uses a different colour blend; check its visible fill against the background"));
 			const font=fontEvidence.get(node);
 			if(!font || font.signature!==fontSignature(node) || font.reason)return needs(blocked(node,font?.reason||"The rendered font could not be verified; check whether its glyphs use the declared text colour"));
 			const boxes=textBoxes(node);

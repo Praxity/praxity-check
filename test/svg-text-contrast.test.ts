@@ -141,6 +141,16 @@ test("stroke-only SVG text remains review, with its blocking element", async () 
 	expectReview(await check(diagram('<text id="outline" x="30" y="55" fill="none" stroke="#eee">Outline</text>')), /outline stroke.*#outline/);
 });
 
+test("linear-light text opacity cannot inherit an sRGB contrast pass", async () => {
+	expectReview(await check(diagram('<text id="faded-label" x="30" y="55" fill="black" fill-opacity=".5" color-interpolation="linearRGB" style="font-size:24px">Complete</text>')), /translucent text.*#faded-label/);
+});
+
+test("a label's title is metadata rather than another painted text run", async () => {
+	const result = await check(diagram('<text x="30" y="55"><title>Planning status</title>Complete</text>'));
+	assert.deepEqual(textReviews(result), []);
+	assert.deepEqual(outcome(result), ["passed"]);
+});
+
 test("hairline backdrop strokes remain review", async () => {
 	expectReview(await check(diagram('<line id="hairline" x1="0" y1="50" x2="300" y2="50" stroke="black" stroke-width=".2"/><text x="30" y="55">Complete</text>')), /thinner than one screen pixel.*#hairline/);
 });
