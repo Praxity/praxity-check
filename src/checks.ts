@@ -391,6 +391,10 @@ const COLOR_HELPERS = `((evidence = {}) => {
 					const container = s.position === "fixed" || parent === document.documentElement ? {left:0,top:0,right:innerWidth,bottom:innerHeight} : rectOf(parent);
 					const left = Number.parseFloat(s.left), top = Number.parseFloat(s.top), width = Number.parseFloat(s.width), height = Number.parseFloat(s.height);
 					box = Number.isFinite(left+top+width+height) && s.transform === "none" ? {left:container.left+left,top:container.top+top,right:container.left+left+width,bottom:container.top+top+height} : container;
+				} else {
+					const dx=s.position==="relative"?(Number.parseFloat(s.left)||-Number.parseFloat(s.right)||0):0,dy=s.position==="relative"?(Number.parseFloat(s.top)||-Number.parseFloat(s.bottom)||0):0;
+					const extra=Math.max(0,(Number.parseFloat(s.width)||0)-(bounds.right-bounds.left),(Number.parseFloat(s.height)||0)-(bounds.bottom-bounds.top))+Math.max(...[s.marginTop,s.marginRight,s.marginBottom,s.marginLeft].map((v)=>Math.abs(Number.parseFloat(v)||0)));
+					box=s.transform!=="none"?unbounded:expand({left:bounds.left+dx,right:bounds.right+dx,top:bounds.top+dy,bottom:bounds.bottom+dy},extra);
 				}
 				items.push({el, bounds:cssPaintBounds(s,box), pseudo});
 			}
@@ -816,17 +820,22 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 		([targets, locate]) => targets.map((target) => {
 			try {
 				const el = document.querySelector(target);
-				return el ? ((0, eval)(locate)(el) as string) : "";
+				return {
+					selector: el ? ((0, eval)(locate)(el) as string) : "",
+					svgText: el instanceof SVGElement && (!!el.closest("text") || el instanceof SVGUseElement),
+				};
 			} catch {
-				return "";
+				return { selector: "", svgText: false };
 			}
 		}),
 		[axeTargets, UNIQUE_SELECTOR] as const,
 	);
 	const selectorByTarget = new Map<string, string>();
+	const svgTextTargets = new Set<string>();
 	axeTargets.forEach((target, index) => {
-		const selector = axeSelectors[index];
-		if (selector) selectorByTarget.set(target, selector);
+		const resolved = axeSelectors[index];
+		if (resolved?.selector) selectorByTarget.set(target, resolved.selector);
+		if (resolved?.svgText) svgTextTargets.add(target);
 	});
 
 	const uaSized = new Set(await page.evaluate(UA_SIZED_CONTROLS) as string[]);
@@ -861,6 +870,9 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 			// having no failures. Kept, demoted, out of the headline count.
 			const normative = !rule.tags.includes("best-practice");
 			for (const node of rule.nodes) {
+				// The shared colour owner below measures these text runs, including
+				// unresolved results. axe's CSS backdrop cannot resolve SVG painting.
+				if (rule.id === "color-contrast" && svgTextTargets.has(node.target.join(" "))) continue;
 				// 2.5.8 User Agent Control: a target the browser sizes and the author
 				// never touches does not fail. axe reports these anyway.
 				if (rule.id === "target-size" && uaExempt.has(node.target.join(" "))) continue;
