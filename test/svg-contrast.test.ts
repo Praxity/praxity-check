@@ -45,7 +45,7 @@ test("SVG boundary uses its border; an almost full-size fill still needs contras
 test("a border does not establish that a colour-only status passes", async () => {
 	await page.setContent(BORDERED.replace(/<text.*?<\/text>/, ""));
 	assert.deepEqual((await nonTextContrast(page, "colour-only.html")).needsReview?.map((item) => [item.rule, item.selector]),
-		[["non-text-contrast-compositing", "rect#node"]]);
+		[["svg-fill-meaning", "svg"]]);
 });
 
 test("SVG text uses the light box over the dark page", async () => {
@@ -182,4 +182,47 @@ test("stroke-only text requires review rather than silent exclusion", async () =
 test("use instances cannot silently pass SVG text coverage", async () => {
 	await page.setContent(diagram(`<defs><symbol id="used"><text x="30" y="55" fill="#eee">Complete</text></symbol></defs><use href="#used"/>`));
 	await expectTextReview(/use instance/);
+});
+
+test("P1: a hidden central circle cannot carry a pale rectangle's boundary", async () => {
+	await page.setContent(diagram(`<circle cx="120" cy="50" r="15"/><rect id="target" x="10" y="10" width="220" height="80" fill="#eee"/>`));
+	const result = await nonTextContrast(page, "hidden-circle.html");
+	assert.deepEqual(result.findings.map((item) => [item.rule, item.selector]), [["non-text-contrast-graphic", "rect#target"]]);
+	assert.deepEqual(result.needsReview?.filter((item) => item.selector === "rect#target"), []);
+});
+
+test("P1: a circle straddling a black panel cannot pass against its centre colour", async () => {
+	await page.setContent(diagram(`<rect id="panel" width="60" height="100" fill="#000"/><circle id="straddle" cx="60" cy="50" r="30" fill="#ccc"/>`)
+		.replace('width="240" height="100" viewBox="0 0 240 100"', 'width="200" height="100" viewBox="0 0 200 100"'));
+	const result = await nonTextContrast(page, "straddle.html");
+	assert.deepEqual(result.needsReview?.filter((item) => item.selector === "circle#straddle").map((item) => item.rule), ["non-text-contrast-compositing"]);
+	assert.match(result.needsReview!.find((item) => item.selector === "circle#straddle")!.evidence, /partially intersects/);
+});
+
+test("HTML group opacity and subpixel strokes require boundary review", async () => {
+	for (const html of [
+		diagram(`<rect id="faded" x="10" y="10" width="20" height="20" fill="#fff"/>`)
+			.replace("<svg ", '<div style="background:#000;opacity:.4"><svg ').replace("</svg>", "</svg></div>"),
+		diagram(`<rect id="hairline" x="20" y="20" width="150" height="50" fill="none" stroke="#000" stroke-width="0.2"/>`),
+	]) {
+		await page.setContent(html);
+		const result = await nonTextContrast(page, "boundary-review.html");
+		assert.deepEqual(result.needsReview?.map((item) => item.rule), ["non-text-contrast-compositing"]);
+		assert.deepEqual(result.findings, []);
+	}
+});
+
+test("a use-only graphic is explicitly unmeasured", async () => {
+	await page.setContent(diagram(`<defs><symbol id="node"><rect width="100" height="40" fill="#eee"/></symbol></defs><use href="#node"/>`));
+	const result = await nonTextContrast(page, "use.html");
+	assert.deepEqual(result.needsReview?.map((item) => [item.rule, item.selector]), [["non-text-contrast-compositing", "use"]]);
+	assert.match(result.needsReview![0]!.evidence, /use instance/);
+});
+
+test("fill meaning is one explicit 1.4.1 question per SVG", async () => {
+	await page.setContent(diagram(`<rect x="5" y="10" width="100" height="80" fill="#eee" stroke="#595959" stroke-width="3"/>
+<rect x="125" y="10" width="100" height="80" fill="#eee" stroke="#595959" stroke-width="3"/>`));
+	const result = await nonTextContrast(page, "two-boxes.html");
+	assert.deepEqual(result.findings, []);
+	assert.deepEqual(result.needsReview?.map((item) => [item.rule, item.basis]), [["svg-fill-meaning", "WCAG 1.4.1 Use of Color (A)"]]);
 });

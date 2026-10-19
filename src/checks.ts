@@ -369,7 +369,22 @@ const COLOR_HELPERS = `(() => {
 		const rgb = (color) => "rgb(" + color.map(Math.round).join(" ") + ")";
 		return measured({ ratio: contrast(foreground, under), threshold, foreground: rgb(foreground), background: rgb(under) });
 	};
-	return { parse, paint, contrast, background, colors, opacity, svgShapes, svgVisible, svgGuard, svgScale, svgRegion, svgPaint, svgBackdrop, textContrast, composite, measured, absent, review };
+	const svgBoundary = (el) => {
+		const fill = svgPaint(el, "fill"), stroke = svgPaint(el, "stroke");
+		if (fill.status === "review") return fill;
+		if (stroke.status === "review") return stroke;
+		if (fill.status === "absent" && stroke.status === "absent") return absent("Shape paints no boundary");
+		if (fill.status === "measured" && stroke.status === "measured") {
+			if (opacity(el) < 1) return review("Object opacity applies once to overlapping fill and stroke");
+			if (getComputedStyle(el).paintOrder !== "normal") return review("Paint-order changes overlapping fill and stroke");
+		}
+		const backdrop = svgBackdrop(el);
+		if (backdrop.status !== "measured") return backdrop;
+		const cues = [["fill", fill], ["stroke", stroke]].flatMap(([name, p]) => p.status === "measured" ? [{ name, ratio: contrast(composite(p.value, backdrop.value), backdrop.value) }] : []);
+		const strongest = cues.sort((a, b) => b.ratio - a.ratio)[0];
+		return measured({ ...strongest, fillMeaning: strongest.name === "stroke" && strongest.ratio >= 3 && cues.some((cue) => cue.name === "fill" && cue.ratio < 3) });
+	};
+	return { parse, paint, contrast, background, colors, opacity, svgShapes, svgVisible, svgGuard, svgScale, svgRegion, svgPaint, svgBackdrop, svgBoundary, textContrast, composite, measured, absent, review };
 })()`;
 
 /**
@@ -2097,14 +2112,14 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 		type Issue = { kind: Kind; selector: string; ratio: number; detail: string };
 		type Manual = { kind: Kind; selector: string; reason: string };
 		(document.activeElement as HTMLElement | null)?.blur();
-		const { parse, paint, contrast, background, colors, svgBackdrop, opacity: effectiveOpacity } = (0, eval)(colorHelpers) as {
+		const { parse, paint, contrast, background, colors, svgBoundary, svgVisible } = (0, eval)(colorHelpers) as {
 			parse: (value: string) => RGBA | undefined;
 			paint: (value: string, under: RGB, opacity?: number) => RGB | undefined;
 			contrast: (a: RGB, b: RGB) => number;
 			background: (start: Element | null) => RGB | undefined;
 			colors: (value: string) => string[];
-			svgBackdrop: (el: Element) => PaintResult<RGB>;
-			opacity: (el: Element) => number;
+			svgBoundary: (el: Element) => PaintResult<{ ratio: number; name: string; fillMeaning: boolean }>;
+			svgVisible: (el: Element) => boolean;
 		};
 		const selector = (0, eval)(locate) as (el: Element) => string;
 		const manual = new Map<string, Manual>();
@@ -2119,6 +2134,7 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 		};
 
 		const issues: Issue[] = [];
+		const colourQuestions: Array<{ selector: string; reason: string }> = [];
 		for (const el of Array.from(document.querySelectorAll('img[alt]:not([alt=""]), canvas[role=img]'))) {
 			review("graphic", el, "raster or canvas content cannot be measured from CSS colours");
 		}
@@ -2228,53 +2244,38 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 			}
 
 			const svgRect = svg.getBoundingClientRect();
-			const shapes = svg.querySelectorAll("path, rect, circle, ellipse, line, polyline, polygon") as NodeListOf<SVGGraphicsElement>;
+			const shapes = svg.querySelectorAll("path, rect, circle, ellipse, line, polyline, polygon, use") as NodeListOf<SVGGraphicsElement>;
+			let fillMeaning = false;
 			for (const shape of Array.from(shapes)) {
-				if (!visible(shape) || shape.closest("defs, clipPath, mask, symbol")) continue;
-				const style = getComputedStyle(shape);
-				const rect = shape.getBoundingClientRect();
-				const backdropResult = svgBackdrop(shape);
-				if (backdropResult.status !== "measured") {
-					if (backdropResult.status === "review") review("graphic", shape, backdropResult.reason);
+				if (!svgVisible(shape)) continue;
+				if (shape.localName === "use") {
+					review("graphic", shape, "SVG use instance paint is not measured");
 					continue;
 				}
-				const backdrop = backdropResult.value;
-				const opacity = effectiveOpacity(shape);
-				const cues: Array<{ ratio: number; name: string }> = [];
+				const rect = shape.getBoundingClientRect();
+				const boundary = svgBoundary(shape);
+				if (boundary.status !== "measured") {
+					if (boundary.status === "review") review("graphic", shape, boundary.reason);
+					continue;
+				}
 				const backdropShape = shape === shapes[0] && shapes.length > 1 &&
 					rect.left <= svgRect.left && rect.top <= svgRect.top && rect.right >= svgRect.right && rect.bottom >= svgRect.bottom;
-
-				if (shape.localName !== "line" && style.fill !== "none" && !style.fill.startsWith("url(")) {
-					const fill = paint(style.fill, backdrop, opacity * Number.parseFloat(style.fillOpacity || "1"));
-					if (fill) {
-						if (!backdropShape) cues.push({ ratio: contrast(fill, backdrop), name: "fill" });
-					}
-				} else if (shape.localName !== "line" && style.fill.startsWith("url(")) review("graphic", shape, "SVG fill uses a paint server such as a gradient or pattern");
-				if (style.stroke !== "none" && Number.parseFloat(style.strokeWidth) > 0 && !style.stroke.startsWith("url(")) {
-					const stroke = paint(style.stroke, backdrop, opacity * Number.parseFloat(style.strokeOpacity || "1"));
-					if (stroke) {
-						cues.push({ ratio: contrast(stroke, backdrop), name: "stroke" });
-					}
-				} else if (style.stroke.startsWith("url(")) review("graphic", shape, "SVG stroke uses a paint server such as a gradient or pattern");
-
-				const strongest = cues.sort((a, b) => b.ratio - a.ratio)[0];
-				const fill = cues.find((cue) => cue.name === "fill");
-				if (strongest?.name === "stroke" && strongest.ratio >= 3 && fill && fill.ratio < 3) {
-					// A border identifies the shape, but cannot establish what its fill means.
-					review("graphic", shape, "Boundary meets 3:1; verify that fill colour does not convey information without an equivalent word or symbol");
-				}
-				if (strongest && strongest.ratio < 3) issues.push({
+				const strongest = boundary.value;
+				fillMeaning ||= strongest.fillMeaning;
+				if (!(backdropShape && strongest.name === "fill") && strongest.ratio < 3) issues.push({
 					kind: "graphic",
 					selector: selector(shape),
 					ratio: strongest.ratio,
 					detail: `${strongest.name} in graphic “${name.slice(0, 50)}”`,
 				});
 			}
+			if (fillMeaning) colourQuestions.push({ selector: selector(svg), reason: `Boundary contrast is measurable in graphic "${name.slice(0, 50)}"; verify that fill colour never conveys information without equivalent words or symbols` });
 		}
 		return {
 			issues: issues.slice(0, 30),
 			manual: [...manual.values()].slice(0, 30),
 			manualOmitted: Math.max(0, manual.size - 30),
+			colourQuestions,
 		};
 	}, [UNIQUE_SELECTOR, COLOR_HELPERS] as const);
 
@@ -2294,7 +2295,7 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 			basis: "WCAG 1.4.11 Non-text Contrast (AA)",
 			rule: issue.kind === "component" ? "non-text-contrast-component" : "non-text-contrast-graphic",
 		})),
-		needsReview: measured.manual.map((item) => ({
+		needsReview: [...measured.manual.map((item) => ({
 			what: item.kind === "component"
 				? "Measure the contrast of this control's boundary by hand. Check could not measure it automatically."
 				: "Measure the contrast of this graphic's shapes by hand. Check could not measure it automatically.",
@@ -2304,7 +2305,11 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 			lens: "a11y" as const,
 			basis: "WCAG 1.4.11 Non-text Contrast (AA)",
 			rule: "non-text-contrast-compositing",
-		})),
+		})), ...measured.colourQuestions.map((item) => ({
+			what: "Does this graphic convey information by fill colour alone?",
+			page: pageId, selector: item.selector, evidence: item.reason, lens: "a11y" as const,
+			basis: "WCAG 1.4.1 Use of Color (A)", rule: "svg-fill-meaning",
+		}))],
 		notes: measured.manualOmitted > 0
 			? [`non-text contrast review items omitted after the 30-item page cap on ${pageId}: ${measured.manualOmitted}`]
 			: [],
