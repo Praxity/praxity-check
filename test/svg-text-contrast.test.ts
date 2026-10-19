@@ -228,8 +228,13 @@ test("state text uses the same measured result and SVG backdrop", async () => {
 });
 
 test("300 labels on a 5,000-node page add under one second", async (t) => {
-	const html = (count: number) => diagram(`<a href="#x">${Array.from({length:count}, (_,i)=>`<text x="${(i%10)*120}" y="${Math.floor(i/10)*40+30}">Label ${i}</text>`).join('')}</a>`, '', 'width="1200" height="1200" viewBox="0 0 1200 1200"').replace('</main>', '</main>'+ '<p>Other page content.</p>'.repeat(5000));
-	const time = async (count: number) => { await page.setContent(html(count)); const start=performance.now(); const result=await stateContrast(page,"large.html"); assert.deepEqual(result.needsReview ?? [], []); return performance.now()-start; };
+	const html = (count: number) => diagram(`<a href="#x">${Array.from({length:count}, (_,i)=>`<text x="${(i%10)*120}" y="${Math.floor(i/10)*40+30}">Label ${i}</text>`).join('')}</a>`, 'a:focus text {fill:#eee}', 'width="1200" height="1200" viewBox="0 0 1200 1200"').replace('</main>', '</main>'+ '<p>Other page content.</p>'.repeat(5000));
+	const time = async (count: number) => {
+		await page.setContent(html(count)); const start=performance.now(); const result=await stateContrast(page,"large.html");
+		assert.deepEqual(result.needsReview ?? [], []);
+		if(count)assert.deepEqual(result.findings.filter((i)=>i.rule==="state-text-contrast").map((i)=>i.evidence),["focus; rgb(238 238 238) on rgb(255 255 255); 1.16:1 (required: 4.5:1; default: 21.00:1)"]);
+		return performance.now()-start;
+	};
 	await time(30);
 	const additions=[];
 	for(let i=0;i<3;i++) { const baseline=await time(0); additions.push(await time(300)-baseline); }
