@@ -100,7 +100,7 @@ async function svgTextEvidence(page: Page): Promise<SvgTextEvidence> {
 		const { nodeIds } = await session.send("DOM.querySelectorAll", { nodeId: root.nodeId, selector: "svg text, svg text *" });
 		// These platform faces have monochrome outlines. Unknown platform faces and
 		// all custom fonts need review; a custom font can reuse a familiar face name.
-		const monochrome = /^(Arial(?:MT|-(?:Bold|Italic|BoldItalic)MT)?|Liberation(?:Sans|Serif|Mono)(?:-(?:Regular|Bold|Italic|BoldItalic))?|DejaVu(?:Sans|Serif|SansMono)(?:-.*)?|TimesNewRomanPS(?:MT|-(?:Bold|Italic|BoldItalic)MT)|CourierNewPS(?:MT|-(?:Bold|Italic|BoldItalic)MT)|Helvetica(?:Neue)?(?:-.*)?|Roboto(?:-.*)?|NotoSans(?:-(?:Regular|Bold|Italic|BoldItalic))?|Verdana(?:-.*)?|Tahoma(?:-Bold)?|SegoeUI(?:-Bold|-Italic|-BoldItalic)?)$/i;
+		const monochrome = /^(Arial(?:MT|-(?:Bold|Italic|BoldItalic)MT)?|Liberation(?:Sans|Serif|Mono)(?:-(?:Regular|Bold|Italic|BoldItalic))?|DejaVu(?:Sans|Serif|SansMono)(?:-(?:Bold|Oblique|BoldOblique|Italic|BoldItalic|ExtraLight))?|TimesNewRomanPS(?:MT|-(?:Bold|Italic|BoldItalic)MT)|CourierNewPS(?:MT|-(?:Bold|Italic|BoldItalic)MT)|Helvetica(?:Neue)?(?:-(?:Regular|Bold|Italic|BoldItalic|Medium|Light|Thin|CondensedBold|CondensedBlack))?|Roboto(?:-(?:Regular|Bold|Italic|BoldItalic|Medium|Light|Thin|Black))?|NotoSans(?:-(?:Regular|Bold|Italic|BoldItalic))?|Verdana(?:-(?:Regular|Bold|Italic|BoldItalic))?|Tahoma(?:-Bold)?|SegoeUI(?:-Bold|-Italic|-BoldItalic)?)$/i;
 		const fonts = await Promise.all(nodeIds.map(async (nodeId, index) => {
 			const { fonts } = await session.send("CSS.getPlatformFontsForNode", { nodeId });
 			const unknown = fonts.find((font) => font.isCustomFont || !monochrome.test(font.postScriptName));
@@ -249,6 +249,13 @@ const COLOR_HELPERS = `((evidence = {}) => {
 	const intersects = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 	const contains = (a, b) => a.left <= b.left && a.right >= b.right && a.top <= b.top && a.bottom >= b.bottom;
 	const expand = (r, n) => ({ left: r.left - n, top: r.top - n, right: r.right + n, bottom: r.bottom + n });
+	const unbounded = {left:-Number.MAX_VALUE,top:-Number.MAX_VALUE,right:Number.MAX_VALUE,bottom:Number.MAX_VALUE};
+	const shadowMargin = (value) => {
+		let text=value;for(const color of colors(value))text=text.replaceAll(color,"");
+		return Math.max(0,...text.split(",").map((shadow)=>{const n=(shadow.match(/-?[\\d.]+px/g)||[]).map(Number.parseFloat);return Math.abs(n[0]||0)+Math.abs(n[1]||0)+3*Math.abs(n[2]||0)+Math.abs(n[3]||0);}));
+	};
+	const cssPaintBounds = (s,r) => s.filter!=="none" ? unbounded : expand(r,shadowMargin(s.boxShadow)+shadowMargin(s.textShadow)+
+		(s.outlineStyle!=="none"?Math.abs(Number.parseFloat(s.outlineWidth)||0)+Math.abs(Number.parseFloat(s.outlineOffset)||0):0));
 	const where = (el) => el.id ? "#" + el.id : el.localName + (el.parentElement ? ":nth-of-type(" + (Array.from(el.parentElement.children).filter((n) => n.localName === el.localName).indexOf(el) + 1) + ")" : "");
 	const blocked = (el, reason) => review(reason + " (" + where(el) + ").");
 	const visible = (el) => {
@@ -298,15 +305,17 @@ const COLOR_HELPERS = `((evidence = {}) => {
 	};
 	const markerBoxes = new Map();
 	const paintBounds = (el) => {
-		const r = rectOf(el), s = css(el);
+		let r = rectOf(el);const s = css(el);
 		if (el.closest("text")) {
 			const boxes = textBoxes(el);
-			return boxes.length ? {left:Math.min(...boxes.map((b)=>b.left)),right:Math.max(...boxes.map((b)=>b.right)),top:Math.min(...boxes.map((b)=>b.top)),bottom:Math.max(...boxes.map((b)=>b.bottom))} : r;
+			if(boxes.length)r={left:Math.min(...boxes.map((b)=>b.left)),right:Math.max(...boxes.map((b)=>b.right)),top:Math.min(...boxes.map((b)=>b.top)),bottom:Math.max(...boxes.map((b)=>b.bottom))};
 		}
 		let margin = s.stroke !== "none" ? strokeWidth(el) / 2 * Math.max(1, Number.parseFloat(s.strokeMiterlimit)) : 0;
+		const matrix=el.getScreenCTM(),screen=matrix?Math.max(1,Math.hypot(matrix.a,matrix.b,matrix.c,matrix.d)):1;
+		margin+=screen*(shadowMargin(s.boxShadow)+shadowMargin(s.textShadow)+(s.outlineStyle!=="none"?Math.abs(Number.parseFloat(s.outlineWidth)||0)+Math.abs(Number.parseFloat(s.outlineOffset)||0):0));
 		let bounds = expand(r, margin);
 		const markers=[];
-		const unknownMarker=()=>{const b={left:-1e9,top:-1e9,right:1e9,bottom:1e9};markerBoxes.set(el,[b]);return b;};
+		const unknownMarker=()=>{const b=unbounded;markerBoxes.set(el,[b]);return b;};
 		for (const [kind,value] of [["start",s.markerStart],["mid",s.markerMid],["end",s.markerEnd]]) {
 			if (value === "none") continue;
 			const id = value.match(/#([^"')]+)/)?.[1], marker = id ? document.getElementById(id) : null;
@@ -335,15 +344,15 @@ const COLOR_HELPERS = `((evidence = {}) => {
 		// Effects/instances have no proven local extent in this model. Keep them in the index.
 		for (let n = el; n instanceof SVGElement; n = n.parentElement) {
 			const ancestor = css(n);
-			if (ancestor.filter !== "none" || ancestor.perspective !== "none" || ancestor.transform.startsWith("matrix3d") || s.strokeWidth.includes("%")) return {left:-1e9,top:-1e9,right:1e9,bottom:1e9};
+			if (ancestor.filter !== "none" || ancestor.perspective !== "none" || ancestor.transform.startsWith("matrix3d") || s.strokeWidth.includes("%")) return unbounded;
 		}
 		if (el.localName === "use") {
 			const href=el.getAttribute("href")||el.getAttribute("xlink:href")||"", target=href.startsWith("#")?document.getElementById(href.slice(1)):null;
 			const referenced=target?[target,...target.querySelectorAll("*")]:[];
-			if(!target || referenced.some((n)=>{const s=css(n);return n.localName==="use"||s.stroke!=="none"||s.filter!=="none"||s.outlineStyle!=="none";}))return {left:-1e9,top:-1e9,right:1e9,bottom:1e9};
+			if(!target || referenced.some((n)=>{const s=css(n);return n.localName==="use"||s.stroke!=="none"||s.filter!=="none"||s.outlineStyle!=="none";}))return unbounded;
 			return r;
 		}
-		if (el.localName === "foreignObject") return {left:-1e9,top:-1e9,right:1e9,bottom:1e9};
+		if (el.localName === "foreignObject") return unbounded;
 		return bounds;
 	};
 	// Index geometry once per rendered state. A label queries nearby buckets, never the page.
@@ -369,7 +378,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 		const items = [];
 		for (const el of document.body.querySelectorAll("*")) {
 			if (el instanceof SVGElement || !visible(el)) continue;
-			const bounds = rectOf(el);
+			const bounds = cssPaintBounds(css(el),rectOf(el));
 			items.push({el, bounds});
 			for (const pseudo of ["::before", "::after"]) {
 				const s = getComputedStyle(el,pseudo);
@@ -383,7 +392,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 					const left = Number.parseFloat(s.left), top = Number.parseFloat(s.top), width = Number.parseFloat(s.width), height = Number.parseFloat(s.height);
 					box = Number.isFinite(left+top+width+height) && s.transform === "none" ? {left:container.left+left,top:container.top+top,right:container.left+left+width,bottom:container.top+top+height} : container;
 				}
-				items.push({el, bounds:box, pseudo});
+				items.push({el, bounds:cssPaintBounds(s,box), pseudo});
 			}
 		}
 		pagePaint = spatial(items);
@@ -414,7 +423,10 @@ const COLOR_HELPERS = `((evidence = {}) => {
 				if (ancestor !== document.documentElement && !contains(expand(rect,-radius),region)) uncertainty=blocked(ancestor,"This rounded background does not cover the whole label; check the colours outside it too");
 				else { colorsUnder=colorsUnder.map((c)=>composite({color:color.slice(0,3),alpha:color[3]},c)); if(color[3]===1 && s.backgroundImage==="none") uncertainty=undefined; }
 			}
-			if (ancestor !== document.documentElement && (s.overflowX !== "visible" || s.overflowY !== "visible") && !contains(rect,region)) uncertainty=blocked(ancestor,"This container clips part of the label; check its visible text");
+			const border=Math.max(...["Top","Right","Bottom","Left"].map((side)=>Number.parseFloat(s["border"+side+"Width"])||0));
+			if(border>0 && !contains(expand(rect,-border),region))uncertainty=blocked(ancestor,"This container's border crosses the label; check the text against that border");
+			if(s.boxShadow.includes("inset") && !contains(expand(rect,-shadowMargin(s.boxShadow)),region))uncertainty=blocked(ancestor,"An inset shadow crosses the label; check the text against that shadow");
+			if (ancestor !== document.documentElement && (s.overflowX !== "visible" || s.overflowY !== "visible") && !contains(expand(rect,-Math.max(...[s.borderTopLeftRadius,s.borderTopRightRadius,s.borderBottomLeftRadius,s.borderBottomRightRadius].map((v)=>Number.parseFloat(v)||0))),region)) uncertainty=blocked(ancestor,"This container clips part of the label; check its visible text");
 		}
 		for (const other of pageIndex()(region)) {
 			if (other.pseudo) return blocked(other.el,"Generated content "+other.pseudo+" overlaps this label; check the text against that content");
@@ -432,6 +444,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 			if (!(el instanceof SVGGeometryElement)) { fail("This SVG content overlaps the label; check the resulting text contrast"); continue; }
 			const g=guard(el);
 			if(g.status!=="measured"){ if(g.status==="review")uncertainty=g; continue; }
+			if(s.outlineStyle!=="none" || s.boxShadow!=="none" || s.textShadow!=="none"){fail("An outline or shadow may cover this label; check the text against that paint");continue;}
 			if((markerBoxes.get(el)||[]).some((r)=>intersects(r,region))){fail("An arrow marker may cover this label; check the text against that marker");continue;}
 			const fill=solid(el,"fill"), stroke=solid(el,"stroke"), operations=[];
 			if(fill.status==="review" || stroke.status==="review"){uncertainty=fill.status==="review"?fill:stroke;continue;}
@@ -454,7 +467,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 						const l=Math.min(...points.map((p)=>p[0])),r=Math.max(...points.map((p)=>p[0])),t=Math.min(...points.map((p)=>p[1])),bottom=Math.max(...points.map((p)=>p[1]));
 						if(l<length&&r>0&&t<half&&bottom>-half)operations.push({paint:stroke.value,covers:l>=0&&r<=length&&t>=-half&&bottom<=half});
 					}
-				}else if(intersects(expand(rect,half),region))operations.push({paint:stroke.value,covers:false});
+				}else if(intersects(expand(rect,half),region) && !(el.localName==="rect" && axisAligned(el) && radiusInterior(el,rect) && contains(expand(radiusInterior(el,rect),-half),region)))operations.push({paint:stroke.value,covers:false});
 				if(width<1 && operations.some((o)=>o.paint===stroke.value)){fail("A line thinner than one screen pixel overlaps this label; check its rendered contrast");continue;}
 				if(s.strokeDasharray!=="none" && operations.some((o)=>o.paint===stroke.value)){fail("A dashed line overlaps the label; check the text against the dashes and gaps");continue;}
 			}
@@ -469,7 +482,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 				colorsUnder=op.covers?over:[...colorsUnder,...over];
 				if(op.covers&&p.alpha===1)uncertainty=undefined;
 				colorsUnder=[...new Map(colorsUnder.map((c)=>[c.join(","),c])).values()];
-				if(colorsUnder.length>16)fail("Several translucent layers overlap the label; check all resulting colours");
+				if(colorsUnder.length>16){fail("Several translucent layers overlap the label; check all resulting colours");colorsUnder=colorsUnder.slice(0,1);}
 			}
 		}
 		return uncertainty || measured(colorsUnder);
@@ -477,7 +490,20 @@ const COLOR_HELPERS = `((evidence = {}) => {
 	const fontNodes=Array.from(document.querySelectorAll("svg text, svg text *"));
 	const fontEvidence=new Map(fontNodes.map((node,i)=>[node,evidence.fonts?.[i]]));
 	const fontSignature=(el)=>[css(el).font,css(el).fontFamily,css(el).fontWeight,css(el).fontStyle,css(el).fontStretch,el.textContent].join("|");
+	const textCandidates=(root=document)=>(root===document?Array.from(document.querySelectorAll("svg text, svg text *, svg use")):[root,...root.querySelectorAll("*")]).filter((node)=>
+		node instanceof SVGUseElement || Array.from(node.childNodes).some((n)=>n.nodeType===Node.TEXT_NODE&&n.textContent.trim()) ||
+		(node===root&&node.matches("input:not([type=checkbox]):not([type=radio])")&&(node.value||node.placeholder)));
+	const referenceHasText=(use,seen=new Set())=>{
+		const href=use.getAttribute("href")||use.getAttribute("xlink:href")||"",target=href.startsWith("#")?document.getElementById(href.slice(1)):null;
+		if(!target||seen.has(target))return undefined;
+		seen.add(target);
+		if(target instanceof SVGUseElement)return referenceHasText(target,seen);
+		if([target,...target.querySelectorAll("text")].some((n)=>n.matches("text")&&n.textContent.trim()))return true;
+		for(const child of target.querySelectorAll("use"))if(referenceHasText(child,new Set(seen))!==false)return undefined;
+		return false;
+	};
 	const textContrast = (node) => {
+		if(node instanceof SVGUseElement)return referenceHasText(node)===false?absent("The referenced graphic contains no text ("+where(node)+")."):blocked(node,"This use instance copies text, or its reference is unresolved; check the copied glyphs and background for 4.5:1 contrast, or 3:1 for large text");
 		const s=css(node), svg=node instanceof SVGElement;
 		let scale=1;
 		if(svg){
@@ -489,6 +515,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 		const needs=(result)=>result.status==="review"?review(result.reason+" Text needs "+threshold+":1 contrast."):result;
 		let under,foreground;
 		if(svg){
+			if(s.textShadow!=="none")return needs(blocked(node,"This label has a text shadow; check its fill against the shadow and background"));
 			if(s.stroke!=="none" && (parse(s.stroke)?.[3]??1)*Number(s.strokeOpacity)>0)return needs(blocked(node,"This label has an outline stroke; check the text against its background and outline"));
 			const fill=solid(node,"fill");if(fill.status!=="measured")return needs(fill);
 			const font=fontEvidence.get(node);
@@ -498,6 +525,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 			let worst;
 			for(const box of boxes){
 				if(!box.width||!box.height)continue;
+				for(let n=node;n;n=n.parentElement)if(n instanceof SVGSVGElement && css(n).overflow!=="visible" && !contains(rectOf(n),box))return needs(blocked(n,"The SVG viewport clips part of the label; check its visible text"));
 				const b=backdrop(node,box);if(b.status!=="measured")return needs(b);
 				for(const color of b.value){const fg=composite({...fill.value,alpha:fill.value.alpha*Number(s.opacity)},color);const ratio=contrast(fg,color);if(!worst||ratio<worst.ratio)worst={ratio,foreground:fg,background:color};}
 			}
@@ -512,7 +540,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 		const rgb=(color)=>"rgb("+color.map(Math.round).join(" ")+")";
 		return measured({ratio:contrast(foreground,under),threshold,foreground:rgb(foreground),background:rgb(under)});
 	};
-	return { parse, paint, contrast, background, colors, measured, absent, review, textContrast, visible, fontSignature };
+	return { parse, paint, contrast, background, colors, measured, absent, review, textContrast, textCandidates, visible };
 })`;
 
 /**
@@ -886,22 +914,15 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 	map(results.incomplete);
 
 	const svgText = await page.evaluate(([helpers, locate, evidence]) => {
-		const { textContrast, visible } = (0, eval)(helpers)(evidence) as {
+		const { textContrast, textCandidates, visible } = (0, eval)(helpers)(evidence) as {
 			textContrast: (node: Element) => PaintResult<TextContrast>;
+			textCandidates: () => Element[];
 			visible: (node: Element) => boolean;
 		};
 		const selector = (0, eval)(locate) as (node: Element) => string;
-		return Array.from(document.querySelectorAll("svg text, svg text *, svg use")).flatMap((node) => {
-			if (!visible(node) || node.closest('[aria-hidden=true]') ||
-				(node.localName !== "use" && !Array.from(node.childNodes).some((child) => child.nodeType === Node.TEXT_NODE && child.textContent?.trim()))) return [];
-			if (node.localName === "use") {
-				const href = node.getAttribute("href") || node.getAttribute("xlink:href") || "";
-				const target = href.startsWith("#") ? document.getElementById(href.slice(1)) : null;
-				if (target && !target.matches("text") && !target.querySelector("text, use")) return [];
-			}
-			const measurement: PaintResult<TextContrast> = node.localName === "use"
-				? { status: "review", reason: "The referenced text in this use instance cannot be measured (" + selector(node) + "). Text needs 4.5:1 contrast, or 3:1 for large text." } : textContrast(node);
-			return measurement.status === "absent" ? [] : [{ selector: selector(node), measurement }];
+		return textCandidates().flatMap((node) => {
+			if (!visible(node)) return [];
+			return [{ selector: selector(node), measurement: textContrast(node) }];
 		});
 	}, [COLOR_HELPERS, UNIQUE_SELECTOR, await svgTextEvidence(page)] as const);
 	for (const item of svgText) {
@@ -995,7 +1016,7 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 		})),
 	];
 	if (svgText.length && !findings.some((item) => item.rule === "svg-text-contrast") && !needsReview.some((item) => item.rule === "svg-text-contrast")) {
-		evaluations.push({ type: "rule", rule: "svg-text-contrast", page: pageId, state: "initial", outcome: "passed" });
+		evaluations.push({ type: "rule", rule: "svg-text-contrast", page: pageId, state: "initial", outcome: svgText.every((item) => item.measurement.status === "absent") ? "inapplicable" : "passed" });
 	}
 
 	return { findings, needsReview, notes: [], evaluations, rules };
@@ -1982,7 +2003,7 @@ interface StateContrastSnapshot {
 }
 
 const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true, pseudo = null, evidence = {}, owner = null) => {
-	const { parse, paint, contrast, background, colors, textContrast, absent } = owner || (0, eval)(colorHelpers)(evidence);
+	const { parse, paint, contrast, background, colors, textContrast, textCandidates, absent } = owner || (0, eval)(colorHelpers)(evidence);
 	const selector = (0, eval)(locate);
 	const style = getComputedStyle(el, pseudo);
 	const rect = el.getBoundingClientRect();
@@ -1995,10 +2016,7 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true,
 	// browser focus rings this way.
 	const authoredOutline = style.outlineStyle !== "auto" && style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0;
 
-	const textNodes = includeText ? [el, ...el.querySelectorAll("*")].filter((node) => {
-		const ownText = Array.from(node.childNodes).some((child) => child.nodeType === Node.TEXT_NODE && (child.textContent || "").trim());
-		return ownText || (node === el && node.matches("input:not([type=checkbox]):not([type=radio])") && (node.value || node.placeholder));
-	}) : [];
+	const textNodes = includeText ? textCandidates(el) : [];
 	const textResults = textNodes.map(textContrast);
 	const text = textResults.find((result) => result.status === "review") ||
 		textResults.filter((result) => result.status === "measured").sort((a,b) => a.value.ratio/a.value.threshold-b.value.ratio/b.value.threshold)[0] || absent("No visible text.");

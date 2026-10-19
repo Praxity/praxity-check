@@ -147,10 +147,14 @@ test("hairline backdrop strokes remain review", async () => {
 
 test("use reviews referenced text and unresolved references, while graphic-only icons add no text review", async () => {
 	for (const href of ["#label-source", "#missing"]) {
-		expectReview(await check(diagram(`<defs><text id="label-source" x="30" y="55">Label</text></defs><use id="copy" href="${href}"/>`)), /referenced text.*use#copy/);
+		expectReview(await check(diagram(`<defs><text id="label-source" x="30" y="55">Label</text></defs><use id="copy" href="${href}"/>`)), /use instance copies text.*#copy/);
 	}
 	const result = await check(diagram('<defs><symbol id="icon"><path d="M0 0 L10 0 L10 10 Z"/></symbol></defs><use href="#icon"/>'));
 	assert.deepEqual(textReviews(result), []);
+	await page.setContent(diagram('<defs><text id="source" x="30" y="55">Label</text></defs><a href="#x"><use id="copy" href="#source"/></a>'));
+	const state = await stateContrast(page, "copied-label.html");
+	assert.deepEqual(state.needsReview?.filter((i) => i.rule === "state-text-contrast").map((i) => i.evidence.split(';')[0]), ["hover", "focus"]);
+	assert.match(state.needsReview!.find((i) => i.rule === "state-text-contrast")!.evidence, /#copy.*|use instance copies text/);
 });
 
 test("overlapping sibling tspans cannot pass", async () => {
@@ -163,6 +167,14 @@ test("local generated content and overlaid HTML remain review", async () => {
 	for (const [html, reason] of [
 		[diagram('<text x="30" y="55">Complete</text>', 'main::before { content:"";position:absolute;inset:0;background:black; }'), /Generated content ::before.*main/],
 		[diagram('<text x="30" y="55">Complete</text>').replace('</main>', '<div id="overlay" style="position:absolute;left:0;top:0;width:400px;height:400px;background:white"></div></main>'), /page element.*#overlay/],
+	] as const) expectReview(await check(html), reason);
+});
+
+test("shadows and outlines cannot escape the local overlap bounds", async () => {
+	for (const [html, reason] of [
+		[diagram('<text id="shadowed" x="30" y="55" style="text-shadow:2px 2px black">Complete</text>'), /text shadow.*#shadowed/],
+		[diagram('<rect id="outlined" x="0" y="0" width="10" height="10" style="outline:100px solid black"/><text x="30" y="55">Complete</text>'), /outline or shadow.*#outlined/],
+		[diagram('<text x="30" y="55">Complete</text>').replace('</main>', '<div id="shadow" style="position:absolute;left:0;top:0;width:10px;height:10px;box-shadow:0 0 0 400px black"></div></main>'), /page element.*#shadow/],
 	] as const) expectReview(await check(html), reason);
 });
 
@@ -182,12 +194,13 @@ test("state text uses the same measured result and SVG backdrop", async () => {
 	assert.deepEqual(result.findings.filter((i) => i.rule === "state-text-contrast").map((i) => i.evidence), ["focus; rgb(238 238 238) on rgb(255 255 255); 1.16:1 (required: 4.5:1; default: 21.00:1)"]);
 });
 
-test("300 labels on a 5,000-node page add under one second", async () => {
+test("300 labels on a 5,000-node page add under one second", async (t) => {
 	const html = (count: number) => diagram(`<a href="#x">${Array.from({length:count}, (_,i)=>`<text x="${(i%10)*120}" y="${Math.floor(i/10)*40+30}">Label ${i}</text>`).join('')}</a>`, '', 'width="1200" height="1200" viewBox="0 0 1200 1200"').replace('</main>', '</main>'+ '<p>Other page content.</p>'.repeat(5000));
 	const time = async (count: number) => { await page.setContent(html(count)); const start=performance.now(); const result=await stateContrast(page,"large.html"); assert.deepEqual(result.needsReview ?? [], []); return performance.now()-start; };
 	await time(30);
 	const additions=[];
 	for(let i=0;i<3;i++) { const baseline=await time(0); additions.push(await time(300)-baseline); }
 	const median=additions.sort((a,b)=>a-b)[1]!;
+	t.diagnostic(`300-label added time: median ${median.toFixed(0)}ms; samples ${additions.map((n)=>n.toFixed(0)).join(', ')}ms`);
 	assert.ok(median<1000, `300 SVG labels added ${median.toFixed(0)}ms; samples ${additions.join(', ')}`);
 });
