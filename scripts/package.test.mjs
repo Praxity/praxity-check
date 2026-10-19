@@ -33,6 +33,8 @@ test("skill gives the Rubato command and checks exports, not course source", asy
 	const text = await readFile(join(repository, "skill/SKILL.md"), "utf8");
 	assert.match(text, /`praxity check check "<input>"`/);
 	assert.match(text, /export HTML first with the prax-format skill's export step/);
+	assert.match(text, /Fix authored causes in the course source with the prax-format skill, then export and check again; never patch the export\./);
+	assert.match(text, /Studio's own page chrome \(navigation, sidebar, pager, menus\) are Studio issues/);
 	// Rubato installs skill/ alone; a relative link would leave it.
 	assert.doesNotMatch(text, /\]\((?![a-z][\w+.-]*:|#)[^)]*\)/i);
 });
