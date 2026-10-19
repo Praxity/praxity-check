@@ -231,8 +231,10 @@ test("P1: an empty butt-capped dash pattern is no focus indicator", async () => 
 	await page.setContent(diagram(`<a id="node" href="#next"><rect x="10" y="10" width="200" height="70"
 fill="#fff" stroke="#fff" stroke-width="3" stroke-dasharray="0 10000"/></a>`,
 	"a { outline:none; } a:focus-visible rect { stroke:#000; }"));
-	assert.deepEqual((await focusIndicators(page, "empty-dashes.html")).findings.map((item) => [item.rule, item.selector]), [["focus-visible", "a#node"]]);
-	assert.deepEqual((await stateContrast(page, "empty-dashes.html")).findings.map((item) => [item.rule, item.selector]), [["state-non-text-contrast", "a#node"]]);
+	assert.deepEqual((await focusIndicators(page, "empty-dashes.html")).findings.map((item) => [item.rule, item.selector, item.evidence]),
+		[["focus-visible", "a#node", "SVG focus paint: Dash pattern paints no stroke"]]);
+	assert.deepEqual((await stateContrast(page, "empty-dashes.html")).findings.map((item) => [item.rule, item.selector, item.evidence]),
+		[["state-non-text-contrast", "a#node", "focus; Dash pattern paints no stroke"]]);
 });
 
 test("both focus callers preserve hairline uncertainty and its reason", async () => {

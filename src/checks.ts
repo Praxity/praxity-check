@@ -399,7 +399,10 @@ const COLOR_HELPERS = `(() => {
 		const guard = svgGuard(el);
 		if (guard.status !== "measured") return guard;
 		const cues = [];
-		for (const node of [el, ...el.querySelectorAll(svgShapes + ", use")]) {
+		const absentReasons = [];
+		const nodes = [el, ...el.querySelectorAll(svgShapes + ", use")];
+		for (let parent = el.parentElement, depth = 0; parent instanceof SVGElement && depth < 3; parent = parent.parentElement, depth++) nodes.push(parent);
+		for (const node of nodes) {
 			if (!svgVisible(node)) continue;
 			if (node.localName === "use") return review("Focus paint on an SVG use instance is not measured");
 			const style = getComputedStyle(node), rect = node.getBoundingClientRect();
@@ -407,6 +410,7 @@ const COLOR_HELPERS = `(() => {
 			if (node instanceof SVGGeometryElement) {
 				const stroke = svgPaint(node, "stroke");
 				if (stroke.status === "review") return stroke;
+				if (stroke.status === "absent") absentReasons.push(stroke.reason);
 				if (stroke.status === "measured") {
 					const fill = svgPaint(node, "fill");
 					if (fill.status === "review") return fill;
@@ -433,7 +437,7 @@ const COLOR_HELPERS = `(() => {
 						...Array.from(node.attributes).filter((a) => !["style", "stroke", "stroke-width", "stroke-opacity", "opacity"].includes(a.name)).map((a) => a.name + "=" + a.value)].join(" ") });
 			}
 		}
-		return cues.length ? measured(cues) : absent("No painted stroke or outline focus cue");
+		return cues.length ? measured(cues) : absent([...new Set(absentReasons)].join("; ") || "No painted stroke or outline focus cue");
 	};
 	const svgFocusChange = (before, after) => {
 		if (before.status === "review") return before;
@@ -1855,7 +1859,7 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 				return parts.join("|");
 			};
 
-			const out: Array<{ index: number; changed: boolean; label: string; where: string; review?: string }> = [];
+			const out: Array<{ index: number; changed: boolean; label: string; where: string; review?: string; reason?: string }> = [];
 			for (let i = 0; i < count; i++) {
 				const el = document.querySelector<HTMLElement>(`[${attr}="${i}"]`);
 				if (!el) continue;
@@ -1875,6 +1879,7 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 					index: i,
 					changed: change ? change.status === "measured" && change.value.ratio > 1 : before !== after,
 					review: change?.status === "review" ? change.reason : undefined,
+					reason: change?.status === "absent" ? change.reason : undefined,
 					label: (el.getAttribute("aria-label") || el.innerText || el.tagName).trim().slice(0, 40),
 					where: (0, eval)(locate)(el) as string,
 				});
@@ -1896,7 +1901,7 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 			what: "This control has no visible focus indicator.",
 			page: pageId,
 			selector: result.where || undefined,
-			evidence: `no computed style change on focus for "${result.label}" (element, ancestors, and pseudo-elements)`,
+			evidence: result.reason ? `SVG focus paint: ${result.reason}` : `no computed style change on focus for "${result.label}" (element, ancestors, and pseudo-elements)`,
 			fix: "Give it a visible focus indicator; never remove the browser default without replacing it.",
 			lens: "a11y",
 			confidence: "medium",
@@ -2168,7 +2173,7 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 				what: "This control does not have a focus indicator with at least 3:1 contrast.",
 				page: pageId,
 				selector: after.selector || undefined,
-				evidence: changed
+				evidence: after.focusChange?.status === "absent" ? `${state}; ${after.focusChange.reason}` : changed
 					? `${state}; strongest changed cue is ${changed.name} at ${changed.ratio.toFixed(2)}:1 (required: 3:1)`
 					: after.hidden
 						? `${state}; hidden control has no measurable contrasting focus change on its visible label or nearby elements`
