@@ -522,7 +522,7 @@ describe("automated checks fire on known defects", () => {
 
 	test("keyboardWalk restores its position after a native control and finds two following traps", async () => {
 		const page = await browser.newPage();
-		await page.setContent(`<input type="datetime-local" aria-label="Schedule"><button>Between</button>
+		await page.setContent(`<input type="datetime-local" aria-label="Schedule"><button onfocus="document.title += 'between;'">Between</button>
 			<button id="first">First trap</button><button id="second">Second trap</button><button>After</button>
 			<script>
 			for (const id of ["first", "second"]) document.getElementById(id).addEventListener("keydown", (event) => {
@@ -533,6 +533,7 @@ describe("automated checks fire on known defects", () => {
 		assert.deepEqual(result.findings.filter((f) => f.rule === "keyboard-trap").map((f) => [f.selector, f.confidence]), [
 			["#first", "high"], ["#second", "high"],
 		]);
+		assert.equal(await page.title(), "between;between;", "the walk must revisit the control reached by its forward probe");
 		await page.close();
 	});
 
