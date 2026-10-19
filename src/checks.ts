@@ -289,7 +289,7 @@ const COLOR_HELPERS = `(() => {
 		const outer = expand(rect, width + padding + .5);
 		if (plainRect(el)) return { boxes: band(outer, expand(rect, -width - padding - .5)) };
 		if (el.localName === "circle" && scale.status === "measured") return { boxes: [outer], circle: { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2, r: rect.width / 2 + width + padding } };
-		return { boxes: [expand(outer, width * Number.parseFloat(style.strokeMiterlimit))] };
+		return { boxes: [expand(rect, width * Math.max(1, Number.parseFloat(style.strokeMiterlimit)) + padding + .5)] };
 	};
 	const svgBackdrop = (el, region = svgRegion(el, !(el instanceof SVGTextContentElement))) => {
 		const guard = svgGuard(el);
