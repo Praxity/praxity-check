@@ -244,7 +244,7 @@ test("both focus callers preserve hairline uncertainty and its reason", async ()
 		assert.match(visible.needsReview![0]!.evidence, /Subpixel stroke/);
 		const contrast = await stateContrast(page, "hairline.html");
 		assert.deepEqual(contrast.findings, []);
-		assert.match(contrast.needsReview!.find((item) => item.evidence.startsWith("focus;"))!.evidence, /Subpixel stroke/);
+		assert.match(contrast.needsReview?.find((item) => item.evidence.startsWith("focus;"))?.evidence ?? "", /Subpixel stroke/);
 	}
 });
 
@@ -268,7 +268,7 @@ test("tiny focus width growth requires review rather than a temporal pass", asyn
 		.replace("a:focus-visible rect { stroke: #111; }", "a:focus-visible rect { stroke-width:3.1px; }"));
 	const result = await stateContrast(page, "width-change.html");
 	assert.deepEqual(result.findings, []);
-	assert.match(result.needsReview!.find((item) => item.evidence.startsWith("focus;"))!.evidence, /width change/);
+	assert.match(result.needsReview?.find((item) => item.evidence.startsWith("focus;"))?.evidence ?? "", /width change/);
 });
 
 test("CSS paint with unproved bounds cannot establish a text backdrop", async () => {
