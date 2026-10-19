@@ -81,43 +81,6 @@ export interface CheckResult {
 	untested?: UntestedEvaluation[];
 }
 
-type PaintResult<T> = { status: "measured"; value: T } | { status: "absent" | "review"; reason: string };
-type TextContrast = { ratio: number; threshold: number; foreground: string; background: string };
-type SvgTextEvidence = { fonts: Array<{ signature: string; reason?: string }> };
-
-/** The browser supplies the actual fallback faces, including emoji and web fonts. */
-async function svgTextEvidence(page: Page): Promise<SvgTextEvidence> {
-	const signatures = await page.evaluate(() => Array.from(document.querySelectorAll("svg text, svg text *")).map((el) => {
-		const style = getComputedStyle(el);
-		return [style.font, style.fontFamily, style.fontWeight, style.fontStyle, style.fontStretch, el.textContent].join("|");
-	}));
-	if (!signatures.length) return { fonts: [] };
-	const session = await page.context().newCDPSession(page);
-	try {
-		await session.send("DOM.enable");
-		await session.send("CSS.enable");
-		const { root } = await session.send("DOM.getDocument", { depth: 0 });
-		const { nodeIds } = await session.send("DOM.querySelectorAll", { nodeId: root.nodeId, selector: "svg text, svg text *" });
-		// These platform faces have monochrome outlines. Unknown platform faces and
-		// all custom fonts need review; a custom font can reuse a familiar face name.
-		const monochrome = /^(Arial(?:MT|-(?:Bold|Italic|BoldItalic)MT)?|Liberation(?:Sans|Serif|Mono)(?:-(?:Regular|Bold|Italic|BoldItalic))?|DejaVu(?:Sans|Serif|SansMono)(?:-(?:Bold|Oblique|BoldOblique|Italic|BoldItalic|ExtraLight))?|TimesNewRomanPS(?:MT|-(?:Bold|Italic|BoldItalic)MT)|CourierNewPS(?:MT|-(?:Bold|Italic|BoldItalic)MT)|Helvetica(?:Neue)?(?:-(?:Regular|Bold|Italic|BoldItalic|Medium|Light|Thin|CondensedBold|CondensedBlack))?|Roboto(?:-(?:Regular|Bold|Italic|BoldItalic|Medium|Light|Thin|Black))?|NotoSans(?:-(?:Regular|Bold|Italic|BoldItalic))?|Verdana(?:-(?:Regular|Bold|Italic|BoldItalic))?|Tahoma(?:-Bold)?|SegoeUI(?:-Bold|-Italic|-BoldItalic)?)$/i;
-		const fonts = await Promise.all(nodeIds.map(async (nodeId, index) => {
-			const { fonts } = await session.send("CSS.getPlatformFontsForNode", { nodeId });
-			const unknown = fonts.find((font) => font.isCustomFont || !monochrome.test(font.postScriptName));
-			return {
-				signature: signatures[index] ?? "",
-				reason: unknown ? `The font ${unknown.familyName} may paint its own glyph colours; check the visible glyphs against the background`
-					: !fonts.length ? "The rendered font could not be identified; check the visible glyphs against the background" : undefined,
-			};
-		}));
-		return { fonts };
-	} catch (error) {
-		return { fonts: signatures.map((signature) => ({ signature, reason: `The rendered font could not be inspected: ${error instanceof Error ? error.message : String(error)}` })) };
-	} finally {
-		await session.detach();
-	}
-}
-
 export interface Triage {
 	ok: boolean;
 	reason?: string;
@@ -194,7 +157,7 @@ const FOCUS_INDICATOR_NODES = `((el) => {
 })`;
 
 /** Shared browser-side colour math. Canvas normalises every CSS colour syntax Chromium accepts. */
-const COLOR_HELPERS = `((evidence = {}) => {
+const COLOR_HELPERS = `(() => {
 	const canvas = document.createElement("canvas");
 	canvas.width = canvas.height = 1;
 	const context = canvas.getContext("2d", { willReadFrequently: true });
@@ -236,346 +199,8 @@ const COLOR_HELPERS = `((evidence = {}) => {
 	};
 	const colors = (value) => (value.match(/(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\\([^)]*\\)|#[\\da-f]{3,8}\\b|\\b[a-z]+\\b/gi) || [])
 		.filter((token) => parse(token));
-	const measured = (value) => ({ status: "measured", value });
-	const absent = (reason) => ({ status: "absent", reason });
-	const review = (reason) => ({ status: "review", reason });
-	const styles = new Map(), rectangles = new Map();
-	const css = (el) => { if (!styles.has(el)) styles.set(el, getComputedStyle(el)); return styles.get(el); };
-	const rectOf = (el) => { if (!rectangles.has(el)) rectangles.set(el, el.getBoundingClientRect()); return rectangles.get(el); };
-	const textBoxes = (el) => Array.from(el.childNodes).flatMap((child) => {
-		if (child.nodeType !== Node.TEXT_NODE || !child.textContent.trim()) return [];
-		const range = document.createRange(); range.selectNodeContents(child); return Array.from(range.getClientRects());
-	});
-	const intersects = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-	const contains = (a, b) => a.left <= b.left && a.right >= b.right && a.top <= b.top && a.bottom >= b.bottom;
-	const expand = (r, n) => ({ left: r.left - n, top: r.top - n, right: r.right + n, bottom: r.bottom + n });
-	const unbounded = {left:-Number.MAX_VALUE,top:-Number.MAX_VALUE,right:Number.MAX_VALUE,bottom:Number.MAX_VALUE};
-	const shadowMargin = (value) => {
-		let text=value;for(const color of colors(value))text=text.replaceAll(color,"");
-		return Math.max(0,...text.split(",").map((shadow)=>{const n=(shadow.match(/-?[\\d.]+px/g)||[]).map(Number.parseFloat);return Math.abs(n[0]||0)+Math.abs(n[1]||0)+3*Math.abs(n[2]||0)+Math.abs(n[3]||0);}));
-	};
-	const cssPaintBounds = (s,r) => s.filter!=="none" ? unbounded : expand(r,shadowMargin(s.boxShadow)+shadowMargin(s.textShadow)+
-		(s.outlineStyle!=="none"?Math.abs(Number.parseFloat(s.outlineWidth)||0)+Math.abs(Number.parseFloat(s.outlineOffset)||0):0));
-	const where = (el) => el.id ? "#" + el.id : el.localName + (el.parentElement ? ":nth-of-type(" + (Array.from(el.parentElement.children).filter((n) => n.localName === el.localName).indexOf(el) + 1) + ")" : "");
-	const blocked = (el, reason) => review(reason + " (" + where(el) + ").");
-	const visible = (el) => {
-		if (el.closest("defs, clipPath, mask, symbol, title, desc, metadata, style, script, [aria-hidden=true]")) return false;
-		if (css(el).visibility !== "visible") return false;
-		for (let n = el; n; n = n.parentElement) if (css(n).display === "none" || Number(css(n).opacity) === 0) return false;
-		return true;
-	};
-	const guard = (el) => {
-		if (!visible(el)) return absent("This element paints no visible text (" + where(el) + ").");
-		for (let n = el; n; n = n.parentElement) {
-			const s = css(n);
-			if (s.filter !== "none" || s.maskImage !== "none" || s.clipPath !== "none" || s.mixBlendMode !== "normal" || s.clip !== "auto") return blocked(n, "A filter, mask, clip or colour blend affects this region; check the text against the resulting paint");
-			if (n !== el && Number(s.opacity) < 1) return blocked(n, "This ancestor fades several objects together; check the text after that fading");
-			if (s.perspective !== "none" || s.transform.startsWith("matrix3d")) return blocked(n, "A three-dimensional transform changes the text's size or background");
-		}
-		return measured(null);
-	};
-	const scaleOf = (el) => {
-		const m = el.getScreenCTM();
-		if (!m) return blocked(el, "The text's rendered size is unavailable");
-		const x = Math.hypot(m.a, m.b), y = Math.hypot(m.c, m.d);
-		if (x <= 0 || Math.abs(x - y) > x * 1e-8 || Math.abs(m.a * m.c + m.b * m.d) > x * y * 1e-8) return blocked(el, "The text is stretched or skewed; check its rendered size and contrast");
-		return measured(x);
-	};
-	const composite = (p, under) => p.color.map((c, i) => c * p.alpha + under[i] * (1 - p.alpha));
-	const solid = (el, kind) => {
-		const s = css(el), value = s[kind];
-		if (value === "none" || (kind === "fill" && el.localName === "line")) return absent("No " + kind + " paint.");
-		if(kind==="fill" && el instanceof SVGGeometryElement){const b=el.getBBox();if(b.width===0||b.height===0)return absent("The fill has no painted area.");}
-		const c = parse(value);
-		if (!c) return blocked(el, "The " + kind + " uses a gradient, pattern or unresolved colour; check its contrast");
-		const alpha = c[3] * Number(s[kind + "Opacity"]);
-		return alpha === 0 ? absent("Transparent " + kind + ".") : measured({ color: c.slice(0, 3), alpha });
-	};
-	const band = (r, w) => {
-		const outer=expand(r,w),inner=expand(r,-w);
-		if(inner.left>=inner.right||inner.top>=inner.bottom)return [outer];
-		return [{...outer,bottom:inner.top},{...outer,top:inner.bottom},
-			{left:outer.left,right:inner.left,top:inner.top,bottom:inner.bottom},
-			{left:inner.right,right:outer.right,top:inner.top,bottom:inner.bottom}];
-	};
-	const axisAligned = (el) => { const m = el.getScreenCTM(); return m && m.b === 0 && m.c === 0; };
-	const strokeWidth = (el) => {
-		const s = css(el), m = el.getScreenCTM();
-		// Use the largest singular-value bound before any exclusion, including non-scaling strokes.
-		const scale = m ? Math.hypot(m.a, m.b, m.c, m.d) : 1;
-		return Number.parseFloat(s.strokeWidth) * (s.vectorEffect === "non-scaling-stroke" ? 1 : scale);
-	};
-	const markerBoxes = new Map();
-	const paintBounds = (el) => {
-		let r = rectOf(el);const s = css(el);
-		if (el.closest("text")) {
-			const boxes = textBoxes(el);
-			if(boxes.length)r={left:Math.min(...boxes.map((b)=>b.left)),right:Math.max(...boxes.map((b)=>b.right)),top:Math.min(...boxes.map((b)=>b.top)),bottom:Math.max(...boxes.map((b)=>b.bottom))};
-		}
-		let margin = s.stroke !== "none" ? strokeWidth(el) / 2 * Math.max(1, Number.parseFloat(s.strokeMiterlimit)) : 0;
-		const matrix=el.getScreenCTM(),screen=matrix?Math.max(1,Math.hypot(matrix.a,matrix.b,matrix.c,matrix.d)):1;
-		margin+=screen*(shadowMargin(s.boxShadow)+shadowMargin(s.textShadow)+(s.outlineStyle!=="none"?Math.abs(Number.parseFloat(s.outlineWidth)||0)+Math.abs(Number.parseFloat(s.outlineOffset)||0):0));
-		let bounds = expand(r, margin);
-		const markers=[];
-		const unknownMarker=()=>{const b=unbounded;markerBoxes.set(el,[b]);return b;};
-		for (const [kind,value] of [["start",s.markerStart],["mid",s.markerMid],["end",s.markerEnd]]) {
-			if (value === "none") continue;
-			const id = value.match(/#([^"')]+)/)?.[1], marker = id ? document.getElementById(id) : null;
-			if (!(marker instanceof SVGMarkerElement) || css(marker).overflow === "visible" || css(marker).filter !== "none") return unknownMarker();
-			const matrix=el.getScreenCTM(), screen=matrix?Math.hypot(matrix.a,matrix.b,matrix.c,matrix.d):1;
-			const units = marker.markerUnits.baseVal === SVGMarkerElement.SVG_MARKERUNITS_STROKEWIDTH ? Math.max(strokeWidth(el),Number.parseFloat(s.strokeWidth)*screen) : screen;
-			const w=marker.markerWidth.baseVal.value,h=marker.markerHeight.baseVal.value,vb=marker.viewBox.baseVal;
-			const x=marker.refX.baseVal.value,y=marker.refY.baseVal.value;
-			let rx=x,ry=y,extraX=0,extraY=0;
-			if(vb.width>0&&vb.height>0){
-				let sx=w/vb.width,sy=h/vb.height;
-				// align=none is 1; slice is 2. Otherwise include every alignment offset.
-				if(marker.preserveAspectRatio.baseVal.align!==1)sx=sy=marker.preserveAspectRatio.baseVal.meetOrSlice===2?Math.max(sx,sy):Math.min(sx,sy);
-				rx=(x-vb.x)*sx;ry=(y-vb.y)*sy;extraX=w-vb.width*sx;extraY=h-vb.height*sy;
-			}
-			const radius=Math.hypot(Math.max(Math.abs(rx),Math.abs(rx+extraX),Math.abs(w-rx),Math.abs(w-rx-extraX)),Math.max(Math.abs(ry),Math.abs(ry+extraY),Math.abs(h-ry),Math.abs(h-ry-extraY)))*units;
-			let centre=r;
-			if(el instanceof SVGLineElement && kind!=="mid"){
-				const p=new DOMPoint(kind==="start"?el.x1.baseVal.value:el.x2.baseVal.value,kind==="start"?el.y1.baseVal.value:el.y2.baseVal.value).matrixTransform(el.getScreenCTM());
-				centre={left:p.x,right:p.x,top:p.y,bottom:p.y};
-			}
-			const box=expand(centre,radius);markers.push(box);
-			bounds={left:Math.min(bounds.left,box.left),right:Math.max(bounds.right,box.right),top:Math.min(bounds.top,box.top),bottom:Math.max(bounds.bottom,box.bottom)};
-		}
-		markerBoxes.set(el,markers);
-		// Effects/instances have no proven local extent in this model. Keep them in the index.
-		for (let n = el; n instanceof SVGElement; n = n.parentElement) {
-			const ancestor = css(n);
-			if (ancestor.filter !== "none" || ancestor.perspective !== "none" || ancestor.transform.startsWith("matrix3d") || s.strokeWidth.includes("%")) return unbounded;
-		}
-		if (el.localName === "use") {
-			const href=el.getAttribute("href")||el.getAttribute("xlink:href")||"", target=href.startsWith("#")?document.getElementById(href.slice(1)):null;
-			const referenced=target?[target,...target.querySelectorAll("*")]:[];
-			if(!target || referenced.some((n)=>{const s=css(n);return n.localName==="use"||s.stroke!=="none"||s.filter!=="none"||s.outlineStyle!=="none";}))return unbounded;
-			return r;
-		}
-		if (el.localName === "foreignObject") return unbounded;
-		return bounds;
-	};
-	// Index geometry once per rendered state. A label queries nearby buckets, never the page.
-	const spatial = (items) => {
-		const buckets = new Map(), broad = [];
-		const cells = (r) => [Math.floor(r.left / 128), Math.floor(r.top / 128), Math.floor(r.right / 128), Math.floor(r.bottom / 128)];
-		for (const item of items) {
-			const [l,t,r,b] = cells(item.bounds);
-			if ((r-l+1)*(b-t+1) > 256) { broad.push(item); continue; }
-			for (let x=l; x<=r; x++) for (let y=t; y<=b; y++) { const key=x+","+y; if (!buckets.has(key)) buckets.set(key,[]); buckets.get(key).push(item); }
-		}
-		return (region) => {
-			const found = new Set(broad), [l,t,r,b] = cells(region);
-			if ((r-l+1)*(b-t+1) > 256) return items.filter((p) => intersects(p.bounds,region));
-			for (let x=l; x<=r; x++) for (let y=t; y<=b; y++) for (const p of buckets.get(x+","+y) || []) found.add(p);
-			return [...found].filter((p) => intersects(p.bounds, region));
-		};
-	};
-	let pagePaint;
-	const svgIndexes = new Map();
-	const pageIndex = () => {
-		if (pagePaint) return pagePaint;
-		const items = [];
-		for (const el of document.body.querySelectorAll("*")) {
-			if (el instanceof SVGElement || !visible(el)) continue;
-			const bounds = cssPaintBounds(css(el),rectOf(el));
-			items.push({el, bounds});
-			for (const pseudo of ["::before", "::after"]) {
-				const s = getComputedStyle(el,pseudo);
-				if (["none","normal"].includes(s.content) || s.display === "none" || s.visibility !== "visible" || Number(s.opacity) === 0) continue;
-				if (s.content === '""' && !(parse(s.backgroundColor)?.[3] > 0) && s.backgroundImage === "none" && s.boxShadow === "none" && !["Top","Right","Bottom","Left"].some((side) => Number.parseFloat(s["border"+side+"Width"]) > 0)) continue;
-				let box = bounds;
-				if (["absolute","fixed"].includes(s.position)) {
-					let parent = el;
-					while (parent.parentElement && css(parent).position === "static" && css(parent).transform === "none") parent = parent.parentElement;
-					const container = s.position === "fixed" || parent === document.documentElement ? {left:0,top:0,right:innerWidth,bottom:innerHeight} : rectOf(parent);
-					const left = Number.parseFloat(s.left), top = Number.parseFloat(s.top), width = Number.parseFloat(s.width), height = Number.parseFloat(s.height);
-					box = Number.isFinite(left+top+width+height) && s.transform === "none" ? {left:container.left+left,top:container.top+top,right:container.left+left+width,bottom:container.top+top+height} : container;
-				} else {
-					const dx=s.position==="relative"?(Number.parseFloat(s.left)||-Number.parseFloat(s.right)||0):0,dy=s.position==="relative"?(Number.parseFloat(s.top)||-Number.parseFloat(s.bottom)||0):0;
-					const extra=Math.max(0,(Number.parseFloat(s.width)||0)-(bounds.right-bounds.left),(Number.parseFloat(s.height)||0)-(bounds.bottom-bounds.top))+Math.max(...[s.marginTop,s.marginRight,s.marginBottom,s.marginLeft].map((v)=>Math.abs(Number.parseFloat(v)||0)));
-					box=s.transform!=="none"?unbounded:expand({left:bounds.left+dx,right:bounds.right+dx,top:bounds.top+dy,bottom:bounds.bottom+dy},extra);
-				}
-				items.push({el, bounds:cssPaintBounds(s,box), pseudo});
-			}
-		}
-		pagePaint = spatial(items);
-		return pagePaint;
-	};
-	const indexSvg = (svg) => {
-		if (!svgIndexes.has(svg)) svgIndexes.set(svg, spatial(Array.from(svg.querySelectorAll("path, rect, circle, ellipse, line, polyline, polygon, text, text *, image, use, foreignObject"))
-			.filter((el) => visible(el) && (!el.closest("text") || textBoxes(el).length)).map((el,order) => ({el,order,bounds:paintBounds(el)}))));
-		return svgIndexes.get(svg);
-	};
-	const radiusInterior = (el, rect) => {
-		const s = css(el), scale = scaleOf(el);
-		if (scale.status !== "measured" || !axisAligned(el)) return null;
-		const radius = Math.min(Math.max(Number.parseFloat(s.rx) || el.rx.baseVal.value, Number.parseFloat(s.ry) || el.ry.baseVal.value), Math.min(el.width.baseVal.value,el.height.baseVal.value)/2) * scale.value;
-		return expand(rect,-radius);
-	};
-	const polygon = (r) => [[r.left,r.top],[r.right,r.top],[r.right,r.bottom],[r.left,r.bottom]];
-	const cross = (a,b,p) => (b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0]);
-	const area = (p) => p.length<3?0:Math.abs(p.slice(1,-1).reduce((sum,v,i)=>sum+cross(p[0],v,p[i+2]),0));
-	const clip = (points,a,b,inside) => {
-		const result=[];
-		for(let i=0;i<points.length;i++){
-			const start=points[i],end=points[(i+1)%points.length],d1=cross(a,b,start)*inside,d2=cross(a,b,end)*inside;
-			if(d1>=0)result.push(start);
-			if((d1<0&&d2>0)||(d1>0&&d2<0)){const t=d1/(d1-d2);result.push([start[0]+t*(end[0]-start[0]),start[1]+t*(end[1]-start[1])]);}
-		}
-		return result;
-	};
-	// Partition the entire region, so later paint replaces only the area it covers.
-	// Keeping merely a set of possible colours would retain fully hidden layers.
-	const overlay = (cells,shape,paint) => cells.flatMap((cell)=>{
-		let remaining=cell.polygon;const result=[];
-		for(let i=0;i<shape.length&&area(remaining)>0;i++){
-			const a=shape[i],b=shape[(i+1)%shape.length],outside=clip(remaining,a,b,-1);
-			if(area(outside)>0)result.push({...cell,polygon:outside});
-			remaining=clip(remaining,a,b,1);
-		}
-		if(area(remaining)>0)result.push({polygon:remaining,color:composite(paint,cell.color)});
-		return result;
-	});
-	const backdrop = (node, region) => {
-		let svg = node.ownerSVGElement;
-		while (svg?.ownerSVGElement) svg = svg.ownerSVGElement;
-		if (!svg) return blocked(node, "The SVG containing this text is unavailable");
-		let colorsUnder = [[255,255,255]], uncertainty;
-		for (const ancestor of [svg,...(() => { const a=[]; for(let n=svg.parentElement;n;n=n.parentElement)a.push(n); return a; })()].reverse()) {
-			const s=css(ancestor), rect=rectOf(ancestor);
-			if (s.backgroundImage !== "none") uncertainty = blocked(ancestor, "The background behind this text uses an image or gradient; check the text against it");
-			const color=parse(s.backgroundColor);
-			if (color?.[3] > 0) {
-				const radius=Math.max(...[s.borderTopLeftRadius,s.borderTopRightRadius,s.borderBottomLeftRadius,s.borderBottomRightRadius].map((v)=>Number.parseFloat(v)||0));
-				if (ancestor !== document.documentElement && !contains(expand(rect,-radius),region)) uncertainty=blocked(ancestor,"This rounded background does not cover the whole label; check the colours outside it too");
-				else { colorsUnder=colorsUnder.map((c)=>composite({color:color.slice(0,3),alpha:color[3]},c)); if(color[3]===1 && s.backgroundImage==="none") uncertainty=undefined; }
-			}
-			const border=Math.max(...["Top","Right","Bottom","Left"].map((side)=>Number.parseFloat(s["border"+side+"Width"])||0));
-			if(border>0 && !contains(expand(rect,-border),region))uncertainty=blocked(ancestor,"This container's border crosses the label; check the text against that border");
-			if(s.boxShadow.includes("inset") && !contains(expand(rect,-shadowMargin(s.boxShadow)),region))uncertainty=blocked(ancestor,"An inset shadow crosses the label; check the text against that shadow");
-			if (ancestor !== document.documentElement && (s.overflowX !== "visible" || s.overflowY !== "visible") && !contains(expand(rect,-Math.max(...[s.borderTopLeftRadius,s.borderTopRightRadius,s.borderBottomLeftRadius,s.borderBottomRightRadius].map((v)=>Number.parseFloat(v)||0))),region)) uncertainty=blocked(ancestor,"This container clips part of the label; check its visible text");
-		}
-		for (const other of pageIndex()(region)) {
-			if (other.pseudo) return blocked(other.el,"Generated content "+other.pseudo+" overlaps this label; check the text against that content");
-			if (other.el.contains(svg)) continue;
-			return blocked(other.el,"This page element overlaps the label; check the text against its paint");
-		}
-		const candidates=indexSvg(svg)(region).sort((a,b)=>a.order-b.order);
-		if(candidates.length>256)return blocked(node,"Too many overlapping objects cover this label; check its contrast by hand");
-		let cells=[{polygon:polygon(region),color:colorsUnder[0]}];
-		for (const item of candidates) {
-			const el=item.el;
-			if(el===node)continue;
-			const s=css(el), rect=rectOf(el);
-			const later=!!(el.compareDocumentPosition(node)&Node.DOCUMENT_POSITION_PRECEDING);
-			const fail = (message) => { uncertainty=blocked(el,message); };
-			if (!(el instanceof SVGGeometryElement)) { fail("This SVG content overlaps the label; check the resulting text contrast"); continue; }
-			const g=guard(el);
-			if(g.status!=="measured"){ if(g.status==="review")uncertainty=g; continue; }
-			if(s.outlineStyle!=="none" || s.boxShadow!=="none" || s.textShadow!=="none"){fail("An outline or shadow may cover this label; check the text against that paint");continue;}
-			if((markerBoxes.get(el)||[]).some((r)=>intersects(r,region))){fail("An arrow marker may cover this label; check the text against that marker");continue;}
-			const fill=solid(el,"fill"), stroke=solid(el,"stroke"), operations=[];
-			if(fill.status==="review" || stroke.status==="review"){uncertainty=fill.status==="review"?fill:stroke;continue;}
-			if(fill.status==="measured" && intersects(rect,region)) {
-				const interior=el.localName==="rect"?radiusInterior(el,rect):null;
-				if(interior && contains(interior,region))operations.push({paint:fill.value,covers:true,polygon:polygon(region)});
-				else if(interior && (Number.parseFloat(s.rx)||el.rx.baseVal.value)===0 && (Number.parseFloat(s.ry)||el.ry.baseVal.value)===0)operations.push({paint:fill.value,polygon:polygon(rect)});
-				else if(el.matches("circle,ellipse") && polygon(region).every(([x,y])=>{const box=el.getBBox(),point=new DOMPoint(x,y).matrixTransform(el.getScreenCTM().inverse());return ((point.x-box.x-box.width/2)/(box.width/2))**2+((point.y-box.y-box.height/2)/(box.height/2))**2<=1;}))operations.push({paint:fill.value,covers:true,polygon:polygon(region)});
-				else {fail("The curved or complex edge crosses this label's region; check the text against every colour it crosses");continue;}
-			}
-			if(stroke.status==="measured" && Number.parseFloat(s.strokeWidth)>0){
-				const scale=scaleOf(el), width=s.vectorEffect==="non-scaling-stroke"?Number.parseFloat(s.strokeWidth):scale.status==="measured"?Number.parseFloat(s.strokeWidth)*scale.value:undefined;
-				if(width===undefined || s.strokeWidth.includes("%")){fail("The line's rendered stroke width is uncertain; check the text against it");continue;}
-				const half=width/2;
-				if(el.localName==="rect" && axisAligned(el) && radiusInterior(el,rect) && (Number.parseFloat(s.rx)||el.rx.baseVal.value)===0 && (Number.parseFloat(s.ry)||el.ry.baseVal.value)===0){
-					const strips=band(rect,half);
-					for(const strip of strips)if(intersects(strip,region))operations.push({paint:stroke.value,covers:contains(strip,region),polygon:polygon(strip)});
-				}else if(el instanceof SVGLineElement && s.strokeLinecap==="butt"){
-					const m=el.getScreenCTM(), a=new DOMPoint(el.x1.baseVal.value,el.y1.baseVal.value).matrixTransform(m), b=new DOMPoint(el.x2.baseVal.value,el.y2.baseVal.value).matrixTransform(m);
-					const length=Math.hypot(b.x-a.x,b.y-a.y);
-					if(length>0){const dx=(b.x-a.x)/length,dy=(b.y-a.y)/length;
-						const points=[[region.left,region.top],[region.right,region.top],[region.left,region.bottom],[region.right,region.bottom]].map(([x,y])=>[(x-a.x)*dx+(y-a.y)*dy,(x-a.x)*-dy+(y-a.y)*dx]);
-						const l=Math.min(...points.map((p)=>p[0])),r=Math.max(...points.map((p)=>p[0])),t=Math.min(...points.map((p)=>p[1])),bottom=Math.max(...points.map((p)=>p[1]));
-						if(l<length&&r>0&&t<half&&bottom>-half)operations.push({paint:stroke.value,covers:l>=0&&r<=length&&t>=-half&&bottom<=half,polygon:[[a.x+dy*half,a.y-dx*half],[b.x+dy*half,b.y-dx*half],[b.x-dy*half,b.y+dx*half],[a.x-dy*half,a.y+dx*half]]});
-					}
-				}else if(intersects(expand(rect,half),region) && !(el.localName==="rect" && axisAligned(el) && radiusInterior(el,rect) && contains(expand(radiusInterior(el,rect),-half),region))){fail("The curved or capped stroke crosses this label's region; check the text against its paint");continue;}
-				if(width<1 && operations.some((o)=>o.paint===stroke.value)){fail("A line thinner than one screen pixel overlaps this label; check its rendered contrast");continue;}
-				if(el.localName==="rect" && operations.some((o)=>o.paint===stroke.value) && (s.strokeLinejoin!=="miter"||Number(s.strokeMiterlimit)<Math.SQRT2)){fail("The box has rounded or bevelled stroke joins; check the text against those corners");continue;}
-				if(s.strokeDasharray!=="none" && operations.some((o)=>o.paint===stroke.value)){fail("A dashed line overlaps the label; check the text against the dashes and gaps");continue;}
-			}
-			if(!operations.length)continue;
-			if(later){fail("This object is painted over the label; check whether its text remains readable");continue;}
-			if(operations.length>1 && Number(s.opacity)<1){fail("This box's fill and border fade together; check the text against the combined paint");continue;}
-			if(operations.length>1 && s.paintOrder!=="normal"){fail("This box paints its fill over its border; check the text against the visible fill");continue;}
-			for(const op of operations){
-				const p={...op.paint,alpha:op.paint.alpha*Number(s.opacity)};
-				if(p.alpha<1 && s.colorInterpolation.toLowerCase()!=="srgb"){fail("This translucent paint uses a different colour blend; check the text against it");continue;}
-				if(op.covers&&p.alpha===1){uncertainty=undefined;cells=[{polygon:polygon(region),color:p.color}];}
-				else cells=overlay(cells,op.polygon,p);
-				if(cells.length>256){fail("Too many paint edges cross this label; check all resulting colours");cells=[{polygon:polygon(region),color:cells[0].color}];}
-			}
-		}
-		return uncertainty || measured([...new Map(cells.map((cell)=>[cell.color.join(","),cell.color])).values()]);
-	};
-	const fontNodes=Array.from(document.querySelectorAll("svg text, svg text *"));
-	const fontEvidence=new Map(fontNodes.map((node,i)=>[node,evidence.fonts?.[i]]));
-	const fontSignature=(el)=>[css(el).font,css(el).fontFamily,css(el).fontWeight,css(el).fontStyle,css(el).fontStretch,el.textContent].join("|");
-	const textCandidates=(root=document)=>(root===document?Array.from(document.querySelectorAll("svg text, svg text *, svg use")):[root,...root.querySelectorAll("*")]).filter((node)=>
-		node instanceof SVGUseElement || Array.from(node.childNodes).some((n)=>n.nodeType===Node.TEXT_NODE&&n.textContent.trim()) ||
-		(node===root&&node.matches("input:not([type=checkbox]):not([type=radio])")&&(node.value||node.placeholder)));
-	const referenceHasText=(use,seen=new Set())=>{
-		const href=use.getAttribute("href")||use.getAttribute("xlink:href")||"",target=href.startsWith("#")?document.getElementById(href.slice(1)):null;
-		if(!target||seen.has(target))return undefined;
-		seen.add(target);
-		if(target instanceof SVGUseElement)return referenceHasText(target,seen);
-		if([target,...target.querySelectorAll("text")].some((n)=>n.matches("text")&&n.textContent.trim()))return true;
-		for(const child of target.querySelectorAll("use"))if(referenceHasText(child,new Set(seen))!==false)return undefined;
-		return false;
-	};
-	const textContrast = (node) => {
-		if(node instanceof SVGUseElement)return referenceHasText(node)===false?absent("The referenced graphic contains no text ("+where(node)+")."):blocked(node,"This use instance copies text, or its reference is unresolved; check the copied glyphs and background for 4.5:1 contrast, or 3:1 for large text");
-		const s=css(node), svg=node instanceof SVGElement;
-		let scale=1;
-		if(svg){
-			const g=guard(node);if(g.status!=="measured")return g.status==="review"?review(g.reason+" Text needs 4.5:1 contrast, or 3:1 for large text."):g;
-			const sized=scaleOf(node);if(sized.status!=="measured")return review(sized.reason+" Text needs 4.5:1 contrast, or 3:1 for large text.");scale=sized.value;
-		}
-		const size=Number.parseFloat(s.fontSize)*scale, weight=Number.parseInt(s.fontWeight,10)||400;
-		const threshold=size>=24||(size>=56/3&&weight>=700)?3:4.5;
-		const needs=(result)=>result.status==="review"?review(result.reason+" Text needs "+threshold+":1 contrast."):result;
-		let under,foreground;
-		if(svg){
-			if(s.textShadow!=="none")return needs(blocked(node,"This label has a text shadow; check its fill against the shadow and background"));
-			if(s.stroke!=="none" && (parse(s.stroke)?.[3]??1)*Number(s.strokeOpacity)>0)return needs(blocked(node,"This label has an outline stroke; check the text against its background and outline"));
-			const fill=solid(node,"fill");if(fill.status!=="measured")return needs(fill);
-			if(fill.value.alpha*Number(s.opacity)<1 && s.colorInterpolation.toLowerCase()!=="srgb")return needs(blocked(node,"This translucent text uses a different colour blend; check its visible fill against the background"));
-			const font=fontEvidence.get(node);
-			if(!font || font.signature!==fontSignature(node) || font.reason)return needs(blocked(node,font?.reason||"The rendered font could not be verified; check whether its glyphs use the declared text colour"));
-			const boxes=textBoxes(node);
-			if(!boxes.length)return absent("No visible text run ("+where(node)+").");
-			let worst;
-			for(const box of boxes){
-				if(!box.width||!box.height)continue;
-				for(let n=node;n;n=n.parentElement)if(n instanceof SVGSVGElement && css(n).overflow!=="visible" && !contains(rectOf(n),box))return needs(blocked(n,"The SVG viewport clips part of the label; check its visible text"));
-				const b=backdrop(node,box);if(b.status!=="measured")return needs(b);
-				for(const color of b.value){const fg=composite({...fill.value,alpha:fill.value.alpha*Number(s.opacity)},color);const ratio=contrast(fg,color);if(!worst||ratio<worst.ratio)worst={ratio,foreground:fg,background:color};}
-			}
-			if(!worst)return absent("No visible text area ("+where(node)+").");
-			under=worst.background;foreground=worst.foreground;
-		}else{
-			under=background(node);
-			if(!under||s.backgroundImage!=="none"||Number(s.opacity)<1)return needs(blocked(node,"The text has an image, gradient or faded background; check its contrast"));
-			foreground=paint(s.color,under);
-		}
-		if(!foreground)return needs(blocked(node,"The text colour could not be resolved; check its contrast"));
-		const rgb=(color)=>"rgb("+color.map(Math.round).join(" ")+")";
-		return measured({ratio:contrast(foreground,under),threshold,foreground:rgb(foreground),background:rgb(under)});
-	};
-	return { parse, paint, contrast, background, colors, measured, absent, review, textContrast, textCandidates, visible };
-})`;
+	return { parse, paint, contrast, background, colors };
+})()`;
 
 /**
  * Wait for a launcher shell to actually render. Course players commonly ship an
@@ -850,22 +475,17 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 		([targets, locate]) => targets.map((target) => {
 			try {
 				const el = document.querySelector(target);
-				return {
-					selector: el ? ((0, eval)(locate)(el) as string) : "",
-					svgText: el instanceof SVGElement && (!!el.closest("text") || el instanceof SVGUseElement),
-				};
+				return el ? ((0, eval)(locate)(el) as string) : "";
 			} catch {
-				return { selector: "", svgText: false };
+				return "";
 			}
 		}),
 		[axeTargets, UNIQUE_SELECTOR] as const,
 	);
 	const selectorByTarget = new Map<string, string>();
-	const svgTextTargets = new Set<string>();
 	axeTargets.forEach((target, index) => {
-		const resolved = axeSelectors[index];
-		if (resolved?.selector) selectorByTarget.set(target, resolved.selector);
-		if (resolved?.svgText) svgTextTargets.add(target);
+		const selector = axeSelectors[index];
+		if (selector) selectorByTarget.set(target, selector);
 	});
 
 	const uaSized = new Set(await page.evaluate(UA_SIZED_CONTROLS) as string[]);
@@ -900,9 +520,6 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 			// having no failures. Kept, demoted, out of the headline count.
 			const normative = !rule.tags.includes("best-practice");
 			for (const node of rule.nodes) {
-				// The shared colour owner below measures these text runs, including
-				// unresolved results. axe's CSS backdrop cannot resolve SVG painting.
-				if (rule.id === "color-contrast" && svgTextTargets.has(node.target.join(" "))) continue;
 				// 2.5.8 User Agent Control: a target the browser sizes and the author
 				// never touches does not fail. axe reports these anyway.
 				if (rule.id === "target-size" && uaExempt.has(node.target.join(" "))) continue;
@@ -955,37 +572,6 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 	map(results.violations, "high");
 	map(results.incomplete);
 
-	const svgText = await page.evaluate(([helpers, locate, evidence]) => {
-		const { textContrast, textCandidates, visible } = (0, eval)(helpers)(evidence) as {
-			textContrast: (node: Element) => PaintResult<TextContrast>;
-			textCandidates: () => Element[];
-			visible: (node: Element) => boolean;
-		};
-		const selector = (0, eval)(locate) as (node: Element) => string;
-		return textCandidates().flatMap((node) => {
-			if (!visible(node)) return [];
-			return [{ selector: selector(node), measurement: textContrast(node) }];
-		});
-	}, [COLOR_HELPERS, UNIQUE_SELECTOR, await svgTextEvidence(page)] as const);
-	for (const item of svgText) {
-		const measurement = item.measurement;
-		if (measurement.status === "review") needsReview.push({
-			what: "Check this SVG text's contrast against its visible background and any outline.",
-			page: pageId, selector: item.selector, evidence: measurement.reason,
-			lens: "a11y", basis: "WCAG 1.4.3 Contrast (Minimum) (AA)", rule: "svg-text-contrast",
-		});
-		else if (measurement.status === "measured" && measurement.value.ratio < measurement.value.threshold) {
-			const measured = measurement.value;
-			findings.push({
-			what: `This SVG text has only ${measured.ratio.toFixed(2)}:1 contrast with its painted background.`,
-			page: pageId, selector: item.selector,
-			evidence: `${measured.foreground} on ${measured.background}; ${measured.ratio.toFixed(2)}:1 (required: ${measured.threshold}:1)`,
-			fix: `Give the text fill at least ${measured.threshold}:1 contrast against the shape behind it.`,
-			lens: "a11y", confidence: "medium", basis: "WCAG 1.4.3 Contrast (Minimum) (AA)", rule: "svg-text-contrast",
-			});
-		}
-	}
-
 	const resultIds = new Set([
 		...results.violations,
 		...results.incomplete,
@@ -1021,12 +607,6 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 					: [],
 			} satisfies RuleMetadata;
 		});
-	if (svgText.length) rules.push({
-		id: "svg-text-contrast", source: "praxity-check", rulesetVersion: packageJson.version,
-		kind: "conformance", confidence: "medium", testMode: "automated",
-		requirements: [{ standard: "WCAG", criterion: "1.4.3" }], levels: ["AA"], actRuleIds: [], tags: [],
-		assumptions: ["Contrast uses the worst solid colour across each complete text run; unsupported paint or unverified glyph colours require review."],
-	});
 	const evaluations: RuleEvaluation[] = [
 		...results.passes.map((rule) => ({
 			type: "rule" as const,
@@ -1057,10 +637,6 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 			outcome: "cantTell" as const,
 		})),
 	];
-	if (svgText.length && !findings.some((item) => item.rule === "svg-text-contrast") && !needsReview.some((item) => item.rule === "svg-text-contrast")) {
-		evaluations.push({ type: "rule", rule: "svg-text-contrast", page: pageId, state: "initial", outcome: svgText.every((item) => item.measurement.status === "absent") ? "inapplicable" : "passed" });
-	}
-
 	return { findings, needsReview, notes: [], evaluations, rules };
 }
 
@@ -2037,15 +1613,15 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 interface StateContrastSnapshot {
 	selector: string;
 	label: string;
-	text?: PaintResult<TextContrast>;
+	text?: { ratio: number; threshold: number; foreground: string; background: string };
 	cues: Array<{ name: string; ratio: number; signature: string; target?: string }>;
 	cueSignature: string;
 	manual: boolean;
 	hidden?: boolean;
 }
 
-const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true, pseudo = null, evidence = {}, owner = null) => {
-	const { parse, paint, contrast, background, colors, textContrast, textCandidates, absent } = owner || (0, eval)(colorHelpers)(evidence);
+const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true, pseudo = null) => {
+	const { parse, paint, contrast, background, colors } = (0, eval)(colorHelpers);
 	const selector = (0, eval)(locate);
 	const style = getComputedStyle(el, pseudo);
 	const rect = el.getBoundingClientRect();
@@ -2057,11 +1633,23 @@ const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true,
 	// ponytail: compare cascade origins if another scan engine stops exposing
 	// browser focus rings this way.
 	const authoredOutline = style.outlineStyle !== "auto" && style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0;
+	const rgb = (value) => "rgb(" + value.map((channel) => Math.round(channel)).join(" ") + ")";
 
-	const textNodes = includeText ? textCandidates(el) : [];
-	const textResults = textNodes.map(textContrast);
-	const text = textResults.find((result) => result.status === "review") ||
-		textResults.filter((result) => result.status === "measured").sort((a,b) => a.value.ratio/a.value.threshold-b.value.ratio/b.value.threshold)[0] || absent("No visible text.");
+	const textNodes = includeText ? [el, ...el.querySelectorAll("*")].filter((node) => {
+		const ownText = Array.from(node.childNodes).some((child) => child.nodeType === Node.TEXT_NODE && (child.textContent || "").trim());
+		return ownText || (node === el && node.matches("input:not([type=checkbox]):not([type=radio])") && (node.value || node.placeholder));
+	}) : [];
+	const text = textNodes.flatMap((node) => {
+		const nodeStyle = getComputedStyle(node);
+		const under = background(node);
+		if (!under || nodeStyle.backgroundImage !== "none" || Number(nodeStyle.opacity) < 1) { manual = true; return []; }
+		const foreground = paint(nodeStyle.color, under);
+		if (!foreground) { manual = true; return []; }
+		const size = Number.parseFloat(nodeStyle.fontSize);
+		const weight = Number.parseInt(nodeStyle.fontWeight, 10) || 400;
+		const threshold = size >= 24 || (size >= 18.66 && weight >= 700) ? 3 : 4.5;
+		return [{ ratio: contrast(foreground, under), threshold, foreground: rgb(foreground), background: rgb(under) }];
+	}).sort((a, b) => a.ratio / a.threshold - b.ratio / b.threshold)[0];
 
 	const outer = background(pseudo ? el : el.parentElement);
 	const cues = [];
@@ -2115,12 +1703,10 @@ async function stateContrastSnapshots(
 	page: Page,
 	count: number,
 	focus: boolean,
-	evidence: SvgTextEvidence,
 ): Promise<Array<StateContrastSnapshot | null>> {
 	return page.evaluate(
-		([attr, limit, shouldFocus, probe, colorHelpers, locate, indicatorNodes, evidence]) => {
-			const snapshot = (0, eval)(probe) as (el: HTMLElement, colors: string, selector: string, text?: boolean, pseudo?: string | null, evidence?: SvgTextEvidence, owner?: unknown) => StateContrastSnapshot | null;
-			const baseOwner: unknown = !shouldFocus ? (0, eval)(colorHelpers)(evidence) : null;
+		([attr, limit, shouldFocus, probe, colorHelpers, locate, indicatorNodes]) => {
+			const snapshot = (0, eval)(probe) as (el: HTMLElement, colors: string, selector: string, text?: boolean, pseudo?: string | null) => StateContrastSnapshot | null;
 			const sampleNodes = (0, eval)(indicatorNodes) as (el: HTMLElement) => HTMLElement[];
 			const selector = (0, eval)(locate) as (el: HTMLElement) => string;
 			const hidden = (el: HTMLElement, includeBox = true): boolean => {
@@ -2145,14 +1731,14 @@ async function stateContrastSnapshots(
 					el.focus({ preventScroll: true });
 					if (document.activeElement !== el) { out.push(null); continue; }
 				}
-				const own = snapshot(el, colorHelpers, locate, true, null, evidence, baseOwner);
+				const own = snapshot(el, colorHelpers, locate);
 				if (!hidden(el)) { out.push(own); continue; }
 				// Compare the same visible representatives before and after focus.
 				// Static decoration must not count as a focus change.
 				const representatives = sampleNodes(el).filter((node) => node !== el)
 					.flatMap((node) => [null, "::before", "::after"].flatMap((pseudo) => {
 						if (hidden(node, !pseudo)) return [];
-						const paint = snapshot(node, colorHelpers, locate, false, pseudo, evidence, baseOwner);
+						const paint = snapshot(node, colorHelpers, locate, false, pseudo);
 						return paint ? [{ ...paint, target: selector(node) + (pseudo ?? "") }] : [];
 					}));
 				out.push({
@@ -2164,7 +1750,7 @@ async function stateContrastSnapshots(
 			}
 			return out;
 		},
-		[MARK_ATTR, count, focus, STATE_CONTRAST_SNAPSHOT, COLOR_HELPERS, UNIQUE_SELECTOR, FOCUS_INDICATOR_NODES, evidence] as const,
+		[MARK_ATTR, count, focus, STATE_CONTRAST_SNAPSHOT, COLOR_HELPERS, UNIQUE_SELECTOR, FOCUS_INDICATOR_NODES] as const,
 	);
 }
 
@@ -2177,23 +1763,22 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 	if (limit === 0) return { findings: [], notes };
 
 	const original = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
-	const evidence = await svgTextEvidence(page);
-	const base = await stateContrastSnapshots(page, limit, false, evidence);
+	const base = await stateContrastSnapshots(page, limit, false);
 	const hover: Array<StateContrastSnapshot | null> = [];
 	for (let i = 0; i < limit; i++) {
 		const target = page.locator(`[${MARK_ATTR}="${i}"]`);
 		try {
 			await target.hover({ force: true, timeout: 500 });
 			hover.push(await target.evaluate(
-				(el, [probe, colors, locate, evidence]) => ((0, eval)(probe) as (node: HTMLElement, helpers: string, selector: string, text: boolean, pseudo: null, evidence: SvgTextEvidence) => StateContrastSnapshot | null)(el as HTMLElement, colors, locate, true, null, evidence),
-				[STATE_CONTRAST_SNAPSHOT, COLOR_HELPERS, UNIQUE_SELECTOR, await svgTextEvidence(page)] as const,
+				(el, [probe, colors, locate]) => ((0, eval)(probe) as (node: HTMLElement, helpers: string, selector: string) => StateContrastSnapshot | null)(el as HTMLElement, colors, locate),
+				[STATE_CONTRAST_SNAPSHOT, COLOR_HELPERS, UNIQUE_SELECTOR] as const,
 			));
 		} catch {
 			hover.push(null);
 		}
 	}
 	await page.mouse.move(0, 0);
-	const focus = await stateContrastSnapshots(page, limit, true, evidence);
+	const focus = await stateContrastSnapshots(page, limit, true);
 	await page.evaluate(({ x, y }) => { (document.activeElement as HTMLElement | null)?.blur(); scrollTo(x, y); }, original);
 
 	const findings: Finding[] = [];
@@ -2220,25 +1805,16 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 					});
 				}
 			}
-			const textReview = after.text?.status === "review" ? after.text : before.text?.status === "review" ? before.text : undefined;
-			if (textReview) needsReview.push({
-				what: `Check this control's ${state} text contrast by hand.`, page: pageId,
-				selector: after.selector || before.selector || undefined,
-				evidence: `${state}; ${textReview.reason}`, lens: "a11y",
-				basis: "WCAG 1.4.3 Contrast (Minimum) (AA)", rule: "state-text-contrast",
-			});
-			const oldText = before.text?.status === "measured" ? before.text.value : undefined;
-			const newText = after.text?.status === "measured" ? after.text.value : undefined;
 			if (
-				oldText && newText &&
-				oldText.ratio >= oldText.threshold &&
-				newText.ratio < newText.threshold
+				before.text && after.text &&
+				before.text.ratio >= before.text.threshold &&
+				after.text.ratio < after.text.threshold
 			) findings.push({
-				what: `This control's text falls to ${newText.ratio.toFixed(2)}:1 contrast on ${state}.`,
+				what: `This control's text falls to ${after.text.ratio.toFixed(2)}:1 contrast on ${state}.`,
 				page: pageId,
 				selector: after.selector || undefined,
-				evidence: `${state}; ${newText.foreground} on ${newText.background}; ${newText.ratio.toFixed(2)}:1 (required: ${newText.threshold}:1; default: ${oldText.ratio.toFixed(2)}:1)`,
-				fix: `Keep the ${state} text and background colors at or above ${newText.threshold}:1 contrast.`,
+				evidence: `${state}; ${after.text.foreground} on ${after.text.background}; ${after.text.ratio.toFixed(2)}:1 (required: ${after.text.threshold}:1; default: ${before.text.ratio.toFixed(2)}:1)`,
+				fix: `Keep the ${state} text and background colors at or above ${after.text.threshold}:1 contrast.`,
 				lens: "a11y", confidence: "medium",
 				basis: "WCAG 1.4.3 Contrast (Minimum) (AA)",
 				rule: "state-text-contrast",
@@ -2286,7 +1862,7 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 		type Issue = { kind: Kind; selector: string; ratio: number; detail: string };
 		type Manual = { kind: Kind; selector: string; reason: string };
 		(document.activeElement as HTMLElement | null)?.blur();
-		const { parse, paint, contrast, background, colors } = (0, eval)(colorHelpers)() as {
+		const { parse, paint, contrast, background, colors } = (0, eval)(colorHelpers) as {
 			parse: (value: string) => RGBA | undefined;
 			paint: (value: string, under: RGB, opacity?: number) => RGB | undefined;
 			contrast: (a: RGB, b: RGB) => number;
