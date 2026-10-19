@@ -97,6 +97,8 @@ const NO_MOTION = `*, *::before, *::after {
 const MAX_FOCUS_CHECKS = 60;
 /** Enough to show a page is riddled with them without walking forever. */
 const MAX_TRAPS = 5;
+/** Ten extra Tabs cover native date/time segments and media buttons, with room to spare. */
+const MAX_ESCAPE_TABS = 10;
 /**
  * `dataset.praxityCheckId` writes the attribute `data-praxity-check-id` -- camel case
  * on the property, kebab case on the attribute. Querying the camel-case form
@@ -1255,13 +1257,15 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 	const findings: Finding[] = [];
 	const notes: string[] = [];
 	const trapped = new Set<string>();
+	const escapable = new Set<string>();
 	const total = await markFocusables(page);
 	if (total === 0) return { findings, notes };
 
 	await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
 	const order: string[] = [];
-	for (let i = 0; i < total + 2; i++) {
+	// Allow internal Tab stops and the three observations needed to suspect a trap.
+	for (let i = 0; i < total * (MAX_ESCAPE_TABS + 3) + 2; i++) {
 		await page.keyboard.press("Tab");
 		const at = await page.evaluate(
 			([mark, attr, locate]) => {
@@ -1277,7 +1281,6 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 				}
 				return {
 					id: el.dataset[mark] as string,
-					tag: el.tagName.toLowerCase(),
 					label: (el.getAttribute("aria-label") || el.innerText || el.getAttribute("title") || "").replace(/\s+/g, " ").trim().slice(0, 80),
 					where: (0, eval)(locate)(el) as string,
 				};
@@ -1286,21 +1289,38 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 		);
 		if (!at) break;
 
-		// `<video controls>` and `<audio controls>` hold focus on the host while Tab
-		// moves between their play, timeline and volume buttons -- those live in a
-		// user-agent shadow root Chromium will not let us read, so focus is moving
-		// and we cannot see it. Counting the repeat invented four keyboard traps on
-		// a course that has none.
-		const mediaControls = at.tag === "video" || at.tag === "audio";
-		if (!mediaControls && order.length >= 2 && order.at(-1) === at.id && order.at(-2) === at.id) {
+		// Native media buttons and date/time segments move focus inside an unreadable
+		// user-agent shadow root. Repeated host identity alone does not prove a trap.
+		if (!escapable.has(at.id) && !trapped.has(at.id) && order.length >= 2 && order.at(-1) === at.id && order.at(-2) === at.id) {
+			const target = page.locator(`[${MARK_ATTR}="${at.id}"]`);
+			const canEscape = async (key: "Tab" | "Shift+Tab"): Promise<boolean> => {
+				for (let presses = 1; presses <= MAX_ESCAPE_TABS; presses++) {
+					await page.keyboard.press(key);
+					if (await target.evaluate((el) => document.activeElement === el)) continue;
+					// Reverse the probe to restore the native segment as well as its host.
+					for (let undo = 0; undo < presses; undo++) {
+						await page.keyboard.press(key === "Tab" ? "Shift+Tab" : "Tab");
+					}
+					// Page handlers may block the return trip even when escape succeeded.
+					if (!await target.evaluate((el) => document.activeElement === el)) await target.focus();
+					return true;
+				}
+				return false;
+			};
+			if (await canEscape("Tab")) {
+				escapable.add(at.id);
+				order.push(at.id);
+				continue;
+			}
+			const reverseEscape = await canEscape("Shift+Tab");
 			findings.push({
 				what: "Keyboard focus is stuck here — pressing Tab does not move on.",
 				page: pageId,
 				selector: at.where || undefined,
-				evidence: `${at.label ? `accessible name ${JSON.stringify(at.label)}; ` : ""}Tab pressed 3 times, focus never left element ${at.id}`,
+				evidence: `${at.label ? `accessible name ${JSON.stringify(at.label)}; ` : ""}${MAX_ESCAPE_TABS} additional Tab presses could not leave element ${at.id}; ${reverseEscape ? "Tab cannot leave; Shift+Tab can" : `${MAX_ESCAPE_TABS} Shift+Tab presses could not leave either`}`,
 				fix: "Let Tab leave the component, and close it on Escape.",
 				lens: "a11y",
-				confidence: "high",
+				confidence: reverseEscape ? "medium" : "high",
 				basis: "WCAG 2.1.2 No Keyboard Trap (A)",
 				rule: "keyboard-trap",
 			});

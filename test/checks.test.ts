@@ -449,6 +449,105 @@ describe("automated checks fire on known defects", () => {
 		);
 	});
 
+	for (const type of ["date", "time", "datetime-local", "month", "week"]) {
+		test(`keyboardWalk lets Tab leave a native ${type} input`, async () => {
+			const page = await browser.newPage();
+			const html = `<button>Before</button><input id="schedule" type="${type}" aria-label="Schedule"><button id="after" onfocus="document.title = 'After reached'">After</button>`;
+			await page.setContent(html);
+			const result = await keyboardWalk(page, "schedule.html");
+			assert.deepEqual(result.findings, []);
+			assert.deepEqual(result.notes, []);
+			assert.equal(await page.title(), "After reached");
+			// A native control can still have a real author-scripted trap.
+			await page.setContent(`${html}<script>document.getElementById("schedule").addEventListener("keydown", (event) => {
+				if (event.key === "Tab") event.preventDefault();
+			});</script>`);
+			const blocked = await keyboardWalk(page, "blocked-schedule.html");
+			assert.equal(blocked.findings.length, 1);
+			assert.equal(blocked.findings[0]?.confidence, "high");
+			assert.match(blocked.findings[0]?.evidence ?? "", /10 additional Tab presses.*10 Shift\+Tab presses/);
+			await page.close();
+		});
+	}
+
+	for (const tag of ["video", "audio"]) {
+		test(`keyboardWalk lets Tab leave native ${tag} controls`, async () => {
+			const page = await browser.newPage();
+			await page.setContent(`<button>Before</button><${tag} controls src="${server.origin}/tone.wav"></${tag}><button onfocus="document.title = 'After reached'">After</button>`);
+			const result = await keyboardWalk(page, "media.html");
+			assert.deepEqual(result.findings, []);
+			assert.equal(await page.title(), "After reached");
+			await page.close();
+		});
+	}
+
+	for (const handler of ["keydown", "blur"]) {
+		test(`keyboardWalk confirms a JavaScript ${handler} trap in both directions`, async () => {
+			const page = await browser.newPage();
+			await page.setContent(`<button>Before</button><button id="trap">Trapped</button><button>After</button>
+				<script>
+				const trap = document.getElementById("trap");
+				trap.addEventListener("${handler}", (event) => {
+					if (event.type === "blur" || event.key === "Tab") { event.preventDefault(); trap.focus(); }
+				});
+				</script>`);
+			const result = await keyboardWalk(page, "trapped.html");
+			const traps = result.findings.filter((f) => f.rule === "keyboard-trap");
+			assert.equal(traps.length, 1);
+			assert.equal(traps[0]?.selector, "#trap");
+			assert.equal(traps[0]?.confidence, "high");
+			assert.match(traps[0]?.evidence ?? "", /10 additional Tab presses.*10 Shift\+Tab presses/);
+			await page.close();
+		});
+	}
+
+	for (const reversePresses of [1, 4]) {
+		test(`keyboardWalk lowers confidence when ${reversePresses} Shift+Tab presses escape`, async () => {
+			const page = await browser.newPage();
+			await page.setContent(`<button>Before</button><button id="trap">Forward blocked</button><button>After</button>
+				<script>
+				let backwards = 0;
+				document.getElementById("trap").addEventListener("keydown", (event) => {
+					if (event.key === "Tab" && (!event.shiftKey || ++backwards < ${reversePresses})) event.preventDefault();
+				});
+				</script>`);
+			const result = await keyboardWalk(page, "forward-blocked.html");
+			const traps = result.findings.filter((f) => f.rule === "keyboard-trap");
+			assert.equal(traps.length, 1);
+			assert.equal(traps[0]?.confidence, "medium");
+			assert.match(traps[0]?.evidence ?? "", /Tab cannot leave; Shift\+Tab can/);
+			await page.close();
+		});
+	}
+
+	test("keyboardWalk restores its position after a native control and finds two following traps", async () => {
+		const page = await browser.newPage();
+		await page.setContent(`<input type="datetime-local" aria-label="Schedule"><button>Between</button>
+			<button id="first">First trap</button><button id="second">Second trap</button><button>After</button>
+			<script>
+			for (const id of ["first", "second"]) document.getElementById(id).addEventListener("keydown", (event) => {
+				if (event.key === "Tab") event.preventDefault();
+			});
+			</script>`);
+		const result = await keyboardWalk(page, "two-traps.html");
+		assert.deepEqual(result.findings.filter((f) => f.rule === "keyboard-trap").map((f) => [f.selector, f.confidence]), [
+			["#first", "high"], ["#second", "high"],
+		]);
+		await page.close();
+	});
+
+	test("keyboardWalk preserves the five-trap limit", async () => {
+		const page = await browser.newPage();
+		await page.setContent(`${Array.from({ length: 6 }, (_, i) => `<button id="trap-${i}">Trap ${i}</button>`).join("")}
+			<script>for (const button of document.querySelectorAll("button")) button.addEventListener("keydown", (event) => {
+				if (event.key === "Tab") event.preventDefault();
+			});</script>`);
+		const result = await keyboardWalk(page, "many-traps.html");
+		assert.equal(result.findings.filter((f) => f.rule === "keyboard-trap").length, 5);
+		assert.deepEqual(result.notes, ["stopped the Tab key test on many-traps.html after 5 focus traps"]);
+		await page.close();
+	});
+
 	test("nonTextContrast finds an author-styled low-contrast control boundary", async () => {
 		const bad = await open("low-component-contrast.html");
 		const badResult = await nonTextContrast(bad, "low-component-contrast.html");
