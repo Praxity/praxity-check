@@ -81,6 +81,9 @@ export interface CheckResult {
 	untested?: UntestedEvaluation[];
 }
 
+type PaintResult<T> = { status: "measured"; value: T } | { status: "absent" | "review"; reason: string };
+type TextContrast = { ratio: number; threshold: number; foreground: string; background: string };
+
 export interface Triage {
 	ok: boolean;
 	reason?: string;
@@ -199,7 +202,257 @@ const COLOR_HELPERS = `(() => {
 	};
 	const colors = (value) => (value.match(/(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\\([^)]*\\)|#[\\da-f]{3,8}\\b|\\b[a-z]+\\b/gi) || [])
 		.filter((token) => parse(token));
-	return { parse, paint, contrast, background, colors };
+	const measured = (value) => ({ status: "measured", value });
+	const absent = (reason) => ({ status: "absent", reason });
+	const review = (reason) => ({ status: "review", reason });
+	const opacity = (el) => Number(getComputedStyle(el).opacity);
+	const svgShapes = "path, rect, circle, ellipse, line, polyline, polygon";
+	const svgVisible = (el) => {
+		if (el.closest("defs, clipPath, mask, symbol")) return false;
+		if (getComputedStyle(el).visibility !== "visible") return false;
+		for (let node = el; node; node = node.parentElement) {
+			const style = getComputedStyle(node);
+			if (style.display === "none" || style.opacity === "0") return false;
+		}
+		return true;
+	};
+	const svgGuard = (el) => {
+		if (!svgVisible(el)) return absent("Element paints no visible content");
+		for (let node = el; node; node = node.parentElement) {
+			const style = getComputedStyle(node);
+			if (node instanceof SVGElement && (style.markerStart !== "none" || style.markerMid !== "none" || style.markerEnd !== "none")) return review("Marker paint bounds are not measured");
+			if (style.filter !== "none" || style.maskImage !== "none" || style.clipPath !== "none" || style.mixBlendMode !== "normal" || style.clip !== "auto") return review("Filter, mask, clipping or blend paint is not measured");
+			if (node !== el && Number(style.opacity) < 1) return review("Ancestor opacity composites a group of paint operations");
+			if (style.perspective !== "none" || style.transform.startsWith("matrix3d")) return review("Three-dimensional transform is not measured");
+		}
+		return measured(null);
+	};
+	const svgScale = (el) => {
+		const m = el.getScreenCTM();
+		if (!m) return review("Rendered transform is unavailable");
+		const x = Math.hypot(m.a, m.b), y = Math.hypot(m.c, m.d);
+		if (x <= 0 || Math.abs(x - y) > x * 1e-8 || Math.abs(m.a * m.c + m.b * m.d) > x * y * 1e-8) return review("Nonuniform or singular transform is not measured");
+		return measured(x);
+	};
+	const expand = (r, n) => ({ left: r.left - n, top: r.top - n, right: r.right + n, bottom: r.bottom + n });
+	const intersects = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+	const contains = (a, b) => a.left <= b.left && a.right >= b.right && a.top <= b.top && a.bottom >= b.bottom;
+	const band = (outer, inner) => inner.left >= inner.right || inner.top >= inner.bottom ? [outer] : [
+		{ ...outer, bottom: inner.top }, { ...outer, top: inner.bottom },
+		{ left: outer.left, right: inner.left, top: inner.top, bottom: inner.bottom },
+		{ left: inner.right, right: outer.right, top: inner.top, bottom: inner.bottom },
+	].filter((r) => r.left < r.right && r.top < r.bottom);
+	const plainRect = (el) => {
+		const m = el.getScreenCTM();
+		const style = getComputedStyle(el);
+		const zero = (value, length) => value === "auto" ? length.baseVal.value === 0 : Number.parseFloat(value) === 0;
+		return el.localName === "rect" && m && m.b === 0 && m.c === 0 &&
+			zero(style.rx, el.rx) && zero(style.ry, el.ry);
+	};
+	const svgPaint = (el, kind) => {
+		const guard = svgGuard(el);
+		if (guard.status !== "measured") return guard;
+		const style = getComputedStyle(el), value = style[kind];
+		if (value === "none" || (kind === "fill" && el.localName === "line")) return absent("No " + kind + " paint");
+		const declared = parse(value);
+		if (!declared) return review("Unresolved " + kind + " paint");
+		const alpha = declared[3] * Number(style[kind + "Opacity"]) * opacity(el);
+		if (alpha === 0) return absent("Transparent " + kind + " paint");
+		if (alpha < 1 && style.colorInterpolation.toLowerCase() !== "srgb") return review("Paint colour interpolation is not measured");
+		if (kind === "fill" && el instanceof SVGGeometryElement) {
+			const rect = el.getBBox();
+			if (rect.width === 0 || rect.height === 0) return absent("Fill has no painted area");
+			if (!["rect", "circle", "ellipse"].includes(el.localName)) return review("Filled path geometry requires review");
+		}
+		let width = 0;
+		if (kind === "stroke") {
+			if (Number.parseFloat(style.strokeWidth) === 0 || el.getTotalLength() === 0) return absent("Stroke has no painted geometry");
+			const dashes = style.strokeDasharray === "none" ? [] : style.strokeDasharray.split(/[ ,]+/).map(Number.parseFloat);
+			const repeated = dashes.length % 2 ? [...dashes, ...dashes] : dashes;
+			if (repeated.length && repeated.every((n, i) => i % 2 || n === 0) && repeated.some((n) => n > 0) && style.strokeLinecap === "butt") return absent("Dash pattern paints no stroke");
+			if (dashes.length) return review("Dashed stroke geometry is not measured");
+			const scale = svgScale(el);
+			if (scale.status !== "measured") return scale;
+			if (style.vectorEffect !== "none" || style.strokeWidth.includes("%")) return review("Stroke scaling is not measured");
+			width = Number.parseFloat(style.strokeWidth) * scale.value;
+			if (width < 1) return review("Subpixel stroke visibility requires review");
+		}
+		return measured({ color: declared.slice(0, 3), alpha, width, signature: value + " " + alpha + " " + width });
+	};
+	const composite = (p, under) => p.color.map((c, i) => c * p.alpha + under[i] * (1 - p.alpha));
+	const svgRegion = (el, boundary = false, padding = 0) => {
+		const rect = el.getBoundingClientRect();
+		if (!boundary) return { boxes: [rect] };
+		const style = getComputedStyle(el);
+		const scale = svgScale(el);
+		const width = style.stroke !== "none" && scale.status === "measured" ? Number.parseFloat(style.strokeWidth) * scale.value / 2 : 0;
+		const outer = expand(rect, width + padding + .5);
+		if (plainRect(el)) return { boxes: band(outer, expand(rect, -width - padding - .5)) };
+		if (el.localName === "circle" && scale.status === "measured") return { boxes: [outer], circle: { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2, r: rect.width / 2 + width + padding } };
+		return { boxes: [expand(rect, width * Math.max(1, Number.parseFloat(style.strokeMiterlimit)) + padding + .5)] };
+	};
+	const svgBackdrop = (el, region = svgRegion(el, !(el instanceof SVGTextContentElement))) => {
+		const guard = svgGuard(el);
+		if (guard.status !== "measured") return guard;
+		let svg = el instanceof SVGSVGElement ? el : el.ownerSVGElement;
+		if (!svg) return review("SVG root is unavailable");
+		while (svg.ownerSVGElement) svg = svg.ownerSVGElement;
+		const base = background(svg);
+		if (!base) return review("CSS background is not a uniform solid colour");
+		for (let node = el; node; node = node.parentElement) {
+			const style = getComputedStyle(node);
+			if (node instanceof SVGSVGElement && style.overflow !== "visible" && !region.boxes.every((r) => contains(node.getBoundingClientRect(), r))) return review("Measured region crosses an SVG viewport clip");
+			if (!(node instanceof SVGElement) && node !== document.documentElement && parse(style.backgroundColor)?.[3] > 0 && !region.boxes.every((r) => contains(node.getBoundingClientRect(), r))) return review("CSS background does not cover the entire measured region");
+			if (!(node instanceof SVGElement) && (
+				style.overflowX !== "visible" || style.overflowY !== "visible" || style.boxShadow !== "none" ||
+				(parse(style.backgroundColor)?.[3] > 0 && (style.backgroundClip !== "border-box" || [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomLeftRadius, style.borderBottomRightRadius].some((r) => Number.parseFloat(r) !== 0)))
+			)) return review("CSS background clipping, rounding or shadow is not measured");
+		}
+		for (const other of document.body.querySelectorAll("*")) {
+			if (svgVisible(other) && ["::before", "::after"].some((pseudo) => !["none", "normal"].includes(getComputedStyle(other, pseudo).content))) return review("Generated paint bounds are not measured");
+			if (other === svg || other.contains(svg) || svg.contains(other) || !svgVisible(other)) continue;
+			if (region.boxes.some((r) => intersects(r, other.getBoundingClientRect()))) return review("Other page content intersects the measured region");
+		}
+		let under = base;
+		for (const shape of svg.querySelectorAll(svgShapes + ", text, tspan, image, use, foreignObject")) {
+			if (shape === el || shape.contains(el) || el.contains(shape) || !svgVisible(shape)) continue;
+			const style = getComputedStyle(shape), rect = shape.getBoundingClientRect();
+			const scale = svgScale(shape);
+			if (scale.status !== "measured") return scale;
+			const strokeExtent = style.stroke !== "none" ? Number.parseFloat(style.strokeWidth) * scale.value / 2 * Math.max(1, Number.parseFloat(style.strokeMiterlimit)) : 0;
+			const extent = expand(rect, strokeExtent);
+			// Effects and instances can paint beyond their geometric bounding box.
+			const guarded = svgGuard(shape);
+			if (guarded.status === "review") return guarded;
+			if (shape.matches("use, foreignObject")) return review("SVG instance or foreign content paint bounds are not measured");
+			if (!region.boxes.some((r) => intersects(r, extent))) continue;
+			if (!(shape instanceof SVGGeometryElement)) return review("Other SVG content intersects the measured region");
+			if (shape.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) return review("Later SVG paint intersects the measured region");
+			const fill = svgPaint(shape, "fill"), stroke = svgPaint(shape, "stroke");
+			if (fill.status === "review") return fill;
+			if (stroke.status === "review") return stroke;
+			const operations = [];
+			if (fill.status === "measured" && region.boxes.some((r) => intersects(r, rect))) operations.push({ paint: fill.value, covers: plainRect(shape) && region.boxes.every((r) => contains(rect, r)) });
+			if (stroke.status === "measured") {
+				const half = stroke.value.width / 2;
+				if (plainRect(shape)) {
+					const strips = band(expand(rect, half), expand(rect, -half));
+					if (region.boxes.some((r) => strips.some((s) => intersects(r, s)))) operations.push({ paint: stroke.value, covers: region.boxes.every((r) => strips.some((s) => contains(s, r))) });
+				} else if (shape instanceof SVGLineElement && style.strokeLinecap === "butt") {
+					const m = shape.getScreenCTM(), a = new DOMPoint(shape.x1.baseVal.value, shape.y1.baseVal.value).matrixTransform(m), b = new DOMPoint(shape.x2.baseVal.value, shape.y2.baseVal.value).matrixTransform(m);
+					const length = Math.hypot(b.x - a.x, b.y - a.y), dx = (b.x - a.x) / length, dy = (b.y - a.y) / length;
+					const coords = (x, y) => [(x - a.x) * dx + (y - a.y) * dy, (x - a.x) * -dy + (y - a.y) * dx];
+					const ranges = region.circle ? (() => { const c = coords(region.circle.x, region.circle.y), r = region.circle.r; return [[c[0] - r, c[0] + r, c[1] - r, c[1] + r]]; })() : region.boxes.map((r) => {
+						const points = [[r.left, r.top], [r.right, r.top], [r.left, r.bottom], [r.right, r.bottom]].map(([x, y]) => coords(x, y));
+						return [Math.min(...points.map((p) => p[0])), Math.max(...points.map((p) => p[0])), Math.min(...points.map((p) => p[1])), Math.max(...points.map((p) => p[1]))];
+					});
+					if (ranges.some(([l, r, t, b]) => l < length && r > 0 && t < half && b > -half)) operations.push({ paint: stroke.value, covers: ranges.every(([l, r, t, b]) => l >= 0 && r <= length && t >= -half && b <= half) });
+				} else operations.push({ paint: stroke.value, covers: false });
+			}
+			if (operations.length > 1 && opacity(shape) < 1) return review("Object opacity applies once to overlapping fill and stroke");
+			if (operations.length > 1 && style.paintOrder !== "normal") return review("Paint-order changes overlapping fill and stroke");
+			for (const operation of operations) {
+				if (!operation.covers) return review("Paint partially intersects the complete measured region");
+				under = composite(operation.paint, under);
+			}
+		}
+		return measured(under);
+	};
+	const textContrast = (node) => {
+		const style = getComputedStyle(node);
+		const svg = node instanceof SVGElement;
+		const backdrop = svg ? svgBackdrop(node) : measured(background(node));
+		if (backdrop.status !== "measured") return backdrop;
+		const under = backdrop.value;
+		if (!under || (!svg && Number(style.opacity) < 1)) return review("Text background or opacity is not measured");
+		let foreground, scale = 1;
+		if (svg) {
+			if (style.stroke !== "none" && (parse(style.stroke)?.[3] ?? 1) * Number(style.strokeOpacity) > 0) return review("Stroked SVG text requires review");
+			const fill = svgPaint(node, "fill"), rendered = svgScale(node);
+			if (fill.status !== "measured") return fill;
+			if (rendered.status !== "measured") return rendered;
+			foreground = composite(fill.value, under); scale = rendered.value;
+		} else foreground = paint(style.color, under);
+		if (!foreground) return review("Text colour is unresolved");
+		const size = Number.parseFloat(style.fontSize) * scale;
+		const weight = Number.parseInt(style.fontWeight, 10) || 400;
+		const threshold = size >= 24 || (size >= 56 / 3 && weight >= 700) ? 3 : 4.5;
+		const rgb = (color) => "rgb(" + color.map(Math.round).join(" ") + ")";
+		return measured({ ratio: contrast(foreground, under), threshold, foreground: rgb(foreground), background: rgb(under) });
+	};
+	const svgBoundary = (el) => {
+		const fill = svgPaint(el, "fill"), stroke = svgPaint(el, "stroke");
+		if (fill.status === "review") return fill;
+		if (stroke.status === "review") return stroke;
+		if (fill.status === "absent" && stroke.status === "absent") return absent("Shape paints no boundary");
+		if (fill.status === "measured" && stroke.status === "measured") {
+			if (opacity(el) < 1) return review("Object opacity applies once to overlapping fill and stroke");
+			if (getComputedStyle(el).paintOrder !== "normal") return review("Paint-order changes overlapping fill and stroke");
+		}
+		const backdrop = svgBackdrop(el);
+		if (backdrop.status !== "measured") return backdrop;
+		const cues = [["fill", fill], ["stroke", stroke]].flatMap(([name, p]) => p.status === "measured" ? [{ name, ratio: contrast(composite(p.value, backdrop.value), backdrop.value) }] : []);
+		const strongest = cues.sort((a, b) => b.ratio - a.ratio)[0];
+		return measured({ ...strongest, fillMeaning: strongest.name === "stroke" && strongest.ratio >= 3 && cues.some((cue) => cue.name === "fill" && cue.ratio < 3) });
+	};
+	const svgFocus = (el, locate) => {
+		const guard = svgGuard(el);
+		if (guard.status !== "measured") return guard;
+		const cues = [];
+		const absentReasons = [];
+		const nodes = [el, ...el.querySelectorAll(svgShapes + ", use")];
+		for (let parent = el.parentElement, depth = 0; parent instanceof SVGElement && depth < 3; parent = parent.parentElement, depth++) nodes.push(parent);
+		for (const node of nodes) {
+			if (!svgVisible(node)) continue;
+			if (node.localName === "use") return review("Focus paint on an SVG use instance is not measured");
+			const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+			const paints = [];
+			if (node instanceof SVGGeometryElement) {
+				const stroke = svgPaint(node, "stroke");
+				if (stroke.status === "review") return stroke;
+				if (stroke.status === "absent") absentReasons.push(stroke.reason);
+				if (stroke.status === "measured") {
+					const fill = svgPaint(node, "fill");
+					if (fill.status === "review") return fill;
+					if (fill.status === "measured" && (opacity(node) < 1 || style.paintOrder !== "normal")) return review("Focus fill and stroke compositing requires review");
+					paints.push({ name: "stroke", paint: stroke.value, region: svgRegion(node, true) });
+				}
+			}
+			if (style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0) {
+				const declared = parse(style.outlineColor), scale = svgScale(node);
+				if (!declared) return review("Outline colour is unresolved");
+				if (declared[3] === 0) continue;
+				if (scale.status !== "measured" || scale.value !== 1 || Number.parseFloat(style.outlineOffset) < 0 || !["solid", "auto"].includes(style.outlineStyle)) return review("Outline geometry is not measured");
+				const width = Number.parseFloat(style.outlineWidth);
+				if (width < 1) return review("Subpixel outline visibility requires review");
+				paints.push({ name: "outline", paint: { color: declared.slice(0, 3), alpha: declared[3] * opacity(node), width,
+					signature: style.outline + " " + style.outlineOffset + " " + opacity(node) }, region: svgRegion(node, true, width + Number.parseFloat(style.outlineOffset)) });
+			}
+			for (const item of paints) {
+				const backdrop = svgBackdrop(node, item.region);
+				if (backdrop.status !== "measured") return backdrop;
+				const color = composite(item.paint, backdrop.value);
+				cues.push({ name: item.name, target: locate(node), ratio: contrast(color, backdrop.value), color, under: backdrop.value,
+					width: item.paint.width, signature: item.paint.signature, geometry: [rect.left, rect.top, rect.right, rect.bottom, style.d, style.transform,
+						...Array.from(node.attributes).filter((a) => !["style", "stroke", "stroke-width", "stroke-opacity", "opacity"].includes(a.name)).map((a) => a.name + "=" + a.value)].join(" ") });
+			}
+		}
+		return cues.length ? measured(cues) : absent([...new Set(absentReasons)].join("; ") || "No painted stroke or outline focus cue");
+	};
+	const svgFocusChange = (before, after) => {
+		if (before.status === "review") return before;
+		if (after.status !== "measured") return after;
+		const changes = [];
+		for (const cue of after.value) {
+			const previous = before.status === "measured" ? before.value.find((p) => p.target === cue.target && p.name === cue.name) : undefined;
+			if (previous && previous.geometry !== cue.geometry) return review("Focus changed indicator geometry");
+			if (previous && previous.width !== cue.width) return review("Focus indicator width change requires rendered-area review");
+			if (previous?.signature === cue.signature) continue;
+			changes.push({ name: cue.name, ratio: Math.min(cue.ratio, contrast(cue.color, previous?.color ?? cue.under)) });
+		}
+		return changes.length ? measured(changes.sort((a, b) => b.ratio - a.ratio)[0]) : absent("No painted focus cue changed");
+	};
+	return { parse, paint, contrast, background, colors, opacity, svgShapes, svgVisible, svgGuard, svgScale, svgRegion, svgPaint, svgBackdrop, svgBoundary, svgFocus, svgFocusChange, textContrast, composite, measured, absent, review };
 })()`;
 
 /**
@@ -571,6 +824,39 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 	// need review and never gate, regardless of the selected confidence floor.
 	map(results.violations, "high");
 	map(results.incomplete);
+	// axe excludes SVG text. Use the same colour owner as state and graphic checks.
+	const svgText = await page.evaluate(([helpers, locate]) => {
+		const { textContrast, svgVisible } = (0, eval)(helpers) as {
+			textContrast: (node: Element) => PaintResult<TextContrast>;
+			svgVisible: (node: Element) => boolean;
+		};
+		const selector = (0, eval)(locate) as (node: Element) => string;
+		return Array.from(document.querySelectorAll("svg text, svg tspan, svg use")).flatMap((node) => {
+			if (!svgVisible(node) || node.closest('[aria-hidden=true]') ||
+				(node.localName !== "use" && !Array.from(node.childNodes).some((child) => child.nodeType === Node.TEXT_NODE && child.textContent?.trim()))) return [];
+			const measurement: PaintResult<TextContrast> = node.localName === "use"
+				? { status: "review", reason: "SVG use instance may contain text whose paint is not measured" } : textContrast(node);
+			return measurement.status === "absent" ? [] : [{ selector: selector(node), measurement }];
+		});
+	}, [COLOR_HELPERS, UNIQUE_SELECTOR] as const);
+	for (const item of svgText) {
+		const measurement = item.measurement;
+		if (measurement.status === "review") needsReview.push({
+			what: "Measure this SVG text's contrast by hand. Check could not determine its painted background.",
+			page: pageId, selector: item.selector, evidence: measurement.reason,
+			lens: "a11y", basis: "WCAG 1.4.3 Contrast (Minimum) (AA)", rule: "svg-text-contrast",
+		});
+		else if (measurement.status === "measured" && measurement.value.ratio < measurement.value.threshold) {
+			const measured = measurement.value;
+			findings.push({
+			what: `This SVG text has only ${measured.ratio.toFixed(2)}:1 contrast with its painted background.`,
+			page: pageId, selector: item.selector,
+			evidence: `${measured.foreground} on ${measured.background}; ${measured.ratio.toFixed(2)}:1 (required: ${measured.threshold}:1)`,
+			fix: `Give the text fill at least ${measured.threshold}:1 contrast against the shape behind it.`,
+			lens: "a11y", confidence: "medium", basis: "WCAG 1.4.3 Contrast (Minimum) (AA)", rule: "svg-text-contrast",
+			});
+		}
+	}
 
 	const resultIds = new Set([
 		...results.violations,
@@ -607,7 +893,15 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 					: [],
 			} satisfies RuleMetadata;
 		});
+	if (svgText.length) rules.push({
+		id: "svg-text-contrast", source: "praxity-check", rulesetVersion: packageJson.version,
+		kind: "conformance", confidence: "medium", testMode: "automated",
+		requirements: [{ standard: "WCAG", criterion: "1.4.3" }], levels: ["AA"], actRuleIds: [], tags: [],
+		assumptions: ["Solid SVG paint behind text can be measured; mixed and unsupported paint require review."],
+	});
 	const evaluations: RuleEvaluation[] = [
+		...(svgText.length && !findings.some((item) => item.rule === "svg-text-contrast") && !needsReview.some((item) => item.rule === "svg-text-contrast")
+			? [{ type: "rule" as const, rule: "svg-text-contrast", page: pageId, state: "initial", outcome: "passed" as const }] : []),
 		...results.passes.map((rule) => ({
 			type: "rule" as const,
 			rule: `axe:${rule.id}`,
@@ -1473,6 +1767,7 @@ export async function keyboardScrollableRegions(page: Page, pageId: string): Pro
  */
 export async function focusIndicators(page: Page, pageId: string): Promise<CheckResult> {
 	const findings: Finding[] = [];
+	const needsReview: ReviewItem[] = [];
 	const notes: string[] = [];
 	await page.addStyleTag({ content: NO_MOTION });
 
@@ -1481,8 +1776,13 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 	if (total > limit) notes.push(`Tested focus indicators on ${limit} of ${total} controls on ${pageId}; the rest were not tested.`);
 
 	const results = await page.evaluate(
-		([attr, count, locate, indicatorNodes]) => {
+		([attr, count, locate, indicatorNodes, colorHelpers]) => {
 			const sampleNodes = (0, eval)(indicatorNodes) as (el: HTMLElement) => HTMLElement[];
+			const { svgFocus, svgFocusChange } = (0, eval)(colorHelpers) as {
+				svgFocus: (el: Element, locate: (el: Element) => string) => PaintResult<SvgFocusCue[]>;
+				svgFocusChange: (before: PaintResult<SvgFocusCue[]>, after: PaintResult<SvgFocusCue[]>) => PaintResult<{ name: string; ratio: number }>;
+			};
+			const selector = (0, eval)(locate) as (el: Element) => string;
 			const paintedColor = (value: string): string => {
 				const channels = value.match(/[\d.]+/g)?.map(Number) ?? [];
 				return channels.length > 3 && channels[3] === 0 ? "transparent" : value;
@@ -1559,7 +1859,7 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 				return parts.join("|");
 			};
 
-			const out: Array<{ index: number; changed: boolean; label: string; where: string }> = [];
+			const out: Array<{ index: number; changed: boolean; label: string; where: string; review?: string; reason?: string }> = [];
 			for (let i = 0; i < count; i++) {
 				const el = document.querySelector<HTMLElement>(`[${attr}="${i}"]`);
 				if (!el) continue;
@@ -1568,29 +1868,40 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 				if (getComputedStyle(el).visibility === "hidden") continue;
 
 				(document.activeElement as HTMLElement | null)?.blur();
-				const before = snapshot(el);
+				const svg = el instanceof SVGElement;
+				const beforePaint = svg ? svgFocus(el, selector) : null;
+				const before = svg ? "" : snapshot(el);
 				el.focus();
 				if (document.activeElement !== el) continue;
-				const after = snapshot(el);
+				const change = beforePaint ? svgFocusChange(beforePaint, svgFocus(el, selector)) : null;
+				const after = svg ? "" : snapshot(el);
 				out.push({
 					index: i,
-					changed: before !== after,
+					changed: change ? change.status === "measured" && change.value.ratio > 1 : before !== after,
+					review: change?.status === "review" ? change.reason : undefined,
+					reason: change?.status === "absent" ? change.reason : undefined,
 					label: (el.getAttribute("aria-label") || el.innerText || el.tagName).trim().slice(0, 40),
 					where: (0, eval)(locate)(el) as string,
 				});
 			}
 			return out;
 		},
-		[MARK_ATTR, limit, UNIQUE_SELECTOR, FOCUS_INDICATOR_NODES] as const,
+		[MARK_ATTR, limit, UNIQUE_SELECTOR, FOCUS_INDICATOR_NODES, COLOR_HELPERS] as const,
 	);
 
 	for (const result of results) {
+		if (result.review) {
+			needsReview.push({ what: "Review this SVG control's focus indicator. Its visible paint could not be established.",
+				page: pageId, selector: result.where || undefined, evidence: result.review, lens: "a11y",
+				basis: "WCAG 2.4.7 Focus Visible (AA)", rule: "focus-visible" });
+			continue;
+		}
 		if (result.changed) continue;
 		findings.push({
 			what: "This control has no visible focus indicator.",
 			page: pageId,
 			selector: result.where || undefined,
-			evidence: `no computed style change on focus for "${result.label}" (element, ancestors, and pseudo-elements)`,
+			evidence: result.reason ? `SVG focus paint: ${result.reason}` : `no computed style change on focus for "${result.label}" (element, ancestors, and pseudo-elements)`,
 			fix: "Give it a visible focus indicator; never remove the browser default without replacing it.",
 			lens: "a11y",
 			confidence: "medium",
@@ -1607,50 +1918,66 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 			`the focus indicator test measured none of ${limit} controls on ${pageId}. Treat it as not run, not as passed.`,
 		);
 	}
-	return { findings, notes };
+	return { findings, needsReview, notes };
+}
+
+interface SvgFocusCue {
+	name: string;
+	target: string;
+	ratio: number;
+	color: number[];
+	under: number[];
+	width: number;
+	signature: string;
+	geometry: string;
 }
 
 interface StateContrastSnapshot {
 	selector: string;
 	label: string;
-	text?: { ratio: number; threshold: number; foreground: string; background: string };
+	text?: TextContrast;
 	cues: Array<{ name: string; ratio: number; signature: string; target?: string }>;
 	cueSignature: string;
 	manual: boolean;
 	hidden?: boolean;
+	svg?: boolean;
+	focus?: PaintResult<SvgFocusCue[]>;
+	focusChange?: PaintResult<{ name: string; ratio: number }>;
+	reasons?: string[];
 }
 
 const STATE_CONTRAST_SNAPSHOT = `((el, colorHelpers, locate, includeText = true, pseudo = null) => {
-	const { parse, paint, contrast, background, colors } = (0, eval)(colorHelpers);
+	const { parse, paint, contrast, background, colors, svgFocus, textContrast } = (0, eval)(colorHelpers);
 	const selector = (0, eval)(locate);
 	const style = getComputedStyle(el, pseudo);
 	const rect = el.getBoundingClientRect();
 	if ((!pseudo && (rect.width === 0 || rect.height === 0)) || style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return null;
 	if (pseudo && (style.content === "none" || style.content === "normal")) return null;
 	let manual = false;
+	const reasons = [];
 	// Chromium marks its unmodified browser focus ring with outline style auto.
 	// WCAG 1.4.11 exempts component appearance that the author did not modify.
 	// ponytail: compare cascade origins if another scan engine stops exposing
 	// browser focus rings this way.
 	const authoredOutline = style.outlineStyle !== "auto" && style.outlineStyle !== "none" && Number.parseFloat(style.outlineWidth) > 0;
-	const rgb = (value) => "rgb(" + value.map((channel) => Math.round(channel)).join(" ") + ")";
 
 	const textNodes = includeText ? [el, ...el.querySelectorAll("*")].filter((node) => {
 		const ownText = Array.from(node.childNodes).some((child) => child.nodeType === Node.TEXT_NODE && (child.textContent || "").trim());
 		return ownText || (node === el && node.matches("input:not([type=checkbox]):not([type=radio])") && (node.value || node.placeholder));
 	}) : [];
 	const text = textNodes.flatMap((node) => {
-		const nodeStyle = getComputedStyle(node);
-		const under = background(node);
-		if (!under || nodeStyle.backgroundImage !== "none" || Number(nodeStyle.opacity) < 1) { manual = true; return []; }
-		const foreground = paint(nodeStyle.color, under);
-		if (!foreground) { manual = true; return []; }
-		const size = Number.parseFloat(nodeStyle.fontSize);
-		const weight = Number.parseInt(nodeStyle.fontWeight, 10) || 400;
-		const threshold = size >= 24 || (size >= 18.66 && weight >= 700) ? 3 : 4.5;
-		return [{ ratio: contrast(foreground, under), threshold, foreground: rgb(foreground), background: rgb(under) }];
+		const measurement = textContrast(node);
+		if (measurement.status === "review") { manual = true; reasons.push(measurement.reason); }
+		return measurement.status === "measured" ? [measurement.value] : [];
 	}).sort((a, b) => a.ratio / a.threshold - b.ratio / b.threshold)[0];
 
+	const svg = el instanceof SVGElement;
+	if (svg) {
+		const focus = svgFocus(el, selector);
+		if (focus.status === "review") { manual = true; reasons.push(focus.reason); }
+		return { selector: selector(el), label: (el.getAttribute("aria-label") || el.textContent || el.tagName).trim().slice(0, 80),
+			text, cues: [], cueSignature: "", manual, reasons, svg: true, focus };
+	}
 	const outer = background(pseudo ? el : el.parentElement);
 	const cues = [];
 	if (!outer || style.backgroundImage !== "none") manual = true;
@@ -1703,12 +2030,16 @@ async function stateContrastSnapshots(
 	page: Page,
 	count: number,
 	focus: boolean,
+	baseline: Array<StateContrastSnapshot | null> = [],
 ): Promise<Array<StateContrastSnapshot | null>> {
 	return page.evaluate(
-		([attr, limit, shouldFocus, probe, colorHelpers, locate, indicatorNodes]) => {
+		([attr, limit, shouldFocus, probe, colorHelpers, locate, indicatorNodes, before]) => {
 			const snapshot = (0, eval)(probe) as (el: HTMLElement, colors: string, selector: string, text?: boolean, pseudo?: string | null) => StateContrastSnapshot | null;
 			const sampleNodes = (0, eval)(indicatorNodes) as (el: HTMLElement) => HTMLElement[];
 			const selector = (0, eval)(locate) as (el: HTMLElement) => string;
+			const { svgFocusChange } = (0, eval)(colorHelpers) as {
+				svgFocusChange: (before: PaintResult<SvgFocusCue[]>, after: PaintResult<SvgFocusCue[]>) => PaintResult<{ name: string; ratio: number }>;
+			};
 			const hidden = (el: HTMLElement, includeBox = true): boolean => {
 				const rect = el.getBoundingClientRect();
 				if (includeBox && (rect.width <= 1 || rect.height <= 1)) return true;
@@ -1732,6 +2063,13 @@ async function stateContrastSnapshots(
 					if (document.activeElement !== el) { out.push(null); continue; }
 				}
 				const own = snapshot(el, colorHelpers, locate);
+				if (own?.svg) {
+					if (shouldFocus && own.focus && before[i]?.focus) {
+						own.focusChange = svgFocusChange(before[i]!.focus!, own.focus);
+						if (own.focusChange.status === "review") { own.manual = true; own.reasons?.push(own.focusChange.reason); }
+					}
+					out.push(own); continue;
+				}
 				if (!hidden(el)) { out.push(own); continue; }
 				// Compare the same visible representatives before and after focus.
 				// Static decoration must not count as a focus change.
@@ -1750,7 +2088,7 @@ async function stateContrastSnapshots(
 			}
 			return out;
 		},
-		[MARK_ATTR, count, focus, STATE_CONTRAST_SNAPSHOT, COLOR_HELPERS, UNIQUE_SELECTOR, FOCUS_INDICATOR_NODES] as const,
+		[MARK_ATTR, count, focus, STATE_CONTRAST_SNAPSHOT, COLOR_HELPERS, UNIQUE_SELECTOR, FOCUS_INDICATOR_NODES, baseline] as const,
 	);
 }
 
@@ -1778,7 +2116,7 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 		}
 	}
 	await page.mouse.move(0, 0);
-	const focus = await stateContrastSnapshots(page, limit, true);
+	const focus = await stateContrastSnapshots(page, limit, true, base);
 	await page.evaluate(({ x, y }) => { (document.activeElement as HTMLElement | null)?.blur(); scrollTo(x, y); }, original);
 
 	const findings: Finding[] = [];
@@ -1798,7 +2136,7 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 						what: `Measure this control's ${state} contrast by hand. Check could not measure it automatically.`,
 						page: pageId,
 						selector: selector || undefined,
-						evidence: `${state}; image, gradient, or opacity-backed colour compositing requires review`,
+						evidence: `${state}; ${[...new Set([...(before.reasons ?? []), ...(after.reasons ?? [])])].join("; ") || "image, gradient, or opacity-backed colour compositing requires review"}`,
 						lens: "a11y",
 						basis: "WCAG 1.4.3 / 1.4.11 (AA)",
 						rule: "state-contrast-compositing",
@@ -1824,9 +2162,10 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 			// by itself, information required to identify the component or its state;
 			// treating every subtle hover fill as 1.4.11 produced 160 false defects
 			// on one real export.
-			if (state === "hover" || (!after.hidden && before.cueSignature === after.cueSignature)) continue;
+			if (state === "hover" || (!after.svg && !after.hidden && before.cueSignature === after.cueSignature)) continue;
+			if (after.focusChange?.status === "review") continue;
 			const beforeCues = new Map(before.cues.map((cue) => [`${cue.target ?? ""}|${cue.name}`, cue.signature]));
-			const changed = after.cues
+			const changed = after.svg ? (after.focusChange?.status === "measured" ? after.focusChange.value : undefined) : after.cues
 				.filter((cue) => beforeCues.get(`${cue.target ?? ""}|${cue.name}`) !== cue.signature)
 				.sort((a, b) => b.ratio - a.ratio)[0];
 			if (changed && changed.ratio >= 3) continue;
@@ -1834,7 +2173,7 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 				what: "This control does not have a focus indicator with at least 3:1 contrast.",
 				page: pageId,
 				selector: after.selector || undefined,
-				evidence: changed
+				evidence: after.focusChange?.status === "absent" ? `${state}; ${after.focusChange.reason}` : changed
 					? `${state}; strongest changed cue is ${changed.name} at ${changed.ratio.toFixed(2)}:1 (required: 3:1)`
 					: after.hidden
 						? `${state}; hidden control has no measurable contrasting focus change on its visible label or nearby elements`
@@ -1862,12 +2201,14 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 		type Issue = { kind: Kind; selector: string; ratio: number; detail: string };
 		type Manual = { kind: Kind; selector: string; reason: string };
 		(document.activeElement as HTMLElement | null)?.blur();
-		const { parse, paint, contrast, background, colors } = (0, eval)(colorHelpers) as {
+		const { parse, paint, contrast, background, colors, svgBoundary, svgVisible } = (0, eval)(colorHelpers) as {
 			parse: (value: string) => RGBA | undefined;
 			paint: (value: string, under: RGB, opacity?: number) => RGB | undefined;
 			contrast: (a: RGB, b: RGB) => number;
 			background: (start: Element | null) => RGB | undefined;
 			colors: (value: string) => string[];
+			svgBoundary: (el: Element) => PaintResult<{ ratio: number; name: string; fillMeaning: boolean }>;
+			svgVisible: (el: Element) => boolean;
 		};
 		const selector = (0, eval)(locate) as (el: Element) => string;
 		const manual = new Map<string, Manual>();
@@ -1882,6 +2223,7 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 		};
 
 		const issues: Issue[] = [];
+		const colourQuestions: Array<{ selector: string; reason: string }> = [];
 		for (const el of Array.from(document.querySelectorAll('img[alt]:not([alt=""]), canvas[role=img]'))) {
 			review("graphic", el, "raster or canvas content cannot be measured from CSS colours");
 		}
@@ -1990,57 +2332,39 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 				continue;
 			}
 
-			type Painted = { rect: DOMRect; color: RGB; line?: SVGLineElement };
-			const painted: Painted[] = [];
 			const svgRect = svg.getBoundingClientRect();
-			const shapes = svg.querySelectorAll("path, rect, circle, ellipse, line, polyline, polygon") as NodeListOf<SVGGraphicsElement>;
+			const shapes = svg.querySelectorAll("path, rect, circle, ellipse, line, polyline, polygon, use") as NodeListOf<SVGGraphicsElement>;
+			let fillMeaning = false;
 			for (const shape of Array.from(shapes)) {
-				if (!visible(shape) || shape.closest("defs, clipPath, mask, symbol")) continue;
-				const style = getComputedStyle(shape);
+				if (!svgVisible(shape)) continue;
+				if (shape.localName === "use") {
+					review("graphic", shape, "SVG use instance paint is not measured");
+					continue;
+				}
 				const rect = shape.getBoundingClientRect();
-				const backdrop = [...painted].reverse().find((item) => {
-					if (item.line) {
-						// A line's bounds include unpainted space; sample its actual stroke.
-						const matrix = item.line.getScreenCTM();
-						return matrix && item.line.isPointInStroke(new DOMPoint(
-							(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2,
-						).matrixTransform(matrix.inverse()));
-					}
-					return item.rect.left <= rect.left && item.rect.top <= rect.top &&
-						item.rect.right >= rect.right && item.rect.bottom >= rect.bottom;
-				})?.color ?? svgBackground;
-				const opacity = Number.parseFloat(style.opacity || "1");
-				const cues: Array<{ ratio: number; name: string }> = [];
-				const backdropShape = painted.every((item) => item.line) && rect.width >= svgRect.width * 0.9 && rect.height >= svgRect.height * 0.9;
-
-				if (shape.localName !== "line" && style.fill !== "none" && !style.fill.startsWith("url(")) {
-					const fill = paint(style.fill, backdrop, opacity * Number.parseFloat(style.fillOpacity || "1"));
-					if (fill) {
-						if (!backdropShape) cues.push({ ratio: contrast(fill, backdrop), name: "fill" });
-						painted.push({ rect, color: fill });
-					}
-				} else if (shape.localName !== "line" && style.fill.startsWith("url(")) review("graphic", shape, "SVG fill uses a paint server such as a gradient or pattern");
-				if (style.stroke !== "none" && Number.parseFloat(style.strokeWidth) > 0 && !style.stroke.startsWith("url(")) {
-					const stroke = paint(style.stroke, backdrop, opacity * Number.parseFloat(style.strokeOpacity || "1"));
-					if (stroke) {
-						cues.push({ ratio: contrast(stroke, backdrop), name: "stroke" });
-						if (shape instanceof SVGLineElement) painted.push({ rect, color: stroke, line: shape });
-					}
-				} else if (style.stroke.startsWith("url(")) review("graphic", shape, "SVG stroke uses a paint server such as a gradient or pattern");
-
-				const strongest = cues.sort((a, b) => b.ratio - a.ratio)[0];
-				if (strongest && strongest.ratio < 3) issues.push({
+				const boundary = svgBoundary(shape);
+				if (boundary.status !== "measured") {
+					if (boundary.status === "review") review("graphic", shape, boundary.reason);
+					continue;
+				}
+				const backdropShape = shape === shapes[0] && shapes.length > 1 &&
+					rect.left <= svgRect.left && rect.top <= svgRect.top && rect.right >= svgRect.right && rect.bottom >= svgRect.bottom;
+				const strongest = boundary.value;
+				fillMeaning ||= strongest.fillMeaning;
+				if (!(backdropShape && strongest.name === "fill") && strongest.ratio < 3) issues.push({
 					kind: "graphic",
 					selector: selector(shape),
 					ratio: strongest.ratio,
 					detail: `${strongest.name} in graphic “${name.slice(0, 50)}”`,
 				});
 			}
+			if (fillMeaning) colourQuestions.push({ selector: selector(svg), reason: `Boundary contrast is measurable in graphic "${name.slice(0, 50)}"; verify that fill colour never conveys information without equivalent words or symbols` });
 		}
 		return {
 			issues: issues.slice(0, 30),
 			manual: [...manual.values()].slice(0, 30),
 			manualOmitted: Math.max(0, manual.size - 30),
+			colourQuestions,
 		};
 	}, [UNIQUE_SELECTOR, COLOR_HELPERS] as const);
 
@@ -2060,7 +2384,7 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 			basis: "WCAG 1.4.11 Non-text Contrast (AA)",
 			rule: issue.kind === "component" ? "non-text-contrast-component" : "non-text-contrast-graphic",
 		})),
-		needsReview: measured.manual.map((item) => ({
+		needsReview: [...measured.manual.map((item) => ({
 			what: item.kind === "component"
 				? "Measure the contrast of this control's boundary by hand. Check could not measure it automatically."
 				: "Measure the contrast of this graphic's shapes by hand. Check could not measure it automatically.",
@@ -2070,7 +2394,11 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 			lens: "a11y" as const,
 			basis: "WCAG 1.4.11 Non-text Contrast (AA)",
 			rule: "non-text-contrast-compositing",
-		})),
+		})), ...measured.colourQuestions.map((item) => ({
+			what: "Does this graphic convey information by fill colour alone?",
+			page: pageId, selector: item.selector, evidence: item.reason, lens: "a11y" as const,
+			basis: "WCAG 1.4.1 Use of Color (A)", rule: "svg-fill-meaning",
+		}))],
 		notes: measured.manualOmitted > 0
 			? [`non-text contrast review items omitted after the 30-item page cap on ${pageId}: ${measured.manualOmitted}`]
 			: [],
