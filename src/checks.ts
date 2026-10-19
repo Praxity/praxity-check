@@ -285,6 +285,7 @@ const COLOR_HELPERS = `((evidence = {}) => {
 	const solid = (el, kind) => {
 		const s = css(el), value = s[kind];
 		if (value === "none" || (kind === "fill" && el.localName === "line")) return absent("No " + kind + " paint.");
+		if(kind==="fill" && el instanceof SVGGeometryElement){const b=el.getBBox();if(b.width===0||b.height===0)return absent("The fill has no painted area.");}
 		const c = parse(value);
 		if (!c) return blocked(el, "The " + kind + " uses a gradient, pattern or unresolved colour; check its contrast");
 		const alpha = c[3] * Number(s[kind + "Opacity"]);

@@ -166,6 +166,13 @@ test("a label's title is metadata rather than another painted text run", async (
 	assert.deepEqual(outcome(result), ["passed"]);
 });
 
+test("zero-area fill does not add a colour behind text", async () => {
+	const result=await check(diagram('<rect x="50" width="0" height="200" fill="black"/><text x="30" y="55">Complete</text>'));
+	assert.deepEqual(textFailures(result), []);
+	assert.deepEqual(textReviews(result), []);
+	assert.deepEqual(outcome(result), ["passed"]);
+});
+
 test("hairline backdrop strokes remain review", async () => {
 	expectReview(await check(diagram('<line id="hairline" x1="0" y1="50" x2="300" y2="50" stroke="black" stroke-width=".2"/><text x="30" y="55">Complete</text>')), /thinner than one screen pixel.*#hairline/);
 });
