@@ -1,0 +1,69 @@
+[
+  {
+    "id": "hidden-central-circle",
+    "slice": "boundary",
+    "svg": "<circle cx='120' cy='50' r='30' fill='black'/><rect id='target' x='10' y='10' width='220' height='80' fill='#eee'/>",
+    "expected": "non-text-contrast-graphic failure; never pass from agreeing sample points"
+  },
+  {
+    "id": "circle-half-over-black",
+    "slice": "boundary",
+    "svg": "<rect x='0' y='0' width='120' height='100' fill='black'/><circle id='target' cx='120' cy='50' r='40' fill='white'/>",
+    "expected": "failure or review; never pass against white only"
+  },
+  {
+    "id": "empty-butt-dashes",
+    "slice": "focus",
+    "svg": "<a id='node' href='#next'><rect x='10' y='10' width='200' height='70' fill='none' stroke='#eee' stroke-width='3' stroke-dasharray='0 1000' stroke-linecap='butt'/></a>",
+    "css": "a{outline:none}a:focus-visible rect{stroke:#111}",
+    "expected": "focus-visible and state-non-text-contrast failures; changed paint is absent"
+  },
+  {
+    "id": "non-scaling-separated-centre",
+    "slice": "boundary and focus",
+    "svg": "<line x1='1000' y1='8000' x2='25000' y2='8000' transform='scale(.01)' stroke='black' stroke-width='100' vector-effect='non-scaling-stroke'/><a id='node' href='#next'><rect x='40' y='40' width='130' height='20' fill='none' stroke='white' stroke-width='3'/></a>",
+    "css": "a{outline:none}a:focus-visible rect{stroke:black}",
+    "expected": "failure or review in boundary and both focus callers; never pass on white"
+  },
+  {
+    "id": "round-cap-zero-length",
+    "slice": "boundary and focus",
+    "svg": "<line id='dot' x1='50' y1='50' x2='50' y2='50' fill='none' stroke='#eee' stroke-width='20' stroke-linecap='round'/>",
+    "expected": "failure or review; a round cap paints a dot"
+  },
+  {
+    "id": "focus-hairline",
+    "slice": "focus",
+    "svg": "<a id='node' href='#next'><rect x='10' y='10' width='200' height='70' fill='white' stroke='#eee' stroke-width='.2'/></a>",
+    "css": "a{outline:none}a:focus-visible rect{stroke:#111}",
+    "expected": "review in both focus callers; no certified visible ring"
+  },
+  {
+    "id": "tiny-focus-width-growth",
+    "slice": "focus",
+    "svg": "<a id='node' href='#next'><rect x='10' y='10' width='200' height='70' fill='white' stroke='#111' stroke-width='3'/></a>",
+    "css": "a{outline:none}a:focus-visible rect{stroke-width:3.1px}",
+    "expected": "review; no temporal contrast pass from a tiny width change"
+  },
+  {
+    "id": "imperceptible-focus-change",
+    "slice": "focus",
+    "svg": "<a id='node' href='#next'><rect x='10' y='10' width='200' height='70' fill='none' stroke='white' stroke-width='3'/></a>",
+    "css": "a{outline:none}a:focus-visible rect{stroke:#fafafa}",
+    "expected": "no-change failure; 1.04:1 is below the 3:1 change threshold"
+  },
+  {
+    "id": "underline-focus",
+    "slice": "focus",
+    "svg": "<a id='node' href='#next'><text x='30' y='55' fill='#00e'>Next step</text></a>",
+    "css": "a:focus-visible{text-decoration:underline}",
+    "expected": "pass or review; never a definite missing-indicator failure"
+  },
+  {
+    "id": "fill-focus",
+    "slice": "focus",
+    "svg": "<a id='node' href='#next'><rect x='10' y='10' width='200' height='70' fill='white'/></a>",
+    "css": "a{outline:none}a:focus-visible rect{fill:#ffd700}",
+    "expected": "review; the changed fill cannot be called an absent indicator"
+  }
+]

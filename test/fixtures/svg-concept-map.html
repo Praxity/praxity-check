@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Planning map</title>
+<style>
+body { margin: 24px; background: #f7f7f7; color: #111; font: 16px Arial, sans-serif; }
+h1::before { content: ""; display: inline-block; width: 8px; height: 24px; margin-right: 12px; background: #595959; }
+.card { width: 640px; padding: 24px; background: white; border-radius: 12px; box-shadow: 0 3px 12px #0002; }
+text { font: 16px Arial, sans-serif; fill: #111; }
+</style></head><body><main><h1>Planning map</h1><div class="card">
+<svg role="img" aria-label="Planning steps" width="640" height="220" viewBox="0 0 640 220">
+<defs><marker id="arrow" viewBox="0 0 6 6" markerWidth="6" markerHeight="6" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 Z" fill="#595959"/></marker></defs>
+<g stroke="#595959" stroke-width="2" marker-end="url(#arrow)">
+<line x1="160" y1="55" x2="230" y2="55"/>
+<line x1="390" y1="55" x2="460" y2="55"/>
+<line x1="310" y1="85" x2="310" y2="145"/>
+</g>
+<rect id="plan" x="0" y="25" width="160" height="60" rx="6" fill="#e8f0fe" stroke="#595959" stroke-width="2"/>
+<text id="plan-label" x="35" y="60">Plan ready</text>
+<rect id="build" x="230" y="25" width="160" height="60" rx="6" fill="#fef7e0" stroke="#595959" stroke-width="2"/>
+<text id="build-label" x="265" y="60">Build ready</text>
+<rect id="review" x="460" y="25" width="160" height="60" rx="6" fill="#e6f4ea" stroke="#595959" stroke-width="2"/>
+<text id="review-label" x="485" y="60">Review ready</text>
+<rect id="publish" x="230" y="145" width="160" height="60" rx="6" fill="#fce8e6" stroke="#595959" stroke-width="2"/>
+<text id="publish-label" x="255" y="180">Publish ready</text>
+</svg></div></main></body></html>
