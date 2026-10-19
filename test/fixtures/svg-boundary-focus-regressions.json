@@ -2,20 +2,21 @@
   {
     "id": "hidden-central-circle",
     "slice": "boundary",
-    "svg": "<circle cx='120' cy='50' r='30' fill='black'/><rect id='target' x='10' y='10' width='220' height='80' fill='#eee'/>",
+    "svg": "<circle cx='120' cy='50' r='15'/><rect id='target' x='10' y='10' width='220' height='80' fill='#eee'/>",
     "expected": "non-text-contrast-graphic failure; never pass from agreeing sample points"
   },
   {
     "id": "circle-half-over-black",
     "slice": "boundary",
-    "svg": "<rect x='0' y='0' width='120' height='100' fill='black'/><circle id='target' cx='120' cy='50' r='40' fill='white'/>",
+    "svg": "<rect id='panel' width='60' height='100' fill='#000'/><circle id='straddle' cx='60' cy='50' r='30' fill='#ccc'/>",
+    "viewport": "width='200' height='100' viewBox='0 0 200 100'",
     "expected": "failure or review; never pass against white only"
   },
   {
     "id": "empty-butt-dashes",
     "slice": "focus",
-    "svg": "<a id='node' href='#next'><rect x='10' y='10' width='200' height='70' fill='none' stroke='#eee' stroke-width='3' stroke-dasharray='0 1000' stroke-linecap='butt'/></a>",
-    "css": "a{outline:none}a:focus-visible rect{stroke:#111}",
+    "svg": "<a id='node' href='#next'><rect x='10' y='10' width='200' height='70' fill='#fff' stroke='#fff' stroke-width='3' stroke-dasharray='0 10000'/></a>",
+    "css": "a{outline:none}a:focus-visible rect{stroke:#000}",
     "expected": "focus-visible and state-non-text-contrast failures; changed paint is absent"
   },
   {
