@@ -29,6 +29,14 @@ test("operator instructions explain setup for optional components", async () => 
 	}
 });
 
+test("skill gives the Rubato command and checks exports, not course source", async () => {
+	const text = await readFile(join(repository, "skill/SKILL.md"), "utf8");
+	assert.match(text, /`praxity check check "<input>"`/);
+	assert.match(text, /export HTML first with the prax-format skill's export step/);
+	// Rubato installs skill/ alone; a relative link would leave it.
+	assert.doesNotMatch(text, /\]\((?![a-z][\w+.-]*:|#)[^)]*\)/i);
+});
+
 async function scratch(t) {
 	const directory = await mkdtemp(join(tmpdir(), "standalone check "));
 	t.after(() => rm(directory, { recursive: true, force: true }));
