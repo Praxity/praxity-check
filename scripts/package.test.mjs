@@ -14,19 +14,15 @@ const windows = process.platform === "win32";
 const repository = fileURLToPath(new URL("../", import.meta.url));
 
 test("operator instructions require doctor for component availability", async () => {
-	for (const path of ["skill/SKILL.md", "docs/nvda-driver.md"]) {
-		const text = await readFile(join(repository, path), "utf8");
-		assert.match(text, /doctor pdf/, path);
-		assert.doesNotMatch(text, /supplies headless Chromium|supplied dependency payload|Windows packages can include those runtimes/, path);
-	}
+	const text = await readFile(join(repository, "skill/SKILL.md"), "utf8");
+	assert.match(text, /doctor pdf/);
+	assert.doesNotMatch(text, /supplies headless Chromium|supplied dependency payload|Windows packages can include those runtimes/);
 });
 
 test("operator instructions explain setup for optional components", async () => {
-	for (const path of ["skill/SKILL.md", "docs/nvda-driver.md"]) {
-		const text = await readFile(join(repository, path), "utf8");
-		assert.match(text, /setup pdf/, path);
-		if (path === "skill/SKILL.md") assert.match(text, /setup html/, path);
-	}
+	const text = await readFile(join(repository, "skill/SKILL.md"), "utf8");
+	assert.match(text, /setup pdf/);
+	assert.match(text, /setup html/);
 });
 
 test("skill gives the Rubato command and checks exports, not course source", async () => {

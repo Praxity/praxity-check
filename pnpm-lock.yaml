@@ -17,9 +17,6 @@ importers:
       '@embedpdf/pdfium':
         specifier: 2.15.1
         version: 2.15.1
-      '@guidepup/guidepup':
-        specifier: 0.34.0
-        version: 0.34.0
       '@guidepup/guidepup-voiceover':
         specifier: npm:@guidepup/guidepup@0.24.1
         version: '@guidepup/guidepup@0.24.1'
@@ -53,18 +50,11 @@ packages:
   '@guidepup/guidepup@0.24.1':
     resolution: {integrity: sha512-L33QKSzeceTOq/DaxAhEkM6fEbJmzkOF2K0U6AsN0zuzy1T4/2LVsLG9f9IPge70T6XgUF7fsCzYotVo4FNk/A==}
 
-  '@guidepup/guidepup@0.34.0':
-    resolution: {integrity: sha512-nMLsvHXXNZg+/9okHvSOuMEKMGxs0U8o/sT1pKERh37ETB16X4geomIHjXJ/HRTfpue9gs9yRTLK5azHZV92iw==}
-
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
 
   '@types/yauzl@2.10.3':
     resolution: {integrity: sha512-oJoftv0LSuaDZE3Le4DbKX+KS9G36NzOeSap90UIK0yMA/NhKJhqlSGtNDORNRaIbQfzjXDrQa0ytJ6mNRGz/Q==}
-
-  '@xmldom/xmldom@0.9.12':
-    resolution: {integrity: sha512-5AXjrcMClTryPe9LgZrygpB1lj7s0S9E0+W+AHaVKAVyHanafK86iPSvG5xHVSp/jC+VH1UXu0TAEmY279xH7A==}
-    engines: {node: '>=14.6'}
 
   axe-core@4.12.1:
     resolution: {integrity: sha512-s7iGf5GaVMxEG0ENN9x+xTr7GFZCb1ZP/1uATUpCEK2X78nDB3RwbtFCo9pGAf9ru+VwoQ464DkaLEeRM08wJA==}
@@ -164,10 +154,6 @@ packages:
     engines: {node: '>=20'}
     hasBin: true
 
-  plist@4.0.0:
-    resolution: {integrity: sha512-4dOqNo0Y2NpfSf9q4+zr4bh7pzNWeckIam34Z0KYJhg8qtNNfh59VbD+Yna5SjwcxawVvLKx5w5FtuCijpEF4Q==}
-    engines: {node: '>=18'}
-
   readable-stream@1.0.34:
     resolution: {integrity: sha512-ok1qVCJuRkNmvebYikljxJA/UEsKwLl2nI1OmaqAu4/UE+h0wKCHok4XkL/gvi39OacXvw59RJUOFUkDib2rHg==}
 
@@ -217,10 +203,6 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  xmlbuilder@15.1.1:
-    resolution: {integrity: sha512-yMqGBqtXyeN1e3TGYvgNgDVZ3j84W4cwkOXQswghol6APgZWaff9lnbvN7MHYJOiXsvGPXtjTYJEiC9J2wv9Eg==}
-    engines: {node: '>=8.0'}
-
   xtend@4.0.2:
     resolution: {integrity: sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ==}
     engines: {node: '>=0.4'}
@@ -246,13 +228,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@guidepup/guidepup@0.34.0':
-    dependencies:
-      debug: 4.4.3
-      plist: 4.0.0
-    transitivePeerDependencies:
-      - supports-color
-
   '@types/node@22.20.1':
     dependencies:
       undici-types: 6.21.0
@@ -260,8 +235,6 @@ snapshots:
   '@types/yauzl@2.10.3':
     dependencies:
       '@types/node': 22.20.1
-
-  '@xmldom/xmldom@0.9.12': {}
 
   axe-core@4.12.1: {}
 
@@ -343,11 +316,6 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.2
 
-  plist@4.0.0:
-    dependencies:
-      '@xmldom/xmldom': 0.9.12
-      xmlbuilder: 15.1.1
-
   readable-stream@1.0.34:
     dependencies:
       core-util-is: 1.0.3
@@ -399,8 +367,6 @@ snapshots:
   undici-types@6.21.0: {}
 
   wrappy@1.0.2: {}
-
-  xmlbuilder@15.1.1: {}
 
   xtend@4.0.2: {}
 

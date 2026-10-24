@@ -7,7 +7,7 @@ import { auditHtml, withAuditContext } from "./html-audit.ts";
 import { discover } from "./discover.ts";
 import { assertOutputOutside, openInput, snapshotInput, type Input } from "./input.ts";
 import { countAtOrAbove, createReport, humanSummary, parseBaseline, type Confidence, type AuditReport } from "./report.ts";
-import { resolveScreenReaderPage, runScreenReader, runScreenReaderJourney, validateJourneySessionOptions } from "./screen-reader.ts";
+import { resolveScreenReaderPage, runScreenReader } from "./screen-reader.ts";
 import { serve, type StaticServer } from "./serve.ts";
 import { htmlFeedback } from "./feedback.ts";
 import { importHtmlReview, readHtmlReviewBundle, writeHtmlReviewBundle } from "./html-review.ts";
@@ -25,7 +25,6 @@ const USAGE = `Usage:
   praxity-check prepare-review <folder|zip> [--allow-network] [--output <new-directory>]
   praxity-check prepare-review <pdf> --tier inference --checks accessibility|design [--focus visual|usability] [--output <new-directory>] [--pages 1,3] [--audience <text>] [--use <text>]
   praxity-check screen-reader <folder|zip> --page <html> --control <name> --expected <phrase> --take-screen-control --allow-network
-  praxity-check screen-reader <folder|zip|URL> --journey <file.json> --output <new-directory> --take-screen-control [--allow-network]
 
 Options:
   --checks accessibility|design|accessibility,design
@@ -63,16 +62,14 @@ screen-reader options:
   --page <html>                    macOS: page to open
   --control <name>                 macOS: VoiceOver name of the control to activate
   --expected <phrase>              macOS: phrase VoiceOver should say after activation
-  --journey <file.json>            Windows: NVDA keyboard journey to run
-  --output <new-directory>         Windows: save the journey's JSON and Markdown evidence in this new folder
   --take-screen-control            Confirm that the screen reader and browser may take over the keyboard and screen
 
 check --tier inference needs --review and runs no automated checks.
 check --review without --tier runs automated checks and imports the review.
 prepare-review prints Markdown evidence for HTML. Add --output to also save a review bundle.
 prepare-review for a PDF saves a bundle of page images, facts and review instructions.
-screen-reader runs VoiceOver actions on macOS and NVDA journeys on Windows, and never runs during check or prepare-review.
-A VoiceOver action prints Markdown evidence. An NVDA journey saves JSON and Markdown evidence in --output.`;
+screen-reader runs VoiceOver actions on macOS, and never runs during check or prepare-review.
+A VoiceOver action prints Markdown evidence.`;
 
 interface CommonOptions extends SelectionOptions {
 	target: string;
@@ -98,8 +95,6 @@ interface ScreenReaderOptions extends CommonOptions {
 	page?: string;
 	control?: string;
 	expected?: string;
-	journeyFile?: string;
-	output?: string;
 	takeScreenControl: boolean;
 }
 
@@ -129,8 +124,6 @@ export function parseArgs(args: string[]): Options {
 		else if (options.command === "screen-reader" && arg === "--page" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.page = args[++i];
 		else if (options.command === "screen-reader" && arg === "--control" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.control = args[++i];
 		else if (options.command === "screen-reader" && arg === "--expected" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.expected = args[++i];
-		else if (options.command === "screen-reader" && arg === "--journey" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.journeyFile = resolve(args[++i]!);
-		else if (options.command === "screen-reader" && arg === "--output" && args[i + 1] && !args[i + 1]?.startsWith("--")) options.output = resolve(args[++i]!);
 		else if (options.command === "check" && arg === "--min-confidence" && /^(high|medium|low)$/.test(args[i + 1] ?? "")) {
 			options.minConfidence = args[++i] as Confidence;
 		}
@@ -143,22 +136,16 @@ export function parseArgs(args: string[]): Options {
 		} else throw new Error(`unknown or incomplete option: ${arg}`);
 	}
 	if (options.command === "screen-reader") {
-		if (options.journeyFile) {
-			if (options.page || options.control || options.expected) throw new Error("--journey cannot be combined with --page, --control, or --expected");
-			validateJourneySessionOptions(options);
-		} else {
-			if (options.output) throw new Error("screen-reader --output requires --journey");
-			if (!options.takeScreenControl) {
-				throw new Error("screen-reader launches VoiceOver, opens Safari, moves focus, and sends keyboard input. Rerun with --take-screen-control only when interruption is safe.");
-			}
-			if (!options.allowNetwork) {
-				throw new Error("screen-reader uses your existing Safari profile and network connection, which Praxity Check's Playwright network blocker cannot protect. Rerun with --allow-network only for an export you trust.");
-			}
-			if (!options.page || !options.control || !options.expected) {
-				throw new Error("screen-reader requires --page, --control, and --expected");
-			}
-			if (/^[a-z][a-z0-9+.-]*:\/\//i.test(options.target)) throw new Error("VoiceOver screen-reader action requires a folder or ZIP; use --journey for a URL");
+		if (!options.takeScreenControl) {
+			throw new Error("screen-reader launches VoiceOver, opens Safari, moves focus, and sends keyboard input. Rerun with --take-screen-control only when interruption is safe.");
 		}
+		if (!options.allowNetwork) {
+			throw new Error("screen-reader uses your existing Safari profile and network connection, which Praxity Check's Playwright network blocker cannot protect. Rerun with --allow-network only for an export you trust.");
+		}
+		if (!options.page || !options.control || !options.expected) {
+			throw new Error("screen-reader requires --page, --control, and --expected");
+		}
+		if (/^[a-z][a-z0-9+.-]*:\/\//i.test(options.target)) throw new Error("VoiceOver screen-reader action requires a folder or ZIP");
 	}
 	if (options.command !== "screen-reader") validateHtmlSelection(options.command, options);
 	if (options.command === "prepare-review") {
@@ -208,13 +195,6 @@ export async function htmlCli(args: string[]): Promise<number> {
 	let server: StaticServer | undefined;
 	try {
 		const options = parseArgs(args);
-		if (options.command === "screen-reader" && options.journeyFile) {
-			await assertOutputOutside(options.output!, [options.journeyFile]);
-			const journey = JSON.parse(await readFile(options.journeyFile, "utf8")) as unknown;
-			const result = await runScreenReaderJourney({ target: options.target, journey, output: options.output!, takeScreenControl: options.takeScreenControl, allowNetwork: options.allowNetwork });
-			console.log(`NVDA journey JSON: ${result.jsonPath}\nNVDA journey Markdown: ${result.markdownPath}`);
-			return result.exitCode;
-		}
 		const baseline = options.command === "check" && options.baselineFile
 			? parseBaseline(JSON.parse(await readFile(options.baselineFile, "utf8")) as unknown)
 			: undefined;
