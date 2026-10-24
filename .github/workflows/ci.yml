@@ -6,7 +6,7 @@ on:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Keep internal notes out of the public repository
@@ -44,7 +44,7 @@ jobs:
           node src/cli.ts prepare-review bench/interaction-review/tabs >/tmp/praxity-check-review.md
 
   windows-package:
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -102,11 +102,11 @@ jobs:
       matrix:
         include:
           - name: macos-package
-            runner: macos-latest
+            runner: macos-15
             platform: darwin
             arch: arm64
           - name: linux-package
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             platform: linux
             arch: x64
     runs-on: ${{ matrix.runner }}
