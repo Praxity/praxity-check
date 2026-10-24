@@ -18,6 +18,7 @@ test("--help prints usage and exits successfully", async () => {
 	assert.match(stdout, /--paper-size A4\|Letter/);
 	assert.match(stdout, /praxity-check prepare-review <folder\|zip>/);
 	assert.match(stdout, /praxity-check screen-reader <folder\|zip>/);
+	assert.doesNotMatch(stdout, /--journey|NVDA/);
 	assert.match(stdout, /--baseline <report\.json>/);
 	assert.equal(stderr, "");
 });
@@ -38,6 +39,30 @@ test("screen-reader warns about the existing Safari profile and network", () => 
 		() => parseArgs(["screen-reader", ".", "--take-screen-control"]),
 		/existing Safari profile and network connection/,
 	);
+});
+
+test("screen-reader rejects removed journey options as unknown flags", async () => {
+	for (const [flag, value] of [["--journey", "journey.json"], ["--output", "evidence"]]) {
+		await assert.rejects(exec(process.execPath, [CLI, "screen-reader", ".", flag!, value!]), (error: unknown) => {
+			assert.ok(error && typeof error === "object" && "code" in error && "stderr" in error);
+			assert.equal(error.code, 2);
+			assert.equal(String(error.stderr).trim(), `praxity-check: unknown or incomplete option: ${flag}`);
+			return true;
+		});
+	}
+});
+
+test("screen-reader keeps the VoiceOver single-action options", () => {
+	const options = parseArgs(["screen-reader", ".", "--page", "index.html", "--control", "Next", "--expected", "Lesson", "--take-screen-control", "--allow-network"]);
+	assert.equal(options.command, "screen-reader");
+	if (options.command !== "screen-reader") assert.fail("wrong command");
+	assert.equal(options.page, "index.html");
+	assert.equal(options.control, "Next");
+	assert.equal(options.expected, "Lesson");
+	assert.equal(options.takeScreenControl, true);
+	assert.equal(options.allowNetwork, true);
+	assert.throws(() => parseArgs(["screen-reader", ".", "--take-screen-control", "--allow-network"]), /requires --page, --control, and --expected/);
+	assert.throws(() => parseArgs(["screen-reader", "https://example.com/", "--page", "index.html", "--control", "Next", "--expected", "Lesson", "--take-screen-control", "--allow-network"]), /^Error: VoiceOver screen-reader action requires a folder or ZIP$/);
 });
 
 test("check scans a declared rendered state and records its actions", async () => {

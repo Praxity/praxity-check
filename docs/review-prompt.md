@@ -29,7 +29,7 @@ State the evidence methods on every item: `rendered`, `interaction`,
   they look likely. Do not recommend fixing an untraced part of a component flow.
 - Use `screen-reader` only for a named action whose unresolved question is the
   resulting speech. Name and version the tested pairing, such as VoiceOver +
-  Safari or NVDA + Chromium. A duplicate-speech claim requires the exact target
+  Safari. A duplicate-speech claim requires the exact target
   phrase, a bounded speech-event trace, and a clean comparison that announces
   the phrase once. Do not infer duplication merely because two announcement
   channels exist or because the last-phrase value repeats.
