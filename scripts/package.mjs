@@ -61,8 +61,17 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 			return;
 		}
 		copied.set(name, metadata.version);
-		await cp(location, join(output, "node_modules", name), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE, filter: path => !relative(location, path).split(/[\\/]/).some(part => ["node_modules", ".local-browsers"].includes(part)) && !/\.(map|log)$/i.test(path) });
+		await cp(location, join(output, "node_modules", name), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE, filter: path =>
+			// Check uses the browser API, not Playwright's dashboard, inspector or trace viewer.
+			!(portable && name === "playwright-core" && /^lib[\\/]vite[\\/](?:dashboard[\\/]assets|recorder[\\/]assets|traceViewer)(?:[\\/]|$)/.test(relative(location, path))) &&
+			!relative(location, path).split(/[\\/]/).some(part => ["node_modules", ".local-browsers"].includes(part)) && !/\.(map|log)$/i.test(path) });
 		notices.push(`- ${name}@${metadata.version}: ${metadata.license ?? "see package licence files"}`);
+		if (name === "axe-core" || name === "@axe-core/playwright") {
+			// Some axe-core-npm releases have no version tag; npm records their source commit.
+			const repository = name === "axe-core" ? "axe-core" : "axe-core-npm";
+			const source = `https://github.com/dequelabs/${repository}/tree/${metadata.gitHead ?? `v${metadata.version}`}${name === "axe-core" ? "" : "/packages/playwright"}`;
+			notices.push(`  ${name}@${metadata.version} is distributed under MPL-2.0. Corresponding source, including build instructions: ${source}. Licence: https://www.mozilla.org/MPL/2.0/. Package licence files are retained in node_modules/${name}/.`);
+		}
 		for (const child of Object.keys(metadata.dependencies ?? {})) await dependency(child, location);
 		for (const child of Object.keys(metadata.optionalDependencies ?? {})) {
 			// Playwright's macOS watcher is for its test runner, which Check does not use.
