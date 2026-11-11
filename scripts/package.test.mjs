@@ -357,6 +357,16 @@ test("portable build relocates, retains its inventory and runs with only externa
 	}
 	for (const path of ["skill/SKILL.md", "NOTICE.md", "THIRD-PARTY-NOTICES.md", "LICENSE", "LICENSING.md", "node_modules/@embedpdf/pdfium/dist/pdfium.wasm", "notices/pdfium/FreeType-FTL.TXT", "notices/pdfium/PDFium-LICENSE", "notices/pdfium/OpenJPEG-LICENSE", "node_modules/playwright-core/ThirdPartyNotices.txt"]) assert.ok(paths.includes(path), path);
 	assert.doesNotMatch(await readFile(join(artifact, "THIRD-PARTY-NOTICES.md"), "utf8"), /runtime\/LICENSE/);
+	for (const folder of ["dashboard/assets", "recorder/assets", "traceViewer"]) {
+		await assert.rejects(lstat(join(artifact, "node_modules/playwright-core/lib/vite", folder)), /ENOENT/);
+	}
+	const notices = await readFile(join(artifact, "THIRD-PARTY-NOTICES.md"), "utf8");
+	for (const [name, repo, subdirectory] of [["axe-core", "axe-core", ""], ["@axe-core/playwright", "axe-core-npm", "/packages/playwright"]]) {
+		const metadata = JSON.parse(await readFile(join(artifact, "node_modules", name, "package.json"), "utf8"));
+		assert.ok(notices.includes(`${name}@${metadata.version}: MPL-2.0`));
+		assert.ok(notices.includes(`https://github.com/dequelabs/${repo}/tree/${metadata.gitHead ?? `v${metadata.version}`}${subdirectory}`));
+	}
+
 	assert.match(await readFile(join(artifact, "skill/SKILL.md"), "utf8"), /praxity check/);
 	const external = join(root, "external Node");
 	await mkdir(external);
