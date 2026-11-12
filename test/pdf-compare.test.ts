@@ -55,8 +55,8 @@ test("grouping retains revision IDs and counts without claiming individual ident
 
 test("model silence and needsReview silence remain unverified", () => {
 	const before = fixture(), after = repaired();
-	const review = (sha: string, findings: unknown[]) => ({ tier: "visual", documentSha256: sha, pagesReviewed: [1], findings });
-	const inferred = { id: "inferred-a", rule: "pdf.visual.inference", message: "Clipped text", location: { documentSha256: before.document.sha256, page: 1 }, evidence: { observation: "Last word cut at right edge" } };
+	const review = (sha: string, findings: unknown[]) => ({ schemaVersion: "pdf-review-4", tier: "inference", focus: "visual", checks: ["design"], documentSha256: sha, pagesReviewed: [1], findings });
+	const inferred = { check: "design", id: "inferred-a", rule: "pdf.visual.inference", message: "Clipped text", location: { documentSha256: before.document.sha256, page: 1 }, evidence: { observation: "Last word cut at right edge" } };
 	const result = comparePdfReports({ ...before, needsReview: before.findings, inferenceReviews: [review(before.document.sha256, [inferred])] }, { ...after, inferenceReviews: [review(after.document.sha256, [])] });
 	assert.equal(result.groups.find((g) => g.kind === "needsReview")!.status, "unverified");
 	assert.equal(result.groups.find((g) => g.kind === "inference")!.status, "unverified");
@@ -96,8 +96,8 @@ test("CLI prints JSON without writing files and enforces bounded regular-file in
 test("page relocation and changed model observations do not match identities", () => {
 	const before = fixture(), after = fixture("b");
 	before.facts.pages.push({ page: 2 }); after.facts.pages.push({ page: 2 });
-	const concern = (sha: string, page: number, observation: string) => ({ id: `${sha[0]}-${page}`, rule: "pdf.visual.inference", message: "Clipped text", location: { documentSha256: sha, page }, evidence: { observation } });
-	const report = (base: ReturnType<typeof fixture>, page: number, observation: string) => ({ ...base, inferenceReviews: [{ tier: "visual", documentSha256: base.document.sha256, pagesReviewed: [1, 2], findings: [concern(base.document.sha256, page, observation)] }] });
+	const concern = (sha: string, page: number, observation: string) => ({ check: "design", id: `${sha[0]}-${page}`, rule: "pdf.visual.inference", message: "Clipped text", location: { documentSha256: sha, page }, evidence: { observation } });
+	const report = (base: ReturnType<typeof fixture>, page: number, observation: string) => ({ ...base, inferenceReviews: [{ schemaVersion: "pdf-review-4", tier: "inference", focus: "visual", checks: ["design"], documentSha256: base.document.sha256, pagesReviewed: [1, 2], findings: [concern(base.document.sha256, page, observation)] }] });
 	for (const [page, observation] of [[2, "right edge"], [1, "bottom edge"]] as const) {
 		const groups = comparePdfReports(report(before, 1, "right edge"), report(after, page, observation)).groups.filter((g) => g.kind === "inference");
 		assert.deepEqual(groups.map((g) => g.status), ["unverified", "newly-reported"]);
@@ -119,12 +119,12 @@ test("CLI rejects a FIFO without waiting for a writer", { skip: process.platform
 });
 
 
-test("equivalent effective PDF policies resolve across explicit defaults and legacy reports", () => {
+test("equivalent effective PDF policies resolve across omitted and explicit defaults", () => {
 	for (const [beforePolicy, afterPolicy] of [
-		[{}, { pdfua: "ua1", checks: "design,accessibility", tier: "deterministic" }],
+		[{}, { pdfua: "ua1", checks: "accessibility", tier: "deterministic" }],
 		[{ checks: "design" }, { checks: "design", tier: "deterministic", pdfua: "ua1" }],
 		[{ tier: "deterministic" }, { checks: "accessibility", tier: "deterministic", pdfua: "ua1" }],
-		[{ checks: undefined, tier: undefined, pdfua: undefined }, { checks: "accessibility,design", tier: "deterministic", pdfua: "ua1" }],
+		[{ checks: undefined, tier: undefined, pdfua: undefined }, { checks: "accessibility", tier: "deterministic", pdfua: "ua1" }],
 	]) {
 		const result = comparePdfReports({ ...fixture(), policy: beforePolicy }, { ...repaired(), policy: afterPolicy });
 		assert.equal(result.comparison.policySame, true);
@@ -134,7 +134,7 @@ test("equivalent effective PDF policies resolve across explicit defaults and leg
 
 test("effective policy comparison preserves domain, tier, threshold and unknown-field differences", () => {
 	for (const policy of [
-		{ tier: "deterministic" }, { checks: "design" }, { tier: "inference", checks: "accessibility,design" },
+		{ checks: "accessibility,design" }, { checks: "design" }, { tier: "inference", checks: "accessibility,design" },
 		{ pdfua: "ua2" }, { maxSparseWords: 20 }, { minImagePpi: 150 }, { paperSize: "Letter" },
 		{ futureCheck: true }, { veraPdfPath: "/other/verapdf" },
 	]) {

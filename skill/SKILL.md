@@ -19,6 +19,9 @@ Write the JSON report outside the input:
 praxity check check "<input>" --json "<report.json>"
 ```
 
+PDF and HTML default to accessibility checks. For both PDF domains, add
+`--checks accessibility,design` to the command above.
+
 Exit `0` means no automated findings at the selected confidence threshold (default high; set it with `--min-confidence`). Exit `1` means findings reached it. Exit `2` means the run failed or was incomplete. Read the evidence and any checks marked untested, and state which checks ran. A clean automated result does not prove compliance.
 
 Read each finding's evidence before changing the course. Some findings record a checker limit, such as a background colour the checker could not determine; report those with their evidence rather than editing content to silence them. A high-confidence keyboard trap means the checker could leave the element with neither Tab nor Shift+Tab.
@@ -39,4 +42,7 @@ Give your chosen reviewer the bundle's `review-prompt.md`, `review.schema.json` 
 praxity check check "<input>" --tier inference --review "<bundle>/review.json" --json "<report.json>"
 ```
 
-Inference import runs no automated checks. Model observations need human review and do not set the automated findings exit code. After changing the input, prepare a new bundle. PDF preparation also needs `--checks accessibility` or `--checks design`. Manual HTML preparation exits `0` when it prepared a page, or `2` when it could not prepare any, and never exits `1`.
+Inference import runs no automated checks. Model observations need human review and do not set the automated findings exit code. After changing the input, prepare a new bundle. For PDF imports, also pass `--review-bundle "<bundle>/manifest.json"` and the same `--checks` domains used during preparation. Manual HTML preparation exits `0` when it prepared a page, or `2` when it could not prepare any, and never exits `1`.
+
+Review imports accept only `pdf-review-4` and `html-review-2`. Prepare a new review
+if an older format is rejected.

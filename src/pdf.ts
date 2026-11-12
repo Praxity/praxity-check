@@ -154,7 +154,7 @@ export async function pdfCli(args: string[]): Promise<number> {
 	}
 	if (reviewBundle && !reviewPaths.length) throw new Error("--review-bundle requires --review");
 	if (options.tier === "inference" && !reviewPaths.length) throw new Error("--tier inference requires --review; prepare a review first with prepare-review --tier inference.");
-	if (options.tier === "deterministic" && reviewPaths.length) throw new Error("--review requires --tier inference, or omit --tier to retain the legacy combined report.");
+	if (options.tier === "deterministic" && reviewPaths.length) throw new Error("--review requires --tier inference.");
 	const target = resolve(args[1]!);
 	// Compare inode identity as well as paths, protecting symlink and hardlink aliases.
 	if (json) {
@@ -195,8 +195,8 @@ export async function pdfCli(args: string[]): Promise<number> {
 	}
 	console.log(pdfHumanSummary(report, json));
 	for (const review of report.inferenceReviews) {
-		console.log(`\nModel review (${"focus" in review ? review.focus : review.tier}, ${review.reviewer.model}): ${review.findings.length} ${review.findings.length === 1 ? "concern" : "concerns"} on ${review.pagesReviewed.length === 1 ? "page" : "pages"} ${review.pagesReviewed.join(", ")} of ${report.facts.pages.length}. ${review.pagesReviewed.length < report.facts.pages.length ? "The model did not review the other pages. " : ""}A model review cannot confirm conformance.`);
-		console.log(review.evidenceBinding === "bundle" ? "The review matches its evidence bundle. That does not prove the model looked at the images." : "Older review format: it matches this PDF, but Check cannot confirm which evidence and context the model saw.");
+		console.log(`\nModel review (${review.focus}, ${review.reviewer.model}): ${review.findings.length} ${review.findings.length === 1 ? "concern" : "concerns"} on ${review.pagesReviewed.length === 1 ? "page" : "pages"} ${review.pagesReviewed.join(", ")} of ${report.facts.pages.length}. ${review.pagesReviewed.length < report.facts.pages.length ? "The model did not review the other pages. " : ""}A model review cannot confirm conformance.`);
+		console.log("The review matches its evidence bundle. That does not prove the model looked at the images.");
 		for (const item of review.findings) console.log(`${item.category === "observed-defect" ? "Issue" : item.category === "needs-context" ? "Question" : item.category === "suggestion" ? "Suggestion" : "Concern"} on page ${item.location.page}: ${item.message}\n  Consequence: ${item.consequence}\n  Next step: ${item.remedy}\n  Origin: ${item.provenance.method}, ${item.provenance.tier}, ${item.provenance.model}\n  Verify: ${item.verification}\n  Evidence: ${item.evidence.observation}\n  Confidence: ${item.confidence}`);
 	}
 	return report.machineStatus === "incomplete" ? 2 : report.findings.length ? 1 : 0;

@@ -85,7 +85,7 @@ test("HTML bundle captures real actions, imports retained evidence without brows
 	const trace = candidate.traces.find((item: { action: string }) => item.action === "ArrowRight");
 	assert.match(trace.before, /button#one/); assert.match(trace.after, /button#one/, "defective tab retains focus after ArrowRight");
 	const finding = { page: "index.html", candidateId: candidate.id, stateId: candidate.stateId, check: "accessibility" as const, category: "observed-defect" as const, claim: "executed-behavior" as const, confidence: "high" as const, message: "ArrowRight leaves focus on the first tab.", action: "Move focus to the next tab on ArrowRight.", consequence: "Keyboard users cannot reach the second tab with the expected arrow key.", verification: "Focus the first tab and press ArrowRight.", evidence: { observation: "The recorded ArrowRight action retains button#one as the active element.", traceIds: [trace.id] } };
-	const review: HtmlReview = { schemaVersion: "html-review-1", contentSha256: manifest.contentSha256, evidenceSha256: manifest.evidenceSha256, checks: ["accessibility"], tier: "inference", pagesReviewed: ["index.html"], candidatesReviewed: [candidate.id], reviewer: { model: "synthetic-review-fixture" }, findings: [finding, { ...finding, category: "needs-context" }, { ...finding, category: "suggestion" }] };
+	const review: HtmlReview = { schemaVersion: "html-review-2", contentSha256: manifest.contentSha256, evidenceSha256: manifest.evidenceSha256, checks: ["accessibility"], tier: "inference", pagesReviewed: ["index.html"], candidatesReviewed: [candidate.id], reviewer: { model: "synthetic-review-fixture" }, findings: [finding, { ...finding, category: "needs-context" }, { ...finding, category: "suggestion" }] };
 	const reviewPath = join(bundle, "review.json");
 	await writeFile(reviewPath, JSON.stringify(review));
 	const snapshot = await snapshotInput(source);
@@ -134,7 +134,6 @@ test("HTML bundle captures real actions, imports retained evidence without brows
 	assert.doesNotThrow(() => validateHtmlReview({ ...review, findings: [{ ...finding, category: "needs-context", claim: "structure", evidence: { observation: "DOM relationship requires review.", traceIds: [] } }] }, snapshot.contentSha256, manifest.evidenceSha256, evidence));
 	const coverage: HtmlReview = { ...review, schemaVersion: "html-review-2", findings: [{ ...finding, category: "needs-context", claim: "coverage", action: "Record the untested opening path before deciding whether a source change is needed.", evidence: { observation: "The opener was not exercised.", traceIds: [] } }] };
 	assert.doesNotThrow(() => validateHtmlReview(coverage, snapshot.contentSha256, manifest.evidenceSha256, evidence));
-	assert.throws(() => validateHtmlReview({ ...coverage, schemaVersion: "html-review-1" }, snapshot.contentSha256, manifest.evidenceSha256, evidence), /Coverage/);
 	for (const category of ["observed-defect", "suggestion"]) assert.throws(() => validateHtmlReview({ ...coverage, findings: [{ ...coverage.findings[0], category }] }, snapshot.contentSha256, manifest.evidenceSha256, evidence), /Coverage/);
 	await writeFile(reviewPath, JSON.stringify(coverage));
 	const importedCoverage = run(["check", source, "--tier", "inference", "--review", reviewPath, "--json", output], unavailableBrowser);
@@ -175,4 +174,10 @@ test("HTML bundle captures real actions, imports retained evidence without brows
 	const bytes = JSON.stringify(evidence); await writeFile(join(bundle, "evidence.json"), bytes);
 	await writeFile(join(bundle, "manifest.json"), JSON.stringify({ ...manifest, evidenceSha256: digest(bytes) }));
 	await assert.rejects(importHtmlReview(reviewPath, snapshot.contentSha256, discovery), /candidate/);
+});
+
+test("HTML rejects old review versions with the supported version in the message", () => {
+	for (const schemaVersion of ["html-review-1", "html-review-3"]) {
+		assert.throws(() => validateHtmlReview({ schemaVersion }, "a".repeat(64), "b".repeat(64), {} as Parameters<typeof validateHtmlReview>[3]), /HTML review requires html-review-2/);
+	}
 });

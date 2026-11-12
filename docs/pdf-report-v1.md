@@ -129,11 +129,11 @@ or usability. audience and use provide context. Up to 24 explicitly selected
 pages or the deterministic default sample receive PNG overviews at 1600 pixels
 high, page JSON facts, hashes, a manifest, a review schema and review instructions.
 
-New manifests use pdf-review-bundle-3 for canonical and legacy-focus preparation.
+New manifests use pdf-review-bundle-3 for review preparation.
 renderer records the engine identity. Page artifacts record render dimensions,
 image/fact hashes, operation parameters and diagnostics. The manifest's SHA-256
 binds pdf-review-4 imports to the exact evidence, context and selection.
-Legacy reviews remain document-bound and say which evidence binding is missing.
+Only pdf-review-4 imports are supported; older versions require a new review.
 
 --design-evidence adds pdf-design-evidence-2. Each page retains
 page-N-design.json with PDFium spans, font sizes, families, foreground colours,
@@ -151,10 +151,8 @@ must establish visible defects, contrast concerns and reader consequences.
 Font count, whitespace and mixed orientation alone are not defects.
 Model review remains inference, even when evidence hashes match.
 
-Verification still accepts pdf-review-bundle-1 and -2 and their historical
-artifact formats. Existing pdf-review-1 through -4 imports remain accepted under
-their original binding rules. A pdf-review-4 import accepts a bound -2 or -3
-bundle. Changing the renderer requires a newly prepared bundle and review.
+A pdf-review-4 import accepts a bound pdf-review-bundle-2 or -3 bundle.
+Changing the renderer requires a newly prepared bundle and review.
 
 ## Comparing reports
 

@@ -25,13 +25,12 @@ export function validateHtmlSelection(command: string, options: SelectionOptions
 	return selection;
 }
 
-/** Preserve legacy combined PDF checks when the tier was omitted. */
 export function normalizePdfPolicy(options: PdfOptions) {
 	if (options.maxSparseWords !== undefined && (!Number.isSafeInteger(options.maxSparseWords) || options.maxSparseWords < 1)) throw new Error("maxSparseWords must be a positive safe integer");
 	if (options.minImagePpi !== undefined && (!Number.isFinite(options.minImagePpi) || options.minImagePpi <= 0)) throw new Error("minImagePpi must be a positive finite number");
 	if (options.paperSize !== undefined && options.paperSize !== "A4" && options.paperSize !== "Letter") throw new Error("paperSize must be A4 or Letter");
 	if (options.pdfua !== undefined && !["ua1", "ua2", "off"].includes(options.pdfua)) throw new Error("pdfua must be ua1, ua2 or off");
 	if (options.veraPdfPath !== undefined && !options.veraPdfPath.trim()) throw new Error("veraPdfPath must not be empty");
-	const selection = selectChecks(options, options.tier === undefined ? "accessibility,design" : "accessibility");
+	const selection = selectChecks(options);
 	return { ...options, checks: selection.checks.join(","), tier: selection.tier, pdfua: options.pdfua ?? "ua1" };
 }
