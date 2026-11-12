@@ -41,7 +41,7 @@ jobs:
           set -e
           test "$defect_code" -eq 1
           node src/cli.ts check /tmp/praxity-check-smoke/clean --min-confidence medium >/tmp/praxity-check-clean.txt
-          node src/cli.ts prepare-review bench/interaction-review/tabs >/tmp/praxity-check-review.md
+          node src/cli.ts prepare-review bench/interaction-review/tabs --reviewer manual >/tmp/praxity-check-review.md
 
   windows-package:
     runs-on: windows-latest

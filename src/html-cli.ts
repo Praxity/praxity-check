@@ -11,7 +11,7 @@ import { resolveScreenReaderPage, runScreenReader } from "./screen-reader.ts";
 import { serve, type StaticServer } from "./serve.ts";
 import { htmlFeedback } from "./feedback.ts";
 import { importHtmlReview, readHtmlReviewBundle, writeHtmlReviewBundle } from "./html-review.ts";
-import { parseReviewExecutionOption, runPreparedReview, validateReviewExecutionOptions, type ReviewExecutionOptions } from "./review-runner.ts";
+import { DEFAULT_REVIEW_MODEL, parseReviewExecutionOption, runPreparedReview, validateReviewExecutionOptions, type ReviewExecutionOptions } from "./review-runner.ts";
 import { prepareInteractionReview } from "./interaction-review.ts";
 import { loadScenarios } from "./scenarios.ts";
 
@@ -40,8 +40,8 @@ Options:
 
 prepare-review options:
   --output <new-directory>         Save the review bundle in this new folder
-  --reviewer manual|codex          Run the review with Codex (default), or save a bundle to review yourself
-  --model <id>                     Codex model (default gpt-5.6-luna)
+  --reviewer manual|codex          Prepare a manual review (default); inference tier selects Codex
+  --model <id>                     Codex model (default ${DEFAULT_REVIEW_MODEL})
   --classifier none|jev            Optional Jev classifier (default none; needs JEV_API_KEY)
   --focus visual|usability         PDF: what the model review looks at (default visual)
   --pages <list>                   PDF: pages to review, such as 1,3

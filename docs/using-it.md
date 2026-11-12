@@ -178,10 +178,10 @@ as the automated checks and writes bounded rendered DOM, accessibility
 snapshots, and generic before/action/after traces:
 
 ```bash
-node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist > review-evidence.md
+node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist --reviewer manual > review-evidence.md
 ```
 
-With the default options, the command collects evidence locally without running
+With `--reviewer manual`, the command collects evidence locally without running
 automated checks or calling a model. It records only recognised candidates and
 reversible generic actions; the packet names missing components, unsafe or
 unknown triggers, and other unexercised rules. Review the Markdown before
@@ -217,7 +217,7 @@ using the packet's page, selector, IDs, classes, and text. That follow-up may
 inspect the smallest relevant source slice; the reviewer may not search the
 package or a minified bundle.
 
-With the default options, `prepare-review` exits `0` when it prepared at least
+With `--reviewer manual`, `prepare-review` exits `0` when it prepared at least
 one page and `2` when it could not prepare any. It never exits `1`: evidence is not a finding and cannot
 gate CI.
 
@@ -256,14 +256,15 @@ inspected that evidence or reached the right conclusion.
 `prepare-review --tier inference` launches the installed Codex CLI by default.
 Sign in with your subscription first. Luna reviews the evidence automatically.
 Use `--reviewer manual` to prepare files for your preferred AI app instead.
-Older HTML commands without `--tier inference` and legacy PDF `visual` or
-`usability` tiers still prepare manual evidence unless you select a reviewer.
+`prepare-review <dist>` stays local and manual when neither `--tier` nor
+`--reviewer` is supplied. Select `--tier inference` or `--reviewer codex`
+to send the evidence to your Codex account.
 The reviewer judges the evidence; you decide which proposed changes to accept.
 
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--classifier none\|jev` | `none` | Optionally asks Jev to label retained content. |
-| `--reviewer manual\|codex` | `codex` with `--tier inference`; otherwise `manual` | Leaves the bundle for you, or runs Codex to write a JSON review. |
+| `--reviewer manual\|codex` | `manual`; `--tier inference` selects `codex` | Leaves the bundle for you, or runs Codex to write a JSON review. |
 | `--model <id>` | `gpt-5.6-luna` | Selects the Codex reviewer model. Requires Codex review. |
 
 For HTML, automatic review and optional Jev classification require `--output`. Use a new directory
@@ -590,3 +591,9 @@ setup. An intact setup installation takes precedence over Java or veraPDF on
 PATH. Existing Playwright developer caches remain usable and are reported as
 explicit. Missing components give a setup command and incomplete coverage,
 with check exit code 2.
+
+Read the review before sharing it. The reviewer reads untrusted course content
+and can read files; its environment is limited, but its output still needs your review.
+
+The reviewer process can read credentials embedded in proxy URLs. Check forwards
+HTTP_PROXY, HTTPS_PROXY, ALL_PROXY and NO_PROXY, in either case, for proxy-only networks.

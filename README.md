@@ -163,7 +163,7 @@ focus-changing flows.
 Prepare the evidence:
 
 ```bash
-node src/cli.ts prepare-review /absolute/path/to/site/dist > review-evidence.md
+node src/cli.ts prepare-review /absolute/path/to/site/dist --reviewer manual > review-evidence.md
 ```
 
 For an importable review, add `--output /private/new-review`. Give the reviewer
