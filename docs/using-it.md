@@ -178,10 +178,10 @@ as the automated checks and writes bounded rendered DOM, accessibility
 snapshots, and generic before/action/after traces:
 
 ```bash
-node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist > review-evidence.md
+node /absolute/path/to/praxity-check/src/cli.ts prepare-review ./dist --reviewer manual > review-evidence.md
 ```
 
-With the default options, the command collects evidence locally without running
+With `--reviewer manual`, the command collects evidence locally without running
 automated checks or calling a model. It records only recognised candidates and
 reversible generic actions; the packet names missing components, unsafe or
 unknown triggers, and other unexercised rules. Review the Markdown before
@@ -217,7 +217,7 @@ using the packet's page, selector, IDs, classes, and text. That follow-up may
 inspect the smallest relevant source slice; the reviewer may not search the
 package or a minified bundle.
 
-With the default options, `prepare-review` exits `0` when it prepared at least
+With `--reviewer manual`, `prepare-review` exits `0` when it prepared at least
 one page and `2` when it could not prepare any. It never exits `1`: evidence is not a finding and cannot
 gate CI.
 
