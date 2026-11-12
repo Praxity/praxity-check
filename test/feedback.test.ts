@@ -1,3 +1,5 @@
+import { rm } from "node:fs/promises";
+import { retainedBundle } from "./helpers/pdf-review-bundle.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { pdfFeedback } from "../src/feedback.ts";
@@ -42,15 +44,16 @@ test("HTML feedback preserves state, unresolved evidence, skipped pages and revi
 	}
 });
 
-test("PDF feedback separates extraction, check domains, sampled inference and partial evidence", async () => {
+test("PDF feedback separates extraction, check domains, sampled inference and partial evidence", async t => {
 	const hash = "a".repeat(64);
 	const issue = { id: "font-1", rule: "font.embedding", severity: "serious" as const, confidence: "high" as const,
 		location: { documentSha256: hash }, message: "Font is not embedded.", remedy: "Embed it.", evidence: { font: "Synthetic" } };
 	const finding = { page: 1, confidence: "medium" as const, message: "Instructions overlap.", action: "Increase spacing.", consequence: "Instructions are obscured.", origin: "Unknown source cause.", verification: "Inspect regenerated page.", evidence: { observation: "Two lines overlap." } };
-	const legacy = (await acceptPdfReview({ schemaVersion: "pdf-review-1", documentSha256: hash, tier: "visual", pagesReviewed: [1], reviewer: { model: "test-model" }, findings: [finding] }, hash, 2)).normalized;
-	const canonical = (await acceptPdfReview({ schemaVersion: "pdf-review-3", documentSha256: hash, tier: "inference", focus: "visual", checks: ["design"], pagesReviewed: [1], reviewer: { model: "test-model" }, findings: [
+	const retained = await retainedBundle(2);
+	t.after(() => rm(retained.directory, { recursive: true, force: true }));
+	const canonical = (await acceptPdfReview({ schemaVersion: "pdf-review-4", bundleSha256: retained.boundReview.bundleSha256, documentSha256: hash, tier: "inference", focus: "visual", checks: ["design"], pagesReviewed: [1], reviewer: { model: "test-model" }, findings: [
 		{ ...finding, check: "design", category: "observed-defect" }, { ...finding, check: "design", category: "suggestion" },
-	] }, hash, 2)).normalized;
+	] }, hash, 2, { bundle: retained.manifestPath })).normalized;
 	const report: Parameters<typeof pdfFeedback>[0] = {
 		schemaVersion: "pdf-2", engine: { name: "PDFium", package: "@embedpdf/pdfium", version: "2.15.1", build: null, buildLimitation: "The distributed package and wasm do not expose the PDFium build number." }, run: { id: "00000000-0000-0000-0000-000000000000", startedAt: "2026-09-15", runtime: "test" },
 		document: { kind: "pdf", path: "synthetic.pdf", sha256: hash, bytes: 123 },
@@ -60,7 +63,7 @@ test("PDF feedback separates extraction, check domains, sampled inference and pa
 		evaluations: [{ rule: "font.facts", outcome: "passed", reason: "Extraction completed." }, { rule: "font.embedding", outcome: "failed", reason: "Not embedded." },
 			{ rule: "pdfua.machine", outcome: "untested", reason: "Evidence was capped." }, { rule: "assistive.technology", outcome: "untested", reason: "Human review was not performed." }],
 		pdfuaValidation: { name: "veraPDF", profile: "ua1", version: "test", machineCompliant: false, coverage: { status: "partial", failedChecks: 3, retainedChecks: 1, omittedChecks: 2, rules: [] } },
-		inferenceReviews: [legacy, canonical],
+		inferenceReviews: [canonical],
 	};
 	const feedback = pdfFeedback(report);
 	assert.deepEqual(feedback.findings[0]?.domains, ["accessibility", "design"]);
@@ -69,8 +72,6 @@ test("PDF feedback separates extraction, check domains, sampled inference and pa
 	assert.equal(feedback.coverage.find((entry) => entry.rule === "assistive.technology")?.method, "human");
 	assert.equal(feedback.coverage.find((entry) => entry.rule === "pdfua.machine")?.outcome, "untested");
 	assert.equal(feedback.coverage.find((entry) => entry.rule === "pdfua.machine.evidence")?.status, "partial");
-	assert.deepEqual(feedback.questions.find((entry) => entry.method === "inference")?.domains, []);
-	assert.ok(feedback.limitations.some((reason) => reason.includes("legacy review without declared domains")));
 	const inferred = feedback.findings.find((entry) => entry.method === "inference")!;
 	assert.equal(inferred.category, "observed-defect");
 	assert.deepEqual(inferred.domains, ["design"]);
@@ -88,3 +89,4 @@ test("PDF feedback separates extraction, check domains, sampled inference and pa
 	for (const entry of feedback.coverage) assert.ok(resolvePointer(report, entry.source));
 	assert.ok(!JSON.stringify(feedback).includes('"observation"'));
 });
+

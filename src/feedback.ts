@@ -137,11 +137,10 @@ export function pdfFeedback(report: PdfSource): Feedback {
 	});
 	for (const [i, review] of (report.inferenceReviews ?? []).entries()) {
 		const source = `/inferenceReviews/${i}`;
-		const domains = "checks" in review ? review.checks : [];
-		feedback.limitations.push(review.evidenceBinding === "bundle" ? `${source} is bound to retained bundle hashes. Hashes do not prove image inspection or model claims.` : `${source} is a legacy document-only import; prepared evidence and context are not bound to this review.`);
-		if (!("checks" in review)) feedback.limitations.push(`${source} is a legacy review without declared domains. Its domains are left empty.`);
+		const domains = review.checks;
+		feedback.limitations.push(`${source} is bound to retained bundle hashes. Hashes do not prove image inspection or model claims.`);
 		feedback.coverage.push({
-			rule: `pdf.${"focus" in review ? review.focus : review.tier}.inference`, domains, method: "inference", purpose: "review",
+			rule: `pdf.${review.focus}.inference`, domains, method: "inference", purpose: "review",
 			status: review.pagesReviewed.length === report.facts.pages.length ? "complete" : "partial", pagesReviewed: review.pagesReviewed,
 			pageCount: report.facts.pages.length, location, source,
 			reason: "Coverage records pages reviewed for this focus, not a quality or conformance outcome.",

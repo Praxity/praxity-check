@@ -39,4 +39,8 @@ Give your chosen reviewer the bundle's `review-prompt.md`, `review.schema.json` 
 praxity check check "<input>" --tier inference --review "<bundle>/review.json" --json "<report.json>"
 ```
 
-Inference import runs no automated checks. Model observations need human review and do not set the automated findings exit code. After changing the input, prepare a new bundle. PDF preparation also needs `--checks accessibility` or `--checks design`. Manual HTML preparation exits `0` when it prepared a page, or `2` when it could not prepare any, and never exits `1`.
+Inference import runs no automated checks. Model observations need human review and do not set the automated findings exit code. After changing the input, prepare a new bundle. For PDF imports, also pass `--review-bundle "<bundle>/manifest.json"` and the same `--checks` domains used during preparation. Manual HTML preparation exits `0` when it prepared a page, or `2` when it could not prepare any, and never exits `1`.
+
+Review imports accept only `pdf-review-4` and `html-review-2`. Prepare a new review
+if an older format is rejected. PDF and HTML default to accessibility checks;
+request `--checks accessibility,design` explicitly for both PDF domains.

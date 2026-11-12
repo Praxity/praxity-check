@@ -1,3 +1,4 @@
+import { retainedBundle } from "./helpers/pdf-review-bundle.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -6,7 +7,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { parseChecks, parseTier, selectChecks, validateHtmlSelection } from "../src/selection.ts";
 import { checkPdf } from "../src/pdf.ts";
-import { acceptPdfReview, preparePdfReview } from "../src/pdf-review.ts";
+import { acceptPdfReview, preparePdfReview, validatePdfReviewBundle } from "../src/pdf-review.ts";
 import { comparePdfReports, validateComparisonReport } from "../src/pdf-compare.ts";
 
 const cli = resolve("src/cli.ts");
@@ -28,25 +29,25 @@ test("shared axes validate selection and reject unsupported HTML paths before la
 });
 
 const hash = "a".repeat(64);
-const modern = { schemaVersion: "pdf-review-3", documentSha256: hash, tier: "inference", focus: "visual", checks: ["design"], pagesReviewed: [1], reviewer: { model: "synthetic-test" }, findings: [{ page: 1, check: "design", category: "observed-defect", confidence: "high", message: "Visible instruction is clipped.", action: "Increase the source box height.", consequence: "The reader misses a required step.", origin: "Model inference from the page image.", verification: "Inspect the regenerated page.", evidence: { observation: "The last instruction line crosses the bottom boundary." } }] };
+const reviewTemplate = { schemaVersion: "pdf-review-4", documentSha256: hash, tier: "inference", focus: "visual", checks: ["design"], pagesReviewed: [1], reviewer: { model: "synthetic-test" }, findings: [{ page: 1, check: "design", category: "observed-defect", confidence: "high", message: "Visible instruction is clipped.", action: "Increase the source box height.", consequence: "The reader misses a required step.", origin: "Model inference from the page image.", verification: "Inspect the regenerated page.", evidence: { observation: "The last instruction line crosses the bottom boundary." } }] };
 
-test("v3 domain coverage is enforced while legacy review schemas remain compatible", async () => {
-	const accepted = await acceptPdfReview(modern, hash, 1, { checks: "design" });
-	await assert.rejects(acceptPdfReview(modern, hash, 1, { checks: "accessibility" }), { message: "Imported PDF review includes an unselected check domain." });
-	await assert.rejects(acceptPdfReview({ ...modern, findings: [{ ...modern.findings[0], check: "accessibility" }] }, hash, 1), { message: "PDF review finding is outside selected checks" });
-	await assert.rejects(acceptPdfReview({ ...modern, checks: [] }, hash, 1));
+test("current domain coverage is enforced", async t => {
+	const retained = await retainedBundle();
+	t.after(() => rm(retained.directory, { recursive: true, force: true }));
+	const bundle = await validatePdfReviewBundle(retained.manifestPath, hash, 3);
+	const modern = { ...reviewTemplate, bundleSha256: retained.boundReview.bundleSha256 };
+	const accepted = await acceptPdfReview(modern, hash, 3, { bundle, checks: "design" });
+	await assert.rejects(acceptPdfReview(modern, hash, 3, { bundle, checks: "accessibility" }), { message: "Imported PDF review includes an unselected check domain." });
+	await assert.rejects(acceptPdfReview({ ...modern, findings: [{ ...modern.findings[0], check: "accessibility" }] }, hash, 3, { bundle }), { message: "PDF review finding is outside selected checks" });
+	await assert.rejects(acceptPdfReview({ ...modern, checks: [] }, hash, 3, { bundle }));
 	for (const checks of [["accessibility,design"], ["design,accessibility"], ["design", "design"], [""], []]) {
 		for (const findings of [[], [{ ...modern.findings[0], check: checks[0] }]]) {
-			await assert.rejects(acceptPdfReview({ ...modern, checks, findings }, hash, 1));
+			await assert.rejects(acceptPdfReview({ ...modern, checks, findings }, hash, 3, { bundle }));
 			const normalized = accepted.normalized;
 			const malformedReview = { ...normalized, checks, findings: findings.length ? normalized.findings.map((finding) => ({ ...finding, check: checks[0] })) : [] };
 			assert.throws(() => validateComparisonReport({ schemaVersion: "pdf-1", document: { sha256: hash }, machineStatus: "complete", policy: {}, facts: { pages: [{ page: 1 }] }, evaluations: [], evidence: [], findings: [], needsReview: [], inferenceReviews: [malformedReview] }));
 		}
 	}
-	const { focus, checks, ...legacy } = modern;
-	const old = { ...legacy, schemaVersion: "pdf-review-2", tier: "visual", findings: modern.findings.map(({ check, ...finding }) => finding) };
-	assert.equal((await acceptPdfReview(old, hash, 1)).normalized.evidenceBinding, "document-only");
-	await assert.rejects(acceptPdfReview(old, hash, 1, { checks: "design" }), { message: "Legacy PDF reviews do not declare check domains; omit --checks for a legacy combined report or prepare a new review." });
 	const normalized = accepted.normalized;
 	assert.equal(normalized.findings[0]?.provenance.tier, "inference");
 	assert.equal(normalized.findings[0]?.rule, "pdf.visual.inference");
@@ -85,23 +86,24 @@ test("PDF domain and tier selection changes executed checks and keeps inference 
 	const canonicalDefault = await checkPdf(path, { tier: "deterministic", pdfua: "off" });
 	assert.deepEqual(canonicalDefault.selection.checks, ["accessibility"]);
 	assert.deepEqual(canonicalDefault.policy, { checks: "accessibility", tier: "deterministic", pdfua: "off" });
-	const legacy = await checkPdf(path, { pdfua: "off" });
-	assert.deepEqual(legacy.selection, { checks: ["accessibility", "design"], tier: "deterministic" });
-	const explicit = await checkPdf(path, { checks: "design,accessibility", tier: "deterministic", pdfua: "off" });
-	assert.deepEqual(legacy.policy, explicit.policy);
+	const defaultReport = await checkPdf(path, { pdfua: "off" });
+	assert.deepEqual(defaultReport.selection, { checks: ["accessibility"], tier: "deterministic" });
+	const explicit = await checkPdf(path, { checks: "accessibility", tier: "deterministic", pdfua: "off" });
+	assert.deepEqual(defaultReport.policy, explicit.policy);
 	const undefinedOptions = await checkPdf(path, { checks: undefined, tier: undefined, minImagePpi: undefined, pdfua: "off" });
-	assert.equal(comparePdfReports(undefinedOptions, legacy).comparison.policySame, true);
-	assert.deepEqual(legacy.evaluations, explicit.evaluations);
+	assert.equal(comparePdfReports(undefinedOptions, defaultReport).comparison.policySame, true);
+	assert.deepEqual(defaultReport.evaluations, explicit.evaluations);
 	const cliOutput = join(dir, "effective-policy.json");
 	const checked = spawnSync(process.execPath, [cli, "check", path, "--pdfua", "off", "--json", cliOutput], { encoding: "utf8" });
 	assert.equal(checked.status, 0, checked.stderr);
-	assert.deepEqual(JSON.parse(await readFile(cliOutput, "utf8")).policy, legacy.policy);
+	assert.deepEqual(JSON.parse(await readFile(cliOutput, "utf8")).policy, defaultReport.policy);
 	const imported = join(dir, "review.json"), output = join(dir, "report.json");
-	await writeFile(imported, JSON.stringify({ ...modern, documentSha256: design.document.sha256 }));
-	const result = spawnSync(process.execPath, [cli, "check", path, "--checks", "design", "--tier", "inference", "--review", imported, "--json", output, "--verapdf", join(dir, "missing-validator")], { encoding: "utf8" });
+	const prepared = await preparePdfReview(path, { tier: "inference", checks: "design", output: join(dir, "import-bundle") });
+	await writeFile(imported, JSON.stringify({ ...reviewTemplate, documentSha256: design.document.sha256, bundleSha256: prepared.bundleSha256 }));
+	const result = spawnSync(process.execPath, [cli, "check", path, "--checks", "design", "--tier", "inference", "--review-bundle", join(dir, "import-bundle", "manifest.json"), "--review", imported, "--json", output, "--verapdf", join(dir, "missing-validator")], { encoding: "utf8" });
 	assert.equal(result.status, 0, result.stderr);
 	assert.match(result.stdout, /Automated checks did not run because --tier inference was selected/);
-	const wrongDefault = spawnSync(process.execPath, [cli, "check", path, "--tier", "inference", "--review", imported], { encoding: "utf8" });
+	const wrongDefault = spawnSync(process.execPath, [cli, "check", path, "--tier", "inference", "--review-bundle", join(dir, "import-bundle", "manifest.json"), "--review", imported], { encoding: "utf8" });
 	assert.equal(wrongDefault.status, 2);
 	assert.match(wrongDefault.stderr, /unselected check domain/);
 	const report = JSON.parse(await readFile(output, "utf8"));
@@ -110,7 +112,7 @@ test("PDF domain and tier selection changes executed checks and keeps inference 
 	assert.ok(!report.evaluations.some((e: { rule: string }) => e.rule === "font.embedding" || e.rule === "pdfua.machine"));
 	const comparison = comparePdfReports(report, report);
 	assert.equal(comparison.groups[0]?.status, "reported-again");
-	assert.equal(spawnSync(process.execPath, [cli, "check", path, "--tier", "deterministic", "--review", imported]).status, 2);
+	assert.equal(spawnSync(process.execPath, [cli, "check", path, "--tier", "deterministic", "--review-bundle", join(dir, "import-bundle", "manifest.json"), "--review", imported]).status, 2);
 	await assert.rejects(preparePdfReview(path, { tier: "inference", designEvidence: true }), /requires --checks design/);
 	const bundle = await preparePdfReview(path, { tier: "inference", checks: "design", pages: [1], output: join(dir, "bundle") });
 	assert.equal(bundle.manifest.tier, "inference");
@@ -123,3 +125,4 @@ test("PDF domain and tier selection changes executed checks and keeps inference 
 	assert.ok(enriched.manifest.designEvidence);
 	assert.equal(enriched.manifest.designEvidence.requirements.minTextSizePt, 10);
 });
+

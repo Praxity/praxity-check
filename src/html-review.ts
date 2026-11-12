@@ -28,7 +28,7 @@ type Observation = {
 	evidence: { observation: string; traceIds: string[] };
 };
 export type HtmlReview = {
-	schemaVersion: "html-review-1" | "html-review-2"; contentSha256: string; evidenceSha256: string; tier: "inference"; checks: ["accessibility"];
+	schemaVersion: "html-review-2"; contentSha256: string; evidenceSha256: string; tier: "inference"; checks: ["accessibility"];
 	pagesReviewed: string[]; candidatesReviewed: string[]; reviewer: { model: string }; findings: Observation[];
 };
 const prose = { type: "string", minLength: 1, maxLength: 4000 };
@@ -140,9 +140,10 @@ function validateEvidence(value: unknown, discovery: Discovery): Evidence {
 }
 
 export function validateHtmlReview(value: unknown, contentSha256: string, evidenceSha256: string, evidence: Evidence): HtmlReview {
+	if ((value as Record<string, unknown> | null)?.schemaVersion !== "html-review-2") throw new Error("HTML review requires html-review-2; prepare a new review.");
 	record(value, Object.keys(htmlReviewSchema.properties));
 	digest(value.contentSha256); digest(value.evidenceSha256);
-	if ((value.schemaVersion !== "html-review-1" && value.schemaVersion !== "html-review-2") || value.contentSha256 !== contentSha256 || value.evidenceSha256 !== evidenceSha256) throw new Error("HTML review content revision or retained evidence does not match");
+	if (value.contentSha256 !== contentSha256 || value.evidenceSha256 !== evidenceSha256) throw new Error("HTML review content revision or retained evidence does not match");
 	if (value.tier !== "inference" || !Array.isArray(value.checks) || value.checks.length !== 1 || value.checks[0] !== "accessibility") throw new Error("HTML review requires inference tier and accessibility checks; design is unsupported");
 	strings(value.pagesReviewed, 20_000); strings(value.candidatesReviewed, MAX_RETAINED_CANDIDATES);
 	const pages = new Set(evidence.pages.filter((page) => page.audited).map((page) => page.file));

@@ -92,7 +92,7 @@ report. They do not change the exit code.
 
 `--checks accessibility|design|accessibility,design` selects what to assess.
 `--tier deterministic|inference` selects how evidence is assessed, consistently
-across HTML folders, SCORM ZIPs and PDFs. With either selection flag, checks default to accessibility. Add design when
+across HTML folders, SCORM ZIPs and PDFs. Checks default to accessibility. Add design when
 you need it. Deterministic checks use fixed rules and
 measurements. Inference reviews require a reviewer and never establish machine
 conformance, even when their confidence is high.
@@ -120,20 +120,16 @@ PDF runs extract supporting facts and import reviews without running determinist
 quality checks or the PDF/UA validator. Use a separate deterministic run for those.
 New PDF reviews require `--review-bundle <bundle>/manifest.json` at import. The review
 binds the exact prepared manifest, including context, selected pages and artifact hashes.
-Changing the PDF, renders, facts or context requires a new review. Legacy v1–v3
-reviews remain importable but are marked as bound only to the PDF bytes.
+Changing the PDF, renders, facts or context requires a new review.
 `--design-evidence` adds PDFium text measurements and detail crops to design review
 bundles. Optional `--min-text-size-pt 10` states a requirement for all extracted
 text; it is not a universal readability threshold. Measurements need visual review.
 
-For compatibility, PDF commands with neither selection flag retain their previous
-combined checks. Existing `--tier visual|usability` review commands remain aliases
-for inference review focus. New commands use `--tier inference --focus visual|usability`.
-Legacy review JSON does not declare domains and can only be imported without an
-explicit selection. New version 4 reviews declare domains and bind the prepared
-bundle; imports
-reject findings outside those domains. Versions 1–3 remain importable under the
-limits described in the [PDF report guide](docs/pdf-report-v1.md#optional-inference-review).
+PDF and HTML default to accessibility checks. Use `--checks accessibility,design`
+for both PDF domains. Review preparation uses `--tier inference` and
+`--focus visual|usability`. Imports accept only `pdf-review-4` and `html-review-2`.
+PDF reviews declare domains and bind the prepared bundle; imports reject findings
+outside those domains. See the [PDF report guide](docs/pdf-report-v1.md#optional-inference-review).
 
 ## Check a PDF
 

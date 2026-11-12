@@ -100,14 +100,15 @@ export function validateComparisonReport(value: unknown) {
 	const inference = (report.inferenceReviews === undefined ? [] : array(report.inferenceReviews)).flatMap((v) => {
 		const review = object(v);
 		if (hash(review.documentSha256) !== sha256) throw new Error("Inference document hash does not match report");
-		const focus = review.tier === "inference" ? review.focus : review.tier;
+		if (review.schemaVersion !== "pdf-review-4" || review.tier !== "inference") throw new Error("PDF review requires pdf-review-4 with inference tier");
+		const focus = review.focus;
 		if (focus !== "visual" && focus !== "usability") throw new Error("Invalid inference focus");
-		const domains = review.tier === "inference" ? (() => {
+		const domains = (() => {
 			const checks = array(review.checks);
 			if (checks.some((check) => check !== "accessibility" && check !== "design")) throw new Error("Invalid inference check domain");
 			return parseChecks(checks.join(","));
-		})() : undefined;
-		if (domains) for (const finding of array(review.findings)) {
+		})();
+		for (const finding of array(review.findings)) {
 			if (!domains.includes(text(object(finding).check) as "accessibility" | "design")) throw new Error("Inference finding outside selected checks");
 		}
 		const reviewed = array(review.pagesReviewed).map(count);

@@ -177,8 +177,9 @@ extraction from checks and review. `status` describes retained validator evidenc
 or reviewed pages, independently of any outcome. Partial reviews list the pages
 reviewed. Human review remains untested until performed. HTML review imports bind
 feedback to a local content snapshot and retained browser evidence. Ordinary HTML
-deterministic reports lack that revision hash. Legacy PDF reviews lack declared
-domains and use an empty `domains` array with an explanation in `limitations`.
+deterministic reports lack that revision hash. PDF reviews declare their domains
+and bind the exact retained bundle. Only pdf-review-4 and html-review-2 imports
+are supported.
 
 PDF reports now use schemaVersion pdf-2 and record PDFium engine identity.
 The shared feedback-1 envelope stays the same. Historical pdf-1 reports remain

@@ -23,7 +23,7 @@ test("real PDF facts, policy review, revision identity and safe CLI output", asy
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	const path = join(dir, "synthetic.pdf");
 	await writeFile(path, fixture());
-	const report = await checkPdf(path, { minImagePpi: 150, paperSize: "Letter", pdfua: "off" });
+	const report = await checkPdf(path, { checks: "accessibility,design", minImagePpi: 150, paperSize: "Letter", pdfua: "off" });
 	assert.equal(report.machineStatus, "complete");
 	assert.equal(report.feedback.schemaVersion, "feedback-1");
 	assert.deepEqual(report.feedback.findings[0]?.domains, ["accessibility", "design"]);
