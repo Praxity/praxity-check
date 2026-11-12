@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { checkPdfAccessibility, parseVeraPdf } from "../src/pdf-accessibility.ts";
-import { javaEnvironment } from "../src/verapdf-runtime.ts";
+import { javaEnvironment } from "../src/components.ts";
 import { componentHost, doctorCli } from "../src/components.ts";
 
 function payload(failed = false) {
