@@ -225,12 +225,13 @@ export async function preparePdfReview(path: string, options: { tier: CheckTier;
 
 export async function pdfReviewCli(args: string[]): Promise<number> {
 	const options: Parameters<typeof preparePdfReview>[1] & ReviewExecutionOptions = { tier: "inference" };
+	let explicitTier = false;
 	for (let i = 2; i < args.length; i += 2) {
 		if (args[i] === "--design-evidence") { options.designEvidence = true; i--; continue; }
 		const flag = args[i], value = args[i + 1];
 		if (!value || value.startsWith("--")) throw new Error(`Missing value for ${flag}`);
 		if (parseReviewExecutionOption(options, flag!, value)) continue;
-		if (flag === "--tier") { options.tier = parseTier(value); }
+		if (flag === "--tier") { options.tier = parseTier(value); explicitTier = true; }
 		else if (flag === "--checks") options.checks = parseChecks(value).join(",");
 		else if (flag === "--focus" && (value === "visual" || value === "usability")) options.focus = value;
 		else if (flag === "--min-text-size-pt") options.minTextSizePt = Number(value);
@@ -240,7 +241,7 @@ export async function pdfReviewCli(args: string[]): Promise<number> {
 		else if (flag === "--use") options.use = value;
 		else throw new Error(`Unsupported PDF review option: ${flag}`);
 	}
-	options.reviewer ??= "codex";
+	options.reviewer ??= explicitTier && options.tier === "inference" ? "codex" : "manual";
 	validateReviewExecutionOptions(options, true);
 	const result = await preparePdfReview(args[1]!, options);
 	if (options.classifier === "jev" || options.reviewer === "codex") {

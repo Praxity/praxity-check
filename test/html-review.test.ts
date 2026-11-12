@@ -134,7 +134,6 @@ test("HTML bundle captures real actions, imports retained evidence without brows
 	assert.doesNotThrow(() => validateHtmlReview({ ...review, findings: [{ ...finding, category: "needs-context", claim: "structure", evidence: { observation: "DOM relationship requires review.", traceIds: [] } }] }, snapshot.contentSha256, manifest.evidenceSha256, evidence));
 	const coverage: HtmlReview = { ...review, schemaVersion: "html-review-2", findings: [{ ...finding, category: "needs-context", claim: "coverage", action: "Record the untested opening path before deciding whether a source change is needed.", evidence: { observation: "The opener was not exercised.", traceIds: [] } }] };
 	assert.doesNotThrow(() => validateHtmlReview(coverage, snapshot.contentSha256, manifest.evidenceSha256, evidence));
-	assert.throws(() => validateHtmlReview({ ...coverage, schemaVersion: "html-review-2" }, snapshot.contentSha256, manifest.evidenceSha256, evidence), /Coverage/);
 	for (const category of ["observed-defect", "suggestion"]) assert.throws(() => validateHtmlReview({ ...coverage, findings: [{ ...coverage.findings[0], category }] }, snapshot.contentSha256, manifest.evidenceSha256, evidence), /Coverage/);
 	await writeFile(reviewPath, JSON.stringify(coverage));
 	const importedCoverage = run(["check", source, "--tier", "inference", "--review", reviewPath, "--json", output], unavailableBrowser);
