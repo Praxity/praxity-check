@@ -40,7 +40,7 @@ Options:
 
 prepare-review options:
   --output <new-directory>         Save the review bundle in this new folder
-  --reviewer manual|codex          Run the review with Codex (default), or save a bundle to review yourself
+  --reviewer manual|codex          Prepare a manual review (default); inference tier selects Codex
   --model <id>                     Codex model (default ${DEFAULT_REVIEW_MODEL})
   --classifier none|jev            Optional Jev classifier (default none; needs JEV_API_KEY)
   --focus visual|usability         PDF: what the model review looks at (default visual)
@@ -149,7 +149,7 @@ export function parseArgs(args: string[]): Options {
 	}
 	if (options.command !== "screen-reader") validateHtmlSelection(options.command, options);
 	if (options.command === "prepare-review") {
-		options.reviewer ??= "codex";
+		options.reviewer ??= options.tier === "inference" ? "codex" : "manual";
 		validateReviewExecutionOptions(options, Boolean(options.output));
 	}
 	if (options.command === "check") {

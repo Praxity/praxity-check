@@ -256,14 +256,15 @@ inspected that evidence or reached the right conclusion.
 `prepare-review --tier inference` launches the installed Codex CLI by default.
 Sign in with your subscription first. Luna reviews the evidence automatically.
 Use `--reviewer manual` to prepare files for your preferred AI app instead.
-HTML uses Codex whether or not you type `--tier inference`. Legacy PDF
-`visual` and `usability` tiers prepare manual evidence.
+`prepare-review <dist>` stays local and manual when neither `--tier` nor
+`--reviewer` is supplied. Select `--tier inference` or `--reviewer codex`
+to send the evidence to your Codex account.
 The reviewer judges the evidence; you decide which proposed changes to accept.
 
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--classifier none\|jev` | `none` | Optionally asks Jev to label retained content. |
-| `--reviewer manual\|codex` | `codex` (legacy PDF tiers use `manual`) | Leaves the bundle for you, or runs Codex to write a JSON review. |
+| `--reviewer manual\|codex` | `manual`; `--tier inference` selects `codex` | Leaves the bundle for you, or runs Codex to write a JSON review. |
 | `--model <id>` | `gpt-5.6-luna` | Selects the Codex reviewer model. Requires Codex review. |
 
 For HTML, automatic review and optional Jev classification require `--output`. Use a new directory
@@ -593,3 +594,6 @@ with check exit code 2.
 
 Read the review before sharing it. The reviewer reads untrusted course content
 and can read files; its environment is limited, but its output still needs your review.
+
+The reviewer process can read credentials embedded in proxy URLs. Check forwards
+HTTP_PROXY, HTTPS_PROXY, ALL_PROXY and NO_PROXY, in either case, for proxy-only networks.

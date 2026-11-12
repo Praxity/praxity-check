@@ -83,9 +83,9 @@ async function codexReview(directory: string, model: string, prompt: string, ima
 	const output = await open(raw, "wx", 0o600); await output.close();
 	const log = await open(join(directory, "reviewer.log"), "wx", 0o600);
 	const args = ["exec", "--ignore-user-config", "--ignore-rules", "--ephemeral", "--skip-git-repo-check", "-C", directory, "-s", "read-only", "-c", 'approval_policy="never"', "-c", 'web_search="disabled"', "-m", model, ...(model === DEFAULT_REVIEW_MODEL ? ["-c", 'model_reasoning_effort="max"'] : []), ...images.flatMap(path => ["--image", path]), "--output-schema", join(directory, "review.schema.json"), "-o", raw, "-"];
-	// Course text is untrusted: forward only runtime locations and Codex authentication.
+	// Course text is untrusted: forward only runtime locations, Codex authentication and proxy settings.
 	// https://learn.chatgpt.com/docs/config-file/environment-variables
-	const allowed = new Set(["PATH", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "CODEX_HOME", "CODEX_SQLITE_HOME", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT", "CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"]);
+	const allowed = new Set(["PATH", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "CODEX_HOME", "CODEX_SQLITE_HOME", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT", "CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"]);
 	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => allowed.has(process.platform === "win32" ? key.toUpperCase() : key)));
 	try {
 		await new Promise<void>((resolve, reject) => {

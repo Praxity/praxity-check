@@ -4,6 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
+import { parseArgs } from "../src/html-cli.ts";
 import { syncBuiltinESMExports } from "node:module";
 import { classifyReview, parseReviewExecutionOption, runPreparedReview, validateReviewExecutionOptions, type ReviewExecutionOptions } from "../src/review-runner.ts";
 
@@ -123,9 +124,13 @@ const prompt = fs.readFileSync(0, 'utf8');
 	const missingOutput = spawnSync(process.execPath, [cli, "prepare-review", source, "--tier", "inference"], { encoding: "utf8", env });
 	assert.equal(missingOutput.status, 2);
 	assert.match(missingOutput.stderr, /require --output/);
-	const stdoutOnly = spawnSync(process.execPath, [cli, "prepare-review", source, "--reviewer", "manual"], { encoding: "utf8", env });
+	const stdoutOnly = spawnSync(process.execPath, [cli, "prepare-review", source], { encoding: "utf8", env });
 	assert.equal(stdoutOnly.status, 0, stdoutOnly.stderr);
 	assert.match(stdoutOnly.stdout, /Review/);
+	const localBundle = join(dir, "html-local-default");
+	const local = spawnSync(process.execPath, [cli, "prepare-review", source, "--output", localBundle], { encoding: "utf8", env });
+	assert.equal(local.status, 0, local.stderr);
+	for (const name of ["reviewer.log", "review.json", "review-run.json"]) await assert.rejects(stat(join(localBundle, name)), { code: "ENOENT" });
 	for (const [kind, target] of [["html", source], ["pdf", document]]) {
 		const manual = join(dir, `${kind}-manual`);
 		const prepared = run(target!, manual, ["--reviewer", "manual"]);
@@ -179,6 +184,8 @@ test("reviewer starts with only runtime and Codex authentication environment var
 	await writeFile(join(dir, "review-prompt.md"), "Review this evidence");
 	const previous = { ...process.env };
 	Object.assign(process.env, { GITHUB_TOKEN: "synthetic-secret", CLOUD_SECRET: "synthetic-secret", JEV_API_KEY: "synthetic-secret", NODE_OPTIONS: "--invalid-hook", CODEX_API_KEY: "synthetic-auth", CODEX_HOME: dir });
+	const proxyNames = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+	for (const name of proxyNames) process.env[name] = name.toLowerCase() === "no_proxy" ? "localhost" : "http://synthetic:credential@proxy.invalid:8080";
 	t.after(() => { process.env = previous; });
 	const spawn = childProcess.spawn;
 	t.mock.method(childProcess, "spawn", (_command: string, args: string[], options: Parameters<typeof spawn>[2]) => spawn(process.execPath, ["-e", `const fs = require('node:fs'); fs.writeFileSync('child-env.json', JSON.stringify(process.env)); fs.writeFileSync('review-response.txt', JSON.stringify({reviewer:{model:'preferred-model'}}));`, "--", ...args], options));
@@ -189,14 +196,23 @@ test("reviewer starts with only runtime and Codex authentication environment var
 	for (const key of ["GITHUB_TOKEN", "CLOUD_SECRET", "JEV_API_KEY", "NODE_OPTIONS"]) assert.equal(env[key], undefined);
 	assert.equal(env.CODEX_API_KEY, "synthetic-auth");
 	assert.equal(env.CODEX_HOME, dir);
+	for (const name of proxyNames) {
+		const value = process.platform === "win32" ? Object.entries(env).find(([key]) => key.toUpperCase() === name.toUpperCase())?.[1] : env[name];
+		assert.equal(value, name.toLowerCase() === "no_proxy" ? "localhost" : "http://synthetic:credential@proxy.invalid:8080");
+	}
 	assert.ok(env.PATH || env.Path);
 	assert.equal(JSON.parse(await readFile(join(dir, "review.json"), "utf8")).reviewer.model, "preferred-model");
 });
 
-test("HTML defaults to Codex with or without an explicit inference tier", () => {
-	for (const tier of [[], ["--tier", "inference"]]) {
-		const result = spawnSync(process.execPath, [cli, "prepare-review", ".", ...tier], { encoding: "utf8" });
-		assert.equal(result.status, 2);
-		assert.match(result.stderr, /require --output/);
-	}
+test("prepare-review without a tier stays manual and never spawns Codex", async t => {
+	const options = parseArgs(["prepare-review", "."]);
+	assert.equal(options.reviewer, "manual");
+	const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("Unexpected reviewer process"); });
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	await runPreparedReview("unused-manual-bundle", options, input, async () => {});
+	assert.equal(spawn.mock.callCount(), 0);
+	assert.equal(parseArgs(["prepare-review", ".", "--tier", "inference", "--output", "bundle"]).reviewer, "codex");
+	assert.equal(parseArgs(["prepare-review", ".", "--reviewer", "codex", "--output", "bundle"]).reviewer, "codex");
+	assert.equal(parseArgs(["prepare-review", ".", "--tier", "inference", "--reviewer", "manual"]).reviewer, "manual");
 });
