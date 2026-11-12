@@ -205,14 +205,19 @@ test("reviewer starts with only runtime and Codex authentication environment var
 });
 
 test("prepare-review without a tier stays manual and never spawns Codex", async t => {
-	const options = parseArgs(["prepare-review", "."]);
+	const prepareOptions = (args: string[]) => {
+		const parsed = parseArgs(["prepare-review", ".", ...args]);
+		assert.ok(parsed.command === "prepare-review");
+		return parsed;
+	};
+	const options = prepareOptions([]);
 	assert.equal(options.reviewer, "manual");
 	const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("Unexpected reviewer process"); });
 	syncBuiltinESMExports();
 	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
 	await runPreparedReview("unused-manual-bundle", options, input, async () => {});
 	assert.equal(spawn.mock.callCount(), 0);
-	assert.equal(parseArgs(["prepare-review", ".", "--tier", "inference", "--output", "bundle"]).reviewer, "codex");
-	assert.equal(parseArgs(["prepare-review", ".", "--reviewer", "codex", "--output", "bundle"]).reviewer, "codex");
-	assert.equal(parseArgs(["prepare-review", ".", "--tier", "inference", "--reviewer", "manual"]).reviewer, "manual");
+	assert.equal(prepareOptions(["--tier", "inference", "--output", "bundle"]).reviewer, "codex");
+	assert.equal(prepareOptions(["--reviewer", "codex", "--output", "bundle"]).reviewer, "codex");
+	assert.equal(prepareOptions(["--tier", "inference", "--reviewer", "manual"]).reviewer, "manual");
 });
