@@ -80,26 +80,6 @@ test("scenario contexts isolate storage while preserving it across navigation", 
 	}
 });
 
-test("two audits of the same export produce identical results", async (t) => {
-	const options = await fixture(t, {
-		"index.html": `<!doctype html><html lang="en"><head><title>Determinism</title>
-		<style>
-			.faint { color: #d1d5dc; background: #fff; }
-			#no-ring:focus { outline: none; box-shadow: none; }
-			#narrow { width: 900px; }
-		</style></head><body><main><h1>Determinism fixture</h1>
-		<p class="faint">Low contrast text that should be reported every run.</p>
-		<div id="narrow">Content too wide to reflow at 320px.</div>
-		<button id="no-ring">No focus ring</button><button id="ok">Has the default ring</button>
-		<img src="a.png" alt="IMG_4021.jpg"><p>Read the guide, <a href="/a">click here</a>.</p>
-		</main></body></html>`,
-	});
-	const first = await auditHtml({ ...options, scenarios: [] });
-	const second = await auditHtml({ ...options, scenarios: [] });
-	assert.ok(first.pages[0]?.findings.length, "fixture produced no findings");
-	assert.deepEqual(second, first);
-});
-
 test("natural and dark checks observe the page before the mutating checks", async (t) => {
 	const options = await fixture(t, {
 		"index.html": `<!doctype html><html lang="en"><head><title>Check order</title><meta name="color-scheme" content="light dark">

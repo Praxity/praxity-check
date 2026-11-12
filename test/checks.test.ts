@@ -8,7 +8,6 @@ import packageJson from "../package.json" with { type: "json" };
 import {
 	altTextQuality,
 	audioAutoplay,
-	characterKeyShortcuts,
 	darkSchemeVisuals,
 	focusIndicators,
 	focusNotObscured,
@@ -18,10 +17,8 @@ import {
 	keyboardScrollableRegions,
 	linkTextQuality,
 	localResources,
-	mouseOnlyControls,
 	nonTextContrast,
 	pauseStopHide,
-	pointerCancellation,
 	reflow,
 	runAxe,
 	scopeCoverage,
@@ -986,29 +983,24 @@ describe("automated checks fire on known defects", () => {
 		);
 	});
 
-	test("mouseOnlyControls finds a click-only div but not a native button or static chart", async () => {
-		const broken = await open("mouse-broken.html");
-		const brokenResult = await mouseOnlyControls(broken, "mouse-broken.html");
-		await broken.close();
-		assert.equal(brokenResult.findings.filter((f) => f.rule === "mouse-only-control").length, 1);
+	// Production runs these three analyses only through interactionChecks.
+	for (const [label, rule, prefix, cleanReason] of [
+		["finds a click-only div but not a native button or static chart", "mouse-only-control", "mouse", "native button or static chart was reported as mouse-only"],
+		["finds a bare document key but not Ctrl+key", "character-key-shortcut", "shortcut", "modified shortcut was reported as character-only"],
+		["finds down-event completion but not click activation", "pointer-down-activation", "pointer", "up-event click activation was reported"],
+	] as const) {
+		test(`interactionChecks ${label}`, async () => {
+			const broken = await open(`${prefix}-broken.html`);
+			const brokenResult = await interactionChecks(broken, `${prefix}-broken.html`);
+			await broken.close();
+			assert.equal(brokenResult.findings.filter((f) => f.rule === rule).length, 1);
 
-		const clean = await open("mouse-clean.html");
-		const cleanResult = await mouseOnlyControls(clean, "mouse-clean.html");
-		await clean.close();
-		assert.equal(cleanResult.findings.length, 0, "native button or static chart was reported as mouse-only");
-	});
-
-	test("characterKeyShortcuts finds a bare document key but not Ctrl+key", async () => {
-		const broken = await open("shortcut-broken.html");
-		const brokenResult = await characterKeyShortcuts(broken, "shortcut-broken.html");
-		await broken.close();
-		assert.equal(brokenResult.findings.filter((f) => f.rule === "character-key-shortcut").length, 1);
-
-		const clean = await open("shortcut-clean.html");
-		const cleanResult = await characterKeyShortcuts(clean, "shortcut-clean.html");
-		await clean.close();
-		assert.equal(cleanResult.findings.length, 0, "modified shortcut was reported as character-only");
-	});
+			const clean = await open(`${prefix}-clean.html`);
+			const cleanResult = await interactionChecks(clean, `${prefix}-clean.html`);
+			await clean.close();
+			assert.equal(cleanResult.findings.length, 0, cleanReason);
+		});
+	}
 
 	test("interactionChecks feeds all three analyses from one snapshot", async () => {
 		const broken = await open("interaction-broken.html");
@@ -1042,18 +1034,6 @@ describe("automated checks fire on known defects", () => {
 		const cleanResult = await pauseStopHide(clean, "motion-clean.html");
 		await clean.close();
 		assert.equal(cleanResult.findings.length, 0, "motion with a working pause control was reported");
-	});
-
-	test("pointerCancellation finds down-event completion but not click activation", async () => {
-		const broken = await open("pointer-broken.html");
-		const brokenResult = await pointerCancellation(broken, "pointer-broken.html");
-		await broken.close();
-		assert.equal(brokenResult.findings.filter((f) => f.rule === "pointer-down-activation").length, 1);
-
-		const clean = await open("pointer-clean.html");
-		const cleanResult = await pointerCancellation(clean, "pointer-clean.html");
-		await clean.close();
-		assert.equal(cleanResult.findings.length, 0, "up-event click activation was reported");
 	});
 
 	test("textScale finds newly clipped text and restores the page", async () => {

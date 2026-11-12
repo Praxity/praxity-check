@@ -124,14 +124,16 @@ test("setup installs ZIP browser, Java and headless veraPDF fixtures and invento
     assert.deepEqual((await setup({ yes: true }, host)).installed, []);
 });
 
+// Every hostile variable is set at once; the process-boundary assertions below check each one by name.
+const UNTRUSTED_INSTALLER_VARIABLES = [
+ "PLAYWRIGHT_DOWNLOAD_HOST", "npm_config_playwright_download_host", "npm_package_config_playwright_download_host",
+ "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "npm_config_playwright_chromium_download_host", "npm_package_config_playwright_chromium_download_host",
+ "PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST", "npm_config_playwright_firefox_download_host", "npm_package_config_playwright_firefox_download_host",
+ "PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST", "npm_config_playwright_webkit_download_host", "npm_package_config_playwright_webkit_download_host",
+ "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
+];
 for (const offline of [false, true]) {
- for (const variable of [
-  "PLAYWRIGHT_DOWNLOAD_HOST", "npm_config_playwright_download_host", "npm_package_config_playwright_download_host",
-  "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "npm_config_playwright_chromium_download_host", "npm_package_config_playwright_chromium_download_host",
-  "PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST", "npm_config_playwright_firefox_download_host", "npm_package_config_playwright_firefox_download_host",
-  "PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST", "npm_config_playwright_webkit_download_host", "npm_package_config_playwright_webkit_download_host",
-  "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
- ]) test(`production browser installer uses verified archives despite ${variable} ${offline ? "offline" : "downloaded"}`, async t => {
+ test(`production browser installer uses verified archives despite every download-host and proxy variable ${offline ? "offline" : "downloaded"}`, async t => {
   const { root } = await fixture(t, process.platform, process.arch);
   const component = (await componentManifest({ platform: process.platform, arch: process.arch })).find(c => c.id === "browser")!;
   const archives = new Map<string, Buffer>();
@@ -154,7 +156,8 @@ for (const offline of [false, true]) {
   assert.ok(address && typeof address !== "string");
   const env: NodeJS.ProcessEnv = { ...process.env, CHECK_COMPONENTS_DIR: join(root, "components"),
    CHECK_TEST_UNTRUSTED_INSTALLER_OPTION: "must not cross the allowlist", NODE_OPTIONS: "--require=missing-installer-hook",
-   NO_PROXY: "unrelated.example", no_proxy: "unrelated.example", [variable]: `http://127.0.0.1:${address.port}` };
+   NO_PROXY: "unrelated.example", no_proxy: "unrelated.example",
+   ...Object.fromEntries(UNTRUSTED_INSTALLER_VARIABLES.map(variable => [variable, `http://127.0.0.1:${address.port}`])) };
   const host = setupHost({ env, print: () => {}, manifest: async () => [component],
    fetchFile: async url => new Response(Uint8Array.from(archives.get(basename(new URL(url).pathname))!)) });
   const run = host.run;

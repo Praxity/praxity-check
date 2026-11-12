@@ -11,7 +11,6 @@ import { openInput, UnsafeArchiveError } from "../src/input.ts";
 
 const MAX_TOTAL_BYTES = 1024 * 1024;
 const TEST_LIMITS = { maxTotalBytes: MAX_TOTAL_BYTES };
-const MAX_ENTRIES = 20_000;
 
 type ZipEntry = {
 	name: string;
@@ -155,13 +154,14 @@ test("openInput rejects unsafe archives and extracts safe ones", async (t) => {
 			assert.ok((await rejection(archive)) instanceof UnsafeArchiveError);
 		});
 
-		await t.test("rejects more than MAX_ENTRIES", async () => {
+		// setup.test.ts proves the production 20000-entry cap through the same extractor.
+		await t.test("rejects more entries than the limit", async () => {
 			const archive = join(root, "too-many.zip");
-			await writeFile(
-				archive,
-				zip(Array.from({ length: MAX_ENTRIES + 1 }, () => ({ name: "directory/" }))),
-			);
-			assert.ok((await rejection(archive)) instanceof UnsafeArchiveError);
+			await writeFile(archive, zip(Array.from({ length: 4 }, () => ({ name: "directory/" }))));
+			const error = await openInput(archive, { ...TEST_LIMITS, maxEntries: 3 }).then(async (input) => { await input.cleanup(); return null; }, (error: unknown) => error);
+			assert.ok(error instanceof UnsafeArchiveError);
+			const atLimit = await openInput(archive, { ...TEST_LIMITS, maxEntries: 4 });
+			await atLimit.cleanup();
 		});
 
 		await t.test("rejects total expanded bytes over MAX_TOTAL_BYTES", async () => {
