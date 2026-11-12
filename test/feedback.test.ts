@@ -89,4 +89,3 @@ test("PDF feedback separates extraction, check domains, sampled inference and pa
 	for (const entry of feedback.coverage) assert.ok(resolvePointer(report, entry.source));
 	assert.ok(!JSON.stringify(feedback).includes('"observation"'));
 });
-

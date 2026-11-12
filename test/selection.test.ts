@@ -125,4 +125,3 @@ test("PDF domain and tier selection changes executed checks and keeps inference 
 	assert.ok(enriched.manifest.designEvidence);
 	assert.equal(enriched.manifest.designEvidence.requirements.minTextSizePt, 10);
 });
-
