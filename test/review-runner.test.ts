@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import childProcess, { spawnSync } from "node:child_process";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
+import { syncBuiltinESMExports } from "node:module";
 import { classifyReview, parseReviewExecutionOption, runPreparedReview, validateReviewExecutionOptions, type ReviewExecutionOptions } from "../src/review-runner.ts";
 
 const cli = resolve("src/cli.ts");
@@ -86,7 +87,7 @@ test("CLI runs an authenticated reviewer command for HTML and PDF, validates bin
 	const fixture = join(bin, "reviewer.cjs");
 	const reviewer = `
 const fs = require('node:fs');
-const args = process.argv.slice(process.platform === 'win32' ? 1 : 2);
+const args = process.argv.slice(2);
 const prompt = fs.readFileSync(0, 'utf8');
  const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
  const schema = JSON.parse(fs.readFileSync('review.schema.json', 'utf8'));
@@ -94,24 +95,23 @@ const prompt = fs.readFileSync(0, 'utf8');
  const model = args[args.indexOf('-m') + 1];
  const evidence = html ? JSON.parse(fs.readFileSync('evidence.json', 'utf8')) : null;
  const review = html ? { schemaVersion: 'html-review-2', contentSha256: manifest.contentSha256, evidenceSha256: manifest.evidenceSha256, tier: 'inference', checks: ['accessibility'], pagesReviewed: evidence.pages.filter(page => page.audited).map(page => page.file), candidatesReviewed: evidence.candidates.map(candidate => candidate.id), reviewer: { model }, findings: [] } : { schemaVersion: 'pdf-review-4', documentSha256: manifest.documentSha256, bundleSha256: schema.properties.bundleSha256.const, tier: 'inference', focus: manifest.focus, checks: manifest.checks, pagesReviewed: manifest.selectedPages, reviewer: { model }, findings: [] };
- if (process.env.MOCK_BAD_REVIEW) review[html ? 'evidenceSha256' : 'bundleSha256'] = '0'.repeat(64);
- if (process.env.MOCK_LEGACY_REVIEW) { review.schemaVersion = 'pdf-review-3'; delete review.bundleSha256; }
- if (process.env.MOCK_WRONG_MODEL) review.reviewer.model = 'GPT-5';
+ if (process.cwd().endsWith('-failed')) review[html ? 'evidenceSha256' : 'bundleSha256'] = '0'.repeat(64);
+ if (process.cwd().endsWith('-downgraded')) { review.schemaVersion = 'pdf-review-3'; delete review.bundleSha256; }
+ if (process.cwd().endsWith('-wrong-model')) review.reviewer.model = 'GPT-5';
  fs.writeFileSync(args[args.indexOf('-o') + 1], JSON.stringify(review));
  console.log(JSON.stringify({ args, prompt, jevKey: process.env.JEV_API_KEY ?? null }));
  process.exit(0);
 `;
 	if (process.platform === "win32") {
-		// A real .exe keeps shell:false and subprocess isolation. The preload runs
-		// only in this copied Node executable, before Node treats "exec" as a file.
-		await copyFile(process.execPath, executable);
-		await writeFile(fixture, `if (process.execPath === ${JSON.stringify(executable)}) {${reviewer}}`);
+		// Intercept only the executable boundary in the parent; no Node hook reaches the reviewer.
+		await writeFile(fixture, reviewer);
+		await writeFile(join(bin, "launch.cjs"), `const cp = require('node:child_process'); const spawn = cp.spawn; cp.spawn = (command, args, options) => command === 'codex' ? spawn(process.execPath, [${JSON.stringify(fixture)}, ...args], options) : spawn(command, args, options); require('node:module').syncBuiltinESMExports();`);
 	} else {
 		await writeFile(executable, `#!${process.execPath}\n${reviewer}`);
 		await chmod(executable, 0o700);
 	}
 	const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, JEV_API_KEY: "do-not-forward-to-reviewer" };
-	if (process.platform === "win32") env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(fixture)}`;
+	if (process.platform === "win32") env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(join(bin, "launch.cjs"))}`;
 	const run = (target: string, bundle: string, extra: string[] = [], environment = env) => spawnSync(process.execPath, [cli, "prepare-review", target, "--tier", "inference", "--output", bundle, ...extra], { encoding: "utf8", env: environment });
 	const legacy = spawnSync(process.execPath, [cli, "prepare-review", document, "--tier", "visual", "--reviewer", "codex"], { encoding: "utf8", env });
 	assert.equal(legacy.status, 2);
@@ -123,7 +123,7 @@ const prompt = fs.readFileSync(0, 'utf8');
 	const missingOutput = spawnSync(process.execPath, [cli, "prepare-review", source, "--tier", "inference"], { encoding: "utf8", env });
 	assert.equal(missingOutput.status, 2);
 	assert.match(missingOutput.stderr, /require --output/);
-	const stdoutOnly = spawnSync(process.execPath, [cli, "prepare-review", source], { encoding: "utf8", env });
+	const stdoutOnly = spawnSync(process.execPath, [cli, "prepare-review", source, "--reviewer", "manual"], { encoding: "utf8", env });
 	assert.equal(stdoutOnly.status, 0, stdoutOnly.stderr);
 	assert.match(stdoutOnly.stdout, /Review/);
 	for (const [kind, target] of [["html", source], ["pdf", document]]) {
@@ -169,5 +169,34 @@ const prompt = fs.readFileSync(0, 'utf8');
 			assert.match(oldSchema.stderr, /requires pdf-review-4/);
 			await assert.rejects(stat(join(downgraded, "review.json")), { code: "ENOENT" });
 		}
+	}
+});
+
+test("reviewer starts with only runtime and Codex authentication environment variables", async t => {
+	const dir = await mkdtemp(join(tmpdir(), "check-review-env-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	await writeFile(join(dir, "manifest.json"), "{}");
+	await writeFile(join(dir, "review-prompt.md"), "Review this evidence");
+	const previous = { ...process.env };
+	Object.assign(process.env, { GITHUB_TOKEN: "synthetic-secret", CLOUD_SECRET: "synthetic-secret", JEV_API_KEY: "synthetic-secret", NODE_OPTIONS: "--invalid-hook", CODEX_API_KEY: "synthetic-auth", CODEX_HOME: dir });
+	t.after(() => { process.env = previous; });
+	const spawn = childProcess.spawn;
+	t.mock.method(childProcess, "spawn", (_command: string, args: string[], options: Parameters<typeof spawn>[2]) => spawn(process.execPath, ["-e", `const fs = require('node:fs'); fs.writeFileSync('child-env.json', JSON.stringify(process.env)); fs.writeFileSync('review-response.txt', JSON.stringify({reviewer:{model:'preferred-model'}}));`, "--", ...args], options));
+	syncBuiltinESMExports();
+	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+	await runPreparedReview(dir, { reviewer: "codex", model: "preferred-model" }, input, async () => {});
+	const env = JSON.parse(await readFile(join(dir, "child-env.json"), "utf8"));
+	for (const key of ["GITHUB_TOKEN", "CLOUD_SECRET", "JEV_API_KEY", "NODE_OPTIONS"]) assert.equal(env[key], undefined);
+	assert.equal(env.CODEX_API_KEY, "synthetic-auth");
+	assert.equal(env.CODEX_HOME, dir);
+	assert.ok(env.PATH || env.Path);
+	assert.equal(JSON.parse(await readFile(join(dir, "review.json"), "utf8")).reviewer.model, "preferred-model");
+});
+
+test("HTML defaults to Codex with or without an explicit inference tier", () => {
+	for (const tier of [[], ["--tier", "inference"]]) {
+		const result = spawnSync(process.execPath, [cli, "prepare-review", ".", ...tier], { encoding: "utf8" });
+		assert.equal(result.status, 2);
+		assert.match(result.stderr, /require --output/);
 	}
 });

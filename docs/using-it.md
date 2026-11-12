@@ -256,14 +256,14 @@ inspected that evidence or reached the right conclusion.
 `prepare-review --tier inference` launches the installed Codex CLI by default.
 Sign in with your subscription first. Luna reviews the evidence automatically.
 Use `--reviewer manual` to prepare files for your preferred AI app instead.
-Older HTML commands without `--tier inference` and legacy PDF `visual` or
-`usability` tiers still prepare manual evidence unless you select a reviewer.
+HTML uses Codex whether or not you type `--tier inference`. Legacy PDF
+`visual` and `usability` tiers prepare manual evidence.
 The reviewer judges the evidence; you decide which proposed changes to accept.
 
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--classifier none\|jev` | `none` | Optionally asks Jev to label retained content. |
-| `--reviewer manual\|codex` | `codex` with `--tier inference`; otherwise `manual` | Leaves the bundle for you, or runs Codex to write a JSON review. |
+| `--reviewer manual\|codex` | `codex` (legacy PDF tiers use `manual`) | Leaves the bundle for you, or runs Codex to write a JSON review. |
 | `--model <id>` | `gpt-5.6-luna` | Selects the Codex reviewer model. Requires Codex review. |
 
 For HTML, automatic review and optional Jev classification require `--output`. Use a new directory
@@ -590,3 +590,6 @@ setup. An intact setup installation takes precedence over Java or veraPDF on
 PATH. Existing Playwright developer caches remain usable and are reported as
 explicit. Missing components give a setup command and incomplete coverage,
 with check exit code 2.
+
+Read the review before sharing it. The reviewer reads untrusted course content
+and can read files; its environment is limited, but its output still needs your review.
