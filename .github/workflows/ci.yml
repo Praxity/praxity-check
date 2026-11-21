@@ -20,7 +20,7 @@ jobs:
           fi
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24.22.1
           package-manager-cache: false
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
@@ -50,51 +50,58 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24.22.1
           package-manager-cache: false
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm typecheck
       - name: PDF and component tests
         run: node --test test/pdf*.test.ts test/components.test.ts test/setup.test.ts
-      - name: Build and test the standalone Windows package
+      - name: Pack and install into a clean npm project
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $nodeExe = (Get-Command node).Source
-          $nodeDist = Join-Path $env:RUNNER_TEMP 'check-node'
-          New-Item -ItemType Directory $nodeDist | Out-Null
-          Copy-Item $nodeExe "$nodeDist/node.exe"
-          $version = & $nodeExe -p 'process.version'
-          Invoke-WebRequest "https://raw.githubusercontent.com/nodejs/node/$version/LICENSE" -OutFile "$nodeDist/LICENSE"
-          $env:CHECK_NODE_DIST = $nodeDist
-          corepack pnpm test:package
-          if ($LASTEXITCODE -ne 0) { throw 'Package tests failed' }
-          node scripts/package.mjs --platform win32 --arch x64 --node $nodeDist --output "$env:RUNNER_TEMP/check"
-          if ($LASTEXITCODE -ne 0) { throw 'Package build failed' }
-      - name: Install components and prove the package with only Node on PATH
+          $env:npm_config_cache = "$env:RUNNER_TEMP/check-npm-cache"
+          $env:npm_config_prefix = "$env:RUNNER_TEMP/check-npm-prefix"
+          npm pack --pack-destination "$env:RUNNER_TEMP"
+          if ($LASTEXITCODE -ne 0) { throw 'npm pack failed' }
+          New-Item -ItemType Directory "$env:RUNNER_TEMP/check-install" | Out-Null
+          Set-Location "$env:RUNNER_TEMP/check-install"
+          npm init --yes
+          if ($LASTEXITCODE -ne 0) { throw 'npm init failed' }
+          npm install (Get-ChildItem "$env:RUNNER_TEMP/praxity-check-*.tgz").FullName
+          if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }
+      - name: Prove the installed npm package with only Node on PATH
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $artifact = "$env:RUNNER_TEMP/check"
-          $nodeExe = "$artifact/runtime/node.exe"
+          $nodeDir = Split-Path (Get-Command node).Source
+          $env:npm_config_cache = "$env:RUNNER_TEMP/check-npm-cache"
+          $env:npm_config_prefix = "$env:RUNNER_TEMP/check-npm-prefix"
           $env:CHECK_COMPONENTS_DIR = "$env:RUNNER_TEMP/check-components"
-          foreach ($name in @('JAVA_HOME', 'JAVACMD', 'VERAPDF', 'VERAPDF_JAVA', 'VERAPDF_CLASSPATH', 'PLAYWRIGHT_BROWSERS_PATH')) {
+          New-Item -ItemType Directory "$env:RUNNER_TEMP/check-clean" | Out-Null
+          Copy-Item bench/wcag/focus-indicator-removed/clean.html "$env:RUNNER_TEMP/check-clean/"
+          $pdf = "$env:GITHUB_WORKSPACE/test/fixtures/pdf-facts.pdf"
+          foreach ($name in @('JAVA_HOME', 'JAVACMD', 'VERAPDF', 'VERAPDF_JAVA', 'VERAPDF_CLASSPATH', 'PLAYWRIGHT_BROWSERS_PATH', 'PLAYWRIGHT_HOST_PLATFORM_OVERRIDE', 'npm_config_playwright_browsers_path', 'npm_package_config_playwright_browsers_path')) {
             Remove-Item "Env:$name" -ErrorAction SilentlyContinue
           }
-          $originalPath = $env:PATH
-          try {
-            $env:PATH = "$artifact/runtime"
-            & "$artifact/bin/praxity-check.cmd" setup --yes pdf html
-            if ($LASTEXITCODE -ne 0) { throw 'Setup failed' }
-            & "$artifact/bin/praxity-check.cmd" doctor --json
-            if ($LASTEXITCODE -ne 0) { throw 'Doctor failed' }
-            & "$artifact/bin/praxity-check.cmd" check test/fixtures/pdf-facts.pdf --checks accessibility --tier deterministic --json "$env:RUNNER_TEMP/pdf-report.json"
-            if ($LASTEXITCODE -ne 1) { throw 'PDF fixture must report accessibility findings' }
-          } finally { $env:PATH = $originalPath }
-          $env:CHECK_ARTIFACT = $artifact
-          corepack pnpm test:package
-          if ($LASTEXITCODE -ne 0) { throw 'Installed-component package proof failed' }
+          Set-Location "$env:RUNNER_TEMP/check-install"
+          $env:PATH = $nodeDir
+          npx --no-install praxity-check --help
+          if ($LASTEXITCODE -ne 0) { throw 'Help failed' }
+          npx --no-install praxity-check setup --yes pdf html
+          if ($LASTEXITCODE -ne 0) { throw 'Setup failed' }
+          npx --no-install praxity-check doctor --json | Out-File -Encoding utf8 "$env:RUNNER_TEMP/doctor.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Doctor failed' }
+          npx --no-install praxity-check check $pdf --checks accessibility --tier deterministic --json "$env:RUNNER_TEMP/pdf-report.json"
+          if ($LASTEXITCODE -ne 1) { throw 'PDF fixture must report accessibility findings' }
+          npx --no-install praxity-check check "$env:RUNNER_TEMP/check-clean" --min-confidence medium --json "$env:RUNNER_TEMP/html-report.json"
+          if ($LASTEXITCODE -ne 0) { throw 'HTML audit failed' }
+          node "$env:GITHUB_WORKSPACE/scripts/verify-npm-smoke.mjs"
+          if ($LASTEXITCODE -ne 0) { throw 'Report assertions failed' }
+          $env:CHECK_NPM_INSTALL = "$env:RUNNER_TEMP/check-install"
+          node --test --test-name-pattern='installed npm package' "$env:GITHUB_WORKSPACE/scripts/package.test.mjs"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed npm audit tests failed' }
 
   posix-package:
     name: ${{ matrix.name }}
@@ -104,18 +111,14 @@ jobs:
         include:
           - name: macos-package
             runner: macos-latest
-            platform: darwin
-            arch: arm64
           - name: linux-package
             runner: ubuntu-latest
-            platform: linux
-            arch: x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24.22.1
           package-manager-cache: false
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
@@ -125,20 +128,16 @@ jobs:
       - run: corepack pnpm typecheck
       - name: PDF and component tests
         run: node --test test/pdf*.test.ts test/components.test.ts test/setup.test.ts
-      - name: Build and test the standalone package
+      - name: Pack and install into a clean npm project
         shell: bash
-        env:
-          CHECK_PLATFORM: ${{ matrix.platform }}
-          CHECK_ARCH: ${{ matrix.arch }}
         run: |
-          node_dist="$RUNNER_TEMP/check-node"
-          mkdir -p "$node_dist/bin"
-          cp "$(command -v node)" "$node_dist/bin/node"
-          version=$(node -p 'process.version')
-          curl --fail --location "https://raw.githubusercontent.com/nodejs/node/$version/LICENSE" --output "$node_dist/LICENSE"
-          export CHECK_NODE_DIST="$node_dist"
-          corepack pnpm test:package
-          node scripts/package.mjs --platform "$CHECK_PLATFORM" --arch "$CHECK_ARCH" --node "$node_dist" --output "$RUNNER_TEMP/check"
+          export npm_config_cache="$RUNNER_TEMP/check-npm-cache"
+          export npm_config_prefix="$RUNNER_TEMP/check-npm-prefix"
+          npm pack --pack-destination "$RUNNER_TEMP"
+          mkdir "$RUNNER_TEMP/check-install"
+          cd "$RUNNER_TEMP/check-install"
+          npm init --yes
+          npm install "$RUNNER_TEMP"/praxity-check-*.tgz
       - name: Isolate macOS from preinstalled Java
         if: runner.os == 'macOS'
         shell: bash
@@ -151,17 +150,20 @@ jobs:
               sudo mv "$directory" "$RUNNER_TEMP/system-java/"
             fi
           done
-      - name: Install components and prove the package with only Node on PATH
+      - name: Prove the installed npm package with only Node on PATH
         shell: bash
         run: |
-          artifact="$RUNNER_TEMP/check"
+          node_dir="$(dirname "$(command -v node)")"
+          export npm_config_cache="$RUNNER_TEMP/check-npm-cache"
+          export npm_config_prefix="$RUNNER_TEMP/check-npm-prefix"
           export CHECK_COMPONENTS_DIR="$(mktemp -d "$RUNNER_TEMP/check-components.XXXXXX")"
           mkdir "$RUNNER_TEMP/check-clean"
           cp bench/wcag/focus-indicator-removed/clean.html "$RUNNER_TEMP/check-clean/"
           unset JAVA_HOME JAVACMD VERAPDF VERAPDF_JAVA VERAPDF_CLASSPATH PLAYWRIGHT_BROWSERS_PATH PLAYWRIGHT_HOST_PLATFORM_OVERRIDE
           unset npm_config_playwright_browsers_path npm_package_config_playwright_browsers_path
-          original_path="$PATH"
-          export PATH="$artifact/runtime"
+          cd "$RUNNER_TEMP/check-install"
+          export npm_config_script_shell=/bin/sh
+          export PATH="$node_dir"
           expect_exit() {
             label="$1"
             expected="$2"
@@ -171,106 +173,11 @@ jobs:
             echo "$label exit code: $code" >&2
             test "$code" -eq "$expected"
           }
-          expect_exit setup 0 "$artifact/bin/praxity-check" setup --yes pdf html
-          expect_exit doctor 0 "$artifact/bin/praxity-check" doctor --json >"$RUNNER_TEMP/doctor.json"
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          const text = readFileSync(`${process.env.RUNNER_TEMP}/doctor.json`, 'utf8');
-          console.log(text);
-          const doctor = JSON.parse(text);
-          assert.deepEqual(doctor.components.map(component => component.id).sort(), ['browser', 'java', 'verapdf']);
-          for (const component of doctor.components) {
-            assert.equal(component.usable, true, component.id);
-            assert.equal(component.source, 'setup', component.id);
-            assert.equal(component.pinned, true, component.id);
-            assert.equal(component.inventory, 'intact', component.id);
-          }
-          NODE
-          expect_exit PDF 1 "$artifact/bin/praxity-check" check test/fixtures/pdf-facts.pdf --checks accessibility --tier deterministic --json "$RUNNER_TEMP/pdf-report.json"
-          expect_exit HTML 0 "$artifact/bin/praxity-check" check "$RUNNER_TEMP/check-clean" --min-confidence medium --json "$RUNNER_TEMP/html-report.json"
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          const pdf = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/pdf-report.json`, 'utf8'));
-          assert.equal(pdf.machineStatus, 'complete');
-          assert.equal(pdf.pdfuaValidation.profile, 'ua1');
-          assert.equal(pdf.pdfuaValidation.coverage.status, 'complete');
-          assert.ok(pdf.findings.length > 0);
-          const html = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/html-report.json`, 'utf8'));
-          assert.equal(html.pages.length, 1);
-          assert.ok(html.pages.every(page => page.audited));
-          assert.equal(html.environment.components[0].source, 'setup');
-          console.log('PDF/UA validation complete; clean HTML page audited with the setup browser');
-          NODE
-          export PATH="$original_path"
-          export CHECK_NODE_DIST="$RUNNER_TEMP/check-node"
-          export CHECK_ARTIFACT="$artifact"
-          corepack pnpm test:package
-      - name: Build, extract and prove the portable archive with only the runner Node on PATH
-        shell: bash
-        run: |
-          version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json")).version')
-          name="praxity-check-$version"
-          mkdir "$RUNNER_TEMP/portable-build" "$RUNNER_TEMP/portable-extracted" "$RUNNER_TEMP/portable-node" "$RUNNER_TEMP/portable-clean"
-          cp "$(command -v node)" "$RUNNER_TEMP/portable-node/node"
-          cp bench/wcag/focus-indicator-removed/clean.html "$RUNNER_TEMP/portable-clean/"
-          node scripts/package.mjs --portable --output "$RUNNER_TEMP/portable-build/$name"
-          cd "$RUNNER_TEMP/portable-build"
-          find "$name" -type f | LC_ALL=C sort > "$RUNNER_TEMP/portable-files.txt"
-          tar -czf "$RUNNER_TEMP/check-portable.tar.gz" -T "$RUNNER_TEMP/portable-files.txt"
-          tar -xzf "$RUNNER_TEMP/check-portable.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/portable-extracted"
-          cd "$GITHUB_WORKSPACE"
-          artifact="$RUNNER_TEMP/portable-extracted"
-          test ! -e "$artifact/runtime"
-          test ! -e "$artifact/bin"
-          export CHECK_COMPONENTS_DIR="$RUNNER_TEMP/portable-components"
-          unset JAVA_HOME JAVACMD VERAPDF VERAPDF_JAVA VERAPDF_CLASSPATH PLAYWRIGHT_BROWSERS_PATH PLAYWRIGHT_HOST_PLATFORM_OVERRIDE
-          unset npm_config_playwright_browsers_path npm_package_config_playwright_browsers_path
-          export PATH="$RUNNER_TEMP/portable-node"
-          expect_exit() {
-            label="$1"
-            expected="$2"
-            shift 2
-            code=0
-            "$@" || code=$?
-            echo "$label exit code: $code" >&2
-            test "$code" -eq "$expected"
-          }
-          expect_exit help 0 node "$artifact/lib/cli.js" --help
-          expect_exit setup 0 node "$artifact/lib/cli.js" setup --yes pdf html
-          expect_exit doctor 0 node "$artifact/lib/cli.js" doctor --json > "$RUNNER_TEMP/portable-doctor.json"
-          expect_exit PDF 1 node "$artifact/lib/cli.js" check test/fixtures/pdf-facts.pdf --checks accessibility --tier deterministic --json "$RUNNER_TEMP/portable-pdf.json"
-          expect_exit HTML 0 node "$artifact/lib/cli.js" check "$RUNNER_TEMP/portable-clean" --min-confidence medium --json "$RUNNER_TEMP/portable-html.json"
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync, lstatSync } from 'node:fs';
-          import { createHash } from 'node:crypto';
-          const read = name => JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/${name}`, 'utf8'));
-          const directory = `${process.env.RUNNER_TEMP}/portable-extracted`;
-          const inventory = JSON.parse(readFileSync(`${directory}/inventory.json`, 'utf8'));
-          for (const file of inventory.files) {
-            const path = `${directory}/${file.path}`;
-            assert.ok(lstatSync(path).isFile(), file.path);
-            const bytes = readFileSync(path);
-            assert.equal(bytes.length, file.size, file.path);
-            assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256, file.path);
-          }
-          const doctor = read('portable-doctor.json');
-          assert.deepEqual(doctor.components.map(component => component.id).sort(), ['browser', 'java', 'verapdf']);
-          for (const component of doctor.components) {
-            assert.equal(component.usable, true, component.id);
-            assert.equal(component.source, 'setup', component.id);
-            assert.equal(component.pinned, true, component.id);
-            assert.equal(component.inventory, 'intact', component.id);
-          }
-          const pdf = read('portable-pdf.json');
-          assert.equal(pdf.machineStatus, 'complete');
-          assert.equal(pdf.pdfuaValidation.coverage.status, 'complete');
-          assert.ok(pdf.findings.length > 0);
-          const html = read('portable-html.json');
-          assert.equal(html.pages.length, 1);
-          assert.ok(html.pages.every(page => page.audited));
-          assert.equal(html.environment.components[0].source, 'setup');
-          assert.equal(html.counts.confidence.high, 0);
-          NODE
+          expect_exit help 0 npx --no-install praxity-check --help
+          expect_exit setup 0 npx --no-install praxity-check setup --yes pdf html
+          expect_exit doctor 0 npx --no-install praxity-check doctor --json >"$RUNNER_TEMP/doctor.json"
+          expect_exit PDF 1 npx --no-install praxity-check check "$GITHUB_WORKSPACE/test/fixtures/pdf-facts.pdf" --checks accessibility --tier deterministic --json "$RUNNER_TEMP/pdf-report.json"
+          expect_exit HTML 0 npx --no-install praxity-check check "$RUNNER_TEMP/check-clean" --min-confidence medium --json "$RUNNER_TEMP/html-report.json"
+          node "$GITHUB_WORKSPACE/scripts/verify-npm-smoke.mjs"
+          export CHECK_NPM_INSTALL="$RUNNER_TEMP/check-install"
+          node --test --test-name-pattern='installed npm package' "$GITHUB_WORKSPACE/scripts/package.test.mjs"

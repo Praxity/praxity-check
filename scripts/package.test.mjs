@@ -46,7 +46,7 @@ async function verifyInventory(artifact) {
 	assert.equal(manifest.version, "0.6.0");
 	assert.match(manifest.sourceRevision, /^[0-9a-f]{40}$/);
 	assert.equal(typeof manifest.dirty, "boolean");
-	assert.equal(manifest.nodeRequirement, ">=22.18");
+	assert.equal(manifest.nodeRequirement, ">=24.22.1 <25");
 	assert.match(manifest.note, /not capability claims/);
 	assert.deepEqual(manifest.inventoryExcludes, ["capabilities.json"]);
 	const paths = [];
@@ -81,6 +81,13 @@ async function verifyInventory(artifact) {
 }
 
 function run(launcher, args, root, inherited = {}) {
+	if (launcher === "npm") {
+		const npx = join(dirname(process.execPath), windows ? "npx.cmd" : "npx");
+		return run(npx, ["--no-install", "praxity-check", ...args], process.env.CHECK_NPM_INSTALL, {
+			PATH: dirname(process.execPath), ComSpec: process.env.ComSpec, npm_config_cache: process.env.npm_config_cache,
+			npm_config_prefix: process.env.npm_config_prefix, npm_config_script_shell: windows ? undefined : "/bin/sh", ...inherited,
+		});
+	}
 	const env = windows
 		? { PATH: join(root, "empty PATH"), SystemRoot: process.env.SystemRoot, TEMP: root, TMP: root, USERPROFILE: root }
 		: { PATH: join(root, "empty PATH"), HOME: root, TMPDIR: root };
@@ -197,8 +204,13 @@ async function proveArtifact(staged, root, html) {
 	const invalid = run(launcher, ["unknown-command"], root);
 	assert.equal(invalid.status, 2, invalid.stderr);
 
+	assert.equal(manifest.payloads.chromiumHeadlessShell, false);
+	assert.equal(manifest.payloads.pdfium, true);
+	await proveChecks(launcher, root, html);
+}
+
+async function proveChecks(launcher, root, html) {
 	if (html) {
-		assert.equal(manifest.payloads.chromiumHeadlessShell, false);
 		const course = join(root, "synthetic HTML course");
 		await mkdir(course);
 		await writeFile(join(course, "index.html"), '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Practice lesson</title></head><body><main><h1>Practice lesson</h1><p>Read the paragraph, then continue.</p><button type="button">Continue</button></main></body></html>');
@@ -219,7 +231,6 @@ async function proveArtifact(staged, root, html) {
 	}
 
 
-	assert.equal(manifest.payloads.pdfium, true);
 	const input = join(root, "engine PDF.pdf"), output = join(root, "engine report.json");
 	await writeFile(input, await readFile(join(repository, "test/fixtures/pdf-facts.pdf")));
 	const checked = run(launcher, ["check", input, "--pdfua", "off", "--json", output], root);
@@ -241,6 +252,11 @@ async function proveArtifact(staged, root, html) {
 		await proveWindowsPdf(launcher, root);
 	}
 }
+
+test("installed npm package retains HTML, PDF and review audits", { skip: !process.env.CHECK_NPM_INSTALL }, async t => {
+	const root = await scratch(t);
+	await proveChecks("npm", root, true);
+});
 
 test("standalone Check relocates and reads and renders PDFs with an empty PATH", async t => {
 	const root = await scratch(t);
@@ -269,7 +285,7 @@ test("macOS target layout and inventory can be packaged without a Mac", async t 
 	await mkdir(join(node, "bin"), { recursive: true });
 	await writeFile(join(node, "bin/node"), "synthetic arm64 runtime");
 	await writeFile(join(node, "LICENSE"), "synthetic runtime license");
-	const output = await packageArtifact({ node, output: join(root, "artifact"), platform: "darwin", arch: "arm64" }, () => ({ version: "v24.19.0", platform: "darwin", arch: "arm64" }));
+	const output = await packageArtifact({ node, output: join(root, "artifact"), platform: "darwin", arch: "arm64" }, () => ({ version: "v24.22.1", platform: "darwin", arch: "arm64" }));
 	const manifest = await verifyInventory(output);
 	assert.equal(manifest.platform, "darwin");
 	assert.equal(manifest.arch, "arm64");
@@ -286,7 +302,7 @@ test("macOS target layout and inventory can be packaged without a Mac", async t 
 test("packaging rejects supplied Node and dependency target mismatches before writing output", async t => {
 	const root = await scratch(t);
 	const values = { node: root, output: join(root, "artifact"), platform: "win32", arch: "x64" };
-	await assert.rejects(packageArtifact(values, () => ({ version: "v24.19.0", platform: "darwin", arch: "arm64" })), /Node target mismatch/);
+	await assert.rejects(packageArtifact(values, () => ({ version: "v24.22.1", platform: "darwin", arch: "arm64" })), /Node target mismatch/);
 	await assert.rejects(lstat(values.output), /ENOENT/);
 });
 
@@ -304,7 +320,7 @@ test("package excludes hermetic browser caches inside npm dependencies", async t
 	await writeFile(join(dependency, "package.json"), JSON.stringify({ version: "1.0.0", license: "MIT" }));
 	await writeFile(join(dependency, "index.js"), "fixture dependency");
 	await writeFile(join(dependency, ".local-browsers", "chromium_headless_shell-1234", "browser.exe"), "must not ship");
-	const artifact = await packageArtifact({ node, output: join(root, "artifact"), platform: "win32", arch: "x64" }, () => ({ version: "v24.19.0", platform: "win32", arch: "x64" }), async () => dependency);
+	const artifact = await packageArtifact({ node, output: join(root, "artifact"), platform: "win32", arch: "x64" }, () => ({ version: "v24.22.1", platform: "win32", arch: "x64" }), async () => dependency);
 	const manifest = JSON.parse(await readFile(join(artifact, "capabilities.json"), "utf8"));
 	assert.ok(manifest.files.some(file => file.path.endsWith("/index.js")));
 	assert.ok(!manifest.files.some(file => file.path.includes(".local-browsers") || file.path.endsWith("/browser.exe")));
@@ -318,10 +334,10 @@ test("portable build relocates, retains its inventory and runs with only externa
 	await rename(staged, artifact);
 	for (const path of ["runtime", "bin"]) await assert.rejects(lstat(join(artifact, path)), /ENOENT/);
 	const metadata = JSON.parse(await readFile(join(artifact, "package.json"), "utf8"));
-	assert.deepEqual(metadata.engines, { node: ">=22.18" });
+	assert.deepEqual(metadata.engines, { node: ">=24.22.1 <25" });
 	const capabilities = JSON.parse(await readFile(join(artifact, "capabilities.json"), "utf8"));
 	assert.equal(capabilities.entryPoint, "lib/cli.js");
-	assert.equal(capabilities.nodeRequirement, ">=22.18");
+	assert.equal(capabilities.nodeRequirement, ">=24.22.1 <25");
 	assert.equal(capabilities.platform, "any");
 	assert.equal(capabilities.arch, "any");
 	assert.equal(capabilities.node, null);
@@ -394,7 +410,7 @@ test("portable build relocates, retains its inventory and runs with only externa
 		const old = spawnSync(node, ["--require", oldVersion, cli, ...args], { cwd: root, env, encoding: "utf8" });
 		assert.equal(old.status, 2);
 		assert.equal(old.stdout, "");
-		assert.equal(old.stderr.trim(), "praxity-check: Check requires Node >=22.18; received v22.17.0");
+		assert.equal(old.stderr.trim(), "praxity-check: Check requires Node >=24.22.1 <25; received v22.17.0");
 	}
 });
 
