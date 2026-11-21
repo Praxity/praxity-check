@@ -6,7 +6,7 @@
 	"type": "module",
 	"description": "Accessibility checker for learning packages",
 	"bin": {
-		"praxity-check": "src/cli.ts"
+		"praxity-check": "lib/cli.js"
 	},
 	"scripts": {
 		"bench": "node bench/wcag/run.ts",
@@ -16,22 +16,36 @@
 		"test:bench": "node --test bench/interaction-review/materialize.test.mjs bench/interaction-review/evidence.test.ts bench/interaction-review/score.test.ts bench/pdf/score.test.ts",
 		"lint": "node scripts/check-comments.mjs",
 		"typecheck": "tsc --noEmit",
-		"test": "node --test test/*.test.ts"
+		"test": "node --test test/*.test.ts test/*.test.mjs",
+		"prepack": "node scripts/package.mjs --npm"
 	},
 	"engines": {
-		"node": ">=22.18"
+		"node": ">=24.22.1 <25"
 	},
 	"packageManager": "pnpm@11.5.3",
 	"dependencies": {
 		"@axe-core/playwright": "^4.12.1",
 		"@embedpdf/pdfium": "2.15.1",
 		"@guidepup/guidepup-voiceover": "npm:@guidepup/guidepup@0.24.1",
-		"playwright": "^1.62.1",
+		"playwright": "1.62.1",
 		"yauzl": "^3.4.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.19.1",
 		"@types/yauzl": "^2.10.3",
 		"typescript": "^5.9.3"
+	},
+	"files": [
+		"lib/",
+		"notices/",
+		"skill/",
+		"README.md",
+		"LICENSE",
+		"LICENSING.md",
+		"NOTICE.md"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Praxity/praxity-check"
 	}
 }

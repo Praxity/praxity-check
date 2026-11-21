@@ -1,4 +1,4 @@
-import { chmod, cp, lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -9,6 +9,17 @@ import ts from "typescript";
 import { requireNode } from "../src/node-runtime.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+
+export async function compileRuntime(output) {
+	await rm(output, { recursive: true, force: true });
+	await mkdir(output, { recursive: true });
+	for (const file of await readdir(join(root, "src"))) {
+		if (!file.endsWith(".ts")) throw new Error(`Unrecognized runtime asset: src/${file}`);
+		const source = await readFile(join(root, "src", file), "utf8");
+		const result = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext, rewriteRelativeImportExtensions: true } });
+		await writeFile(join(output, file.replace(/\.ts$/, ".js")), result.outputText);
+	}
+}
 
 export async function packageArtifact(values, inspectNode = executable => JSON.parse(execFileSync(executable, ["-p", "JSON.stringify({version:process.version,platform:process.platform,arch:process.arch})"], { encoding: "utf8" })), locateDependency = installedDependency) {
 	const portable = values.portable === true;
@@ -43,12 +54,7 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 	await cp(join(root, "notices"), join(output, "notices"), { recursive: true, dereference: true });
 	await cp(join(root, "skill"), join(output, "skill"), { recursive: true, dereference: true });
 	await writeFile(join(output, "package.json"), JSON.stringify({ name: pkg.name, version: pkg.version, private: true, type: "module", engines: pkg.engines }, null, 2));
-	for (const file of await readdir(join(root, "src"))) {
-		if (!file.endsWith(".ts")) throw new Error(`Unrecognized runtime asset: src/${file}`);
-		const source = await readFile(join(root, "src", file), "utf8");
-		const result = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext, rewriteRelativeImportExtensions: true } });
-		await writeFile(join(output, "lib", file.replace(/\.ts$/, ".js")), result.outputText);
-	}
+	await compileRuntime(join(output, "lib"));
 	const copied = new Map();
 	const notices = ["# Bundled dependencies", portable ? "Node is supplied by the host. Check's notices are in NOTICE.md and notices/. Dependency licence files are retained in node_modules." : "Node licence and notices: runtime/LICENSE. Dependency licence files are retained in node_modules."];
 	async function dependency(name, from) {
@@ -140,6 +146,7 @@ function launcher(platform) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-	const { values } = parseArgs({ options: { ...Object.fromEntries(["node", "dependencies", "output", "platform", "arch"].map(name => [name, { type: "string" }])), portable: { type: "boolean" } } });
-	console.log(await packageArtifact(values));
+	const { values } = parseArgs({ options: { ...Object.fromEntries(["node", "dependencies", "output", "platform", "arch"].map(name => [name, { type: "string" }])), portable: { type: "boolean" }, npm: { type: "boolean" } } });
+	if (values.npm) await compileRuntime(join(root, "lib"));
+	else console.log(await packageArtifact(values));
 }

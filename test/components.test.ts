@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, posix } from "node:path";
 import test from "node:test";
 import { checkPdfAccessibility } from "../src/pdf-accessibility.ts";
-import { componentHost, componentDirectory, componentManifest, componentsDirectory, doctorCli, resolveComponent, writeInventory, veraPdfCommand, type ComponentHost, type ComponentId } from "../src/components.ts";
+import { browserDefinition, componentHost, componentDirectory, componentManifest, componentsDirectory, doctorCli, resolveComponent, writeInventory, veraPdfCommand, type ComponentHost, type ComponentId } from "../src/components.ts";
 
 async function fixture(t: test.TestContext, platform = process.platform as string, arch = platform === "win32" ? "x64" : process.arch as string) {
  const root = await fs.mkdtemp(join(tmpdir(), "check components "));
@@ -630,4 +630,14 @@ test("setup browser archive filenames match the installed Playwright download ta
   assert.deepEqual(browser.archives.map(a => basename(new URL(a.url).pathname)).sort(), requested);
   assert.equal(browser.entryPoint, oracle.executable.split(/[\\/]/).slice(-3).join("/"));
  });
+});
+
+
+test("npm dependency specifiers preserve verified runtime pins", async () => {
+ const pkg = JSON.parse(await fs.readFile(new URL("../package.json", import.meta.url), "utf8"));
+ const browser = await browserDefinition();
+ await componentManifest({ platform: "win32", arch: "x64" });
+ assert.equal(pkg.dependencies.playwright, browser.playwright);
+ assert.equal(pkg.dependencies["@embedpdf/pdfium"], "2.15.1");
+ assert.equal(pkg.dependencies["@guidepup/guidepup-voiceover"], "npm:@guidepup/guidepup@0.24.1");
 });

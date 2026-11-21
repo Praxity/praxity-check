@@ -21,7 +21,7 @@ importers:
         specifier: npm:@guidepup/guidepup@0.24.1
         version: '@guidepup/guidepup@0.24.1'
       playwright:
-        specifier: ^1.62.1
+        specifier: 1.62.1
         version: 1.62.1
       yauzl:
         specifier: ^3.4.0

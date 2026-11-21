@@ -16,3 +16,12 @@ test("Node requirements fail loudly when unsupported and preserve patch boundari
 	assert.throws(() => requireNode("v22.18.0", ">=22.18.1"), /Check requires Node >=22.18.1/);
 	assert.doesNotThrow(() => requireNode("v22.18.1", ">=22.18.1"));
 });
+
+
+test("distribution Node range accepts only supported Node 24 releases", () => {
+	const range = ">=24.22.1 <25";
+	for (const version of ["v24.22.1", "24.22.2", "v24.23.0"]) assert.doesNotThrow(() => requireNode(version, range));
+	for (const version of ["v22.18.0", "v24.22.0", "v25.0.0", "v26.1.0", "v24.22.1-pre", "invalid"]) {
+		assert.throws(() => requireNode(version, range), { message: `Check requires Node ${range}; received ${version}` });
+	}
+});
