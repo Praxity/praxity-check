@@ -32,7 +32,7 @@ export async function materialize(destination) {
   return records.length;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   try {
     if (process.argv.length !== 3) throw new Error('Usage: node bench/interaction-review/materialize.mjs NEW_EXTERNAL_DIRECTORY');
     console.log(`Materialized ${await materialize(process.argv[2])} development controls.`);

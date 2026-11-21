@@ -1,7 +1,7 @@
 ﻿import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -39,6 +39,24 @@ async function scratch(t) {
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	return directory;
 }
+
+test("CLI entry points run through directory symlinks", async t => {
+	const root = await scratch(t);
+	const alias = join(root, "linked checkout");
+	await symlink(repository, alias, windows ? "junction" : "dir");
+	for (const [script, args, status, message] of [
+		["scripts/package.mjs", [], 1, /Required: --node/],
+		["src/html-cli.ts", ["--help"], 0, /Usage:/],
+		["bench/interaction-review/materialize.mjs", [], 2, /Usage:/],
+		["bench/interaction-review/score.ts", [], 2, /Usage:/],
+		["bench/pdf/score.ts", [], 2, /Usage:/],
+	]) {
+		const result = spawnSync(process.execPath, [join(alias, script), ...args], { encoding: "utf8" });
+		assert.ifError(result.error);
+		assert.equal(result.status, status, `${script}: ${result.stderr}`);
+		assert.match(result.stdout + result.stderr, message, script);
+	}
+});
 
 async function verifyInventory(artifact) {
 	const manifest = JSON.parse(await readFile(join(artifact, "capabilities.json"), "utf8"));
