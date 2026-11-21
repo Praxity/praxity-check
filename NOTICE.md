@@ -8,7 +8,8 @@ Canonical attribution: **Praxity Check by Ariel Harlap**
 
 Project: <https://github.com/Praxity/praxity-check>
 
-Praxity Check by Ariel Harlap. Source-available under the PolyForm Perimeter License 1.0.1: free at home and at work, including paid client work. See [LICENSING.md](LICENSING.md).
+Praxity-authored code in Praxity Check by Ariel Harlap is available under the
+[MIT licence](LICENSE). See [LICENSING.md](LICENSING.md) for details.
 
 ## Contributors
 
@@ -16,13 +17,6 @@ Praxity Check by Ariel Harlap. Source-available under the PolyForm Perimeter Lic
 
 External code contributions are not accepted during the public alpha. Git
 metadata alone is not used to infer copyright ownership or contributor credit.
-
-## Licence text
-
-The licence includes the unmodified
-[PolyForm Perimeter License 1.0.1](https://polyformproject.org/licenses/perimeter/1.0.1),
-copyright PolyForm Project Inc. The PolyForm Project separately permits reuse
-of its licence texts.
 
 ## Runtime dependencies
 
