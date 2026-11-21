@@ -64,7 +64,7 @@ for fields, evidence links and migration from v3.
 
 ## Quick start
 
-Requirements: Node 22.18+ and pnpm 11.5.3.
+Requirements: Node `>=24.22.1 <25` and pnpm 11.5.3. The supported Node range is defined in `package.json` under `engines.node`.
 
 ```bash
 git clone https://github.com/Praxity/praxity-check.git

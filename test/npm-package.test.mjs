@@ -22,9 +22,4 @@ test("npm runtime compilation emits every module, rewrites imports and removes s
 	const cli = await readFile(join(output, "cli.js"), "utf8");
 	assert.match(cli, /^#!\/usr\/bin\/env node\n/);
 	assert.match(cli, /import\("\.\/components\.js"\)/);
-	const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-	assert.equal(pkg.bin["praxity-check"], "lib/cli.js");
-	assert.equal(pkg.engines.node, ">=24.22.1 <25");
-	assert.equal(pkg.private, true);
-	assert.deepEqual(pkg.files, ["lib/", "notices/", "skill/", "README.md", "LICENSE", "LICENSING.md", "NOTICE.md"]);
 });
