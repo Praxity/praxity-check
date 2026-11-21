@@ -222,7 +222,11 @@ for the additional tools and options.
 
 ## Licence
 
-Praxity Check by Ariel Harlap. Source-available under the PolyForm Perimeter License 1.0.1: free at home and at work, including paid client work. See [LICENSING.md](LICENSING.md).
+Praxity-authored code in Praxity Check by Ariel Harlap is available under the
+[MIT licence](LICENSE). See [LICENSING.md](LICENSING.md) for details.
+
+Earlier versions of this repository published under PolyForm Perimeter 1.0.1
+or earlier Praxity terms are also available under the MIT licence from 2026-11-21.
 
 ## Build a local distributable
 
