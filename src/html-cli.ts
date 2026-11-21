@@ -2,7 +2,6 @@
 
 import { mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { auditHtml, withAuditContext } from "./html-audit.ts";
 import { discover } from "./discover.ts";
 import { assertOutputOutside, openInput, snapshotInput, type Input } from "./input.ts";
@@ -289,6 +288,6 @@ The model reported ${[["issue", report.feedback.findings.length], ["question", r
 	}
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+if (import.meta.main) {
 	process.exitCode = await htmlCli(process.argv.slice(2));
 }

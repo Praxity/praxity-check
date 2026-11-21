@@ -55,6 +55,8 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm typecheck
+      - name: CLI entry points through directory symlinks
+        run: node --test --test-name-pattern="CLI entry points run through directory symlinks" scripts/package.test.mjs
       - name: PDF and component tests
         run: node --test test/pdf*.test.ts test/components.test.ts test/setup.test.ts
       - name: Pack and install into a clean npm project
@@ -126,6 +128,8 @@ jobs:
         if: runner.os == 'Linux'
         run: corepack pnpm exec playwright install-deps chromium
       - run: corepack pnpm typecheck
+      - name: CLI entry points through directory symlinks
+        run: node --test --test-name-pattern="CLI entry points run through directory symlinks" scripts/package.test.mjs
       - name: PDF and component tests
         run: node --test test/pdf*.test.ts test/components.test.ts test/setup.test.ts
       - name: Pack and install into a clean npm project

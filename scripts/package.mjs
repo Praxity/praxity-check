@@ -145,7 +145,7 @@ function launcher(platform) {
  return '#!/bin/sh\nset -eu\nCHECK_DIR="$(CDPATH= cd -- "${0%/*}/.." && pwd)"\nexec "$CHECK_DIR/runtime/node" "$CHECK_DIR/lib/cli.js" "$@"\n';
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
 	const { values } = parseArgs({ options: { ...Object.fromEntries(["node", "dependencies", "output", "platform", "arch"].map(name => [name, { type: "string" }])), portable: { type: "boolean" }, npm: { type: "boolean" } } });
 	if (values.npm) await compileRuntime(join(root, "lib"));
 	else console.log(await packageArtifact(values));

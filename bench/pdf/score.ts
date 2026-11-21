@@ -122,7 +122,7 @@ export async function scoreRun(runPath: string) {
     repeats: [...corpusCases.keys()].sort().map(id => ({ id, repeats: cases.filter(c => c.id === id).map(c => c.repeat).sort((a,b) => a-b) })), cases };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   try {
     if (process.argv.length !== 3) throw new Error('Usage: node bench/pdf/score.ts RUN.json');
     console.log(JSON.stringify(await scoreRun(process.argv[2]!), null, 2));
