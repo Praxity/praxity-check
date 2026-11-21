@@ -10,8 +10,6 @@ import { after, before, test } from "node:test";
 const run = promisify(execFile);
 const CLI = join(dirname(dirname(fileURLToPath(import.meta.url))), "src", "cli.ts");
 
-// The module tests audit determinism; these runs also cover report serialization,
-// terminal output and exit codes. Three runs catch an alternating instability.
 
 let root: string;
 
@@ -45,7 +43,6 @@ test("three CLI runs serialize identical reports and preserve output and exit co
 
 	for (let attempt = 0; attempt < 3; attempt++) {
 		const out = join(root, "report.json");
-		// Exit code 1 means findings were present, which this fixture guarantees.
 		let terminal: { stdout: string; stderr: string } | undefined;
 		await assert.rejects(run(process.execPath, [CLI, "check", root, "--json", out]), (error: unknown) => {
 			assert.ok(error && typeof error === "object" && "code" in error && "stdout" in error && "stderr" in error);
@@ -57,7 +54,6 @@ test("three CLI runs serialize identical reports and preserve output and exit co
 		assert.ok(JSON.parse(serialized).findings.length > 0, "fixture produced no findings");
 		assert.ok(terminal);
 		assert.equal(terminal.stderr, "");
-		// Each CLI run starts a server on a new ephemeral port.
 		results.push({ report: serialized.replace(/http:\/\/127\.0\.0\.1:\d+/g, "http://127.0.0.1:<port>"), ...terminal });
 	}
 

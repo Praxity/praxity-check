@@ -215,7 +215,6 @@ function parseBaselineOccurrence(value: unknown, result: BaselineOccurrence["res
 	};
 }
 
-/** Validate a previous schema-v4 report before it influences current evidence. */
 export function parseBaseline(value: unknown): Baseline {
 	const report = record(value, "baseline");
 	if (report.schemaVersion !== 4 || report.toolName !== TOOL_NAME || typeof report.toolVersion !== "string") {
@@ -381,7 +380,6 @@ export function createReport(
 		["praxity-check", { source: "praxity-check" as const, version: packageJson.version }],
 		...rules.map((rule) => [rule.source, { source: rule.source, version: rule.rulesetVersion }] as const),
 	]).values()].sort((a, b) => a.source.localeCompare(b.source));
-	// Whole-page and skipped-state markers describe coverage at a different scale.
 	const checksNotRun = evaluations.filter((evaluation) =>
 		evaluation.type === "check" && evaluation.check !== "page-audit" && !evaluation.check.startsWith("scenario:"));
 	const confidence: AuditReport["counts"]["confidence"] = { high: 0, medium: 0, low: 0 };
@@ -433,13 +431,6 @@ function count(noun: string, amount: number): string {
 	return `${amount} ${noun}${amount === 1 ? "" : "s"}`;
 }
 
-/**
- * Findings at or above `minConfidence` are shown and drive the exit code.
- * Default is `high`: only measured, unambiguous failures stop a build. Loosen it
- * when the caller wants the medium-confidence custom checks -- focus visibility,
- * focus obscured, non-text contrast, reflow, text spacing -- to count too, which
- * is most of what this tool sees that axe does not.
- */
 export type Confidence = "high" | "medium" | "low";
 const RANK: Record<Confidence, number> = { high: 3, medium: 2, low: 1 };
 

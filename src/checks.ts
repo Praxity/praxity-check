@@ -3,23 +3,18 @@ import type { BrowserContext, Page } from "playwright";
 import packageJson from "../package.json" with { type: "json" };
 
 export interface Finding {
-	/** Plain language, what is wrong. Leads the report. */
 	what: string;
 	page: string;
 	selector?: string;
-	/** The measured value: a ratio, a focus sequence, a rectangle. */
 	evidence: string;
 	fix: string;
 	lens: "a11y";
 	confidence: "high" | "medium" | "low";
 	basis: string;
-	/** Stable id, for deduplicating one defect that appears on many pages. */
 	rule: string;
-	/** Named rendered state. Omitted internally for the initial state. */
 	state?: string;
 }
 
-/** Unresolved evidence that must never gate or be described as a violation. */
 export interface ReviewItem {
 	what: string;
 	page: string;
@@ -71,7 +66,6 @@ export interface UntestedEvaluation {
 	reason: string;
 }
 
-/** No silent truncation: whatever a cap drops gets said out loud (spec §7). */
 export interface CheckResult {
 	findings: Finding[];
 	needsReview?: ReviewItem[];
@@ -93,28 +87,16 @@ const NO_MOTION = `*, *::before, *::after {
 	caret-color: transparent !important;
 }`;
 
-/** Cost is one evaluate per page now, but keep the cap so a huge page stays bounded. */
 const MAX_FOCUS_CHECKS = 60;
-/** Enough to show a page is riddled with them without walking forever. */
 const MAX_TRAPS = 5;
 const TRAP_REPEAT_TABS = 3;
-/** Ten extra Tabs cover native date/time segments and media buttons, with room to spare. */
 const MAX_ESCAPE_TABS = 10;
-/** Leave most of the page audit's time for its other checks, even on focus cycles. */
 const MAX_KEYBOARD_WALK_MS = 5_000;
 const MAX_KEYBOARD_PRESSES = 1_000;
-/**
- * `dataset.praxityCheckId` writes the attribute `data-praxity-check-id` -- camel case
- * on the property, kebab case on the attribute. Querying the camel-case form
- * matches nothing and every lookup returns null, which reads as "no problems
- * found" rather than as a failure. Both spellings are named here so they cannot
- * drift apart again.
- */
 const MARK = "praxityCheckId";
 const MARK_ATTR = "data-praxity-check-id";
 
 
-/** A source-backed CSS selector, verified unique before it leaves the page. */
 export const UNIQUE_SELECTOR = `(el) => {
 	if (!el) return "";
 	const parts = [];
@@ -150,7 +132,6 @@ export const UNIQUE_SELECTOR = `(el) => {
 const FOCUSABLE =
 	'a[href], button, input:not([type=hidden]), select, textarea, summary, [tabindex]:not([tabindex="-1"])';
 
-/** Nearby paint can represent a hidden control, including a label elsewhere in the page. */
 const FOCUS_INDICATOR_NODES = `((el) => {
 	const nodes = [];
 	for (let up = el, depth = 0; up && depth < 4; depth++, up = up.parentElement) nodes.push(up);
@@ -162,7 +143,6 @@ const FOCUS_INDICATOR_NODES = `((el) => {
 	return [...new Set(nodes)];
 })`;
 
-/** Shared browser-side colour math. Canvas normalises every CSS colour syntax Chromium accepts. */
 const COLOR_HELPERS = `(() => {
 	const canvas = document.createElement("canvas");
 	canvas.width = canvas.height = 1;
@@ -208,14 +188,6 @@ const COLOR_HELPERS = `(() => {
 	return { parse, paint, contrast, background, colors };
 })()`;
 
-/**
- * Wait for a launcher shell to actually render. Course players commonly ship an
- * empty container that a bundle fills after the load event. Auditing at load
- * can therefore report an empty page for a course that renders moments later.
- *
- * This is not a launch adapter -- it does not supply an LMS API or drive
- * in-content navigation. It only declines to give up before the first paint.
- */
 export async function settle(page: Page, maxMs = 8000): Promise<string | undefined> {
 	const deadline = Date.now() + maxMs;
 	await page.waitForLoadState("networkidle", { timeout: maxMs }).catch(() => {});
@@ -241,7 +213,6 @@ export async function settle(page: Page, maxMs = 8000): Promise<string | undefin
 const SCOPE_CONTROLS = `${FOCUSABLE}, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"], [role="slider"]`;
 const CLOSED_SHADOW_ROOTS = "praxity-check.closed-shadow-roots";
 
-/** Count closed roots before page code makes them inaccessible. */
 export async function instrumentShadowRoots(context: BrowserContext): Promise<void> {
 	await context.addInitScript((key) => {
 		const symbol = Symbol.for(key);
@@ -261,7 +232,6 @@ export async function instrumentShadowRoots(context: BrowserContext): Promise<vo
 	}, CLOSED_SHADOW_ROOTS);
 }
 
-/** Report controls in DOM subtrees the custom checks deliberately do not enter. */
 export async function scopeCoverage(page: Page, pageId: string): Promise<CheckResult> {
 	const scope = await page.evaluate(([controls, closedRootKey]) => {
 		let sameOriginFrames = 0;
@@ -353,15 +323,10 @@ export async function scopeCoverage(page: Page, pageId: string): Promise<CheckRe
 	};
 }
 
-/**
- * Harness artifacts are not findings. Each symptom below has
- * already produced a confident false bug report somewhere.
- */
 export async function triage(page: Page, status: number | null, blockedRequests = 0): Promise<Triage> {
 	if (status !== null && status >= 400) return { ok: false, reason: `server returned ${status}` };
 
 	const shape = await page.evaluate(() => {
-		// Frame size alone also matches support pages with embedded forms.
 		const area = window.innerWidth * window.innerHeight;
 		const dominantFrame = Array.from(document.querySelectorAll("iframe")).some((frame) => {
 			const rect = frame.getBoundingClientRect();
@@ -382,10 +347,6 @@ export async function triage(page: Page, status: number | null, blockedRequests 
 		};
 	}
 
-	// Some packages stream their content from the vendor's CDN rather than
-	// shipping it. Blocking that (the default) leaves an empty shell, and axe's
-	// document-level rules then fire on nothing -- reporting the tool's own
-	// network policy as the course's defects.
 	if (blockedRequests > 0 && shape.text < 200) {
 		return {
 			ok: false,
@@ -394,8 +355,6 @@ export async function triage(page: Page, status: number | null, blockedRequests 
 	}
 
 	if (shape.text < 40 && shape.landmarks === 0) {
-		// The saved Claude artifact is exactly this: a frame shell whose real
-		// content sits in an iframe the scanner cannot reach.
 		return {
 			ok: false,
 			reason:
@@ -408,18 +367,6 @@ export async function triage(page: Page, status: number | null, blockedRequests 
 }
 
 
-/**
- * 2.5.8 has a User Agent Control exception: a target whose size the browser
- * decides and the author never touches does not fail. axe reports these anyway.
- * A bare `<input type="checkbox">` renders 13x13 with no author rule touching
- * it, and six such findings were confirmed false -- one adjudicator caught them
- * and gave this reason, two others missed it, and inspecting the stylesheets
- * showed zero author rules matching the element.
- *
- * Deliberately narrow: only native form controls whose *own* size properties no
- * author rule sets. Links and buttons are sized by author content and stay in
- * scope, and an author who styles a checkbox at all loses the exception.
- */
 const UA_SIZED_CONTROLS = `(() => {
 	const sized = ["width","height","min-width","min-height","padding","font-size","transform","zoom","appearance","scale"];
 	let unreadable = 0;
@@ -455,8 +402,6 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 	const results = await new AxeBuilder({ page })
 		.options({
 			rules: {
-				// Target size ships disabled. Keep heading order explicit so this
-				// ruleset does not change when axe changes its defaults.
 				"target-size": { enabled: true },
 				"heading-order": { enabled: true },
 			},
@@ -508,8 +453,6 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 				[target, [...uaSized]] as const,
 			);
 		} catch {
-			// Fail closed: an element we cannot query is not proven exempt, so the
-			// finding stands rather than being silently dropped.
 			return false;
 		}
 	};
@@ -518,18 +461,9 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 	const needsReview: ReviewItem[] = [];
 	const map = (rules: typeof results.violations, confidence?: "high") => {
 		for (const rule of rules) {
-			// Automated findings are normative failures (spec §5). axe also ships
-			// best-practice advice -- `region`, `landmark-one-main` and friends --
-			// which is useful but is not a WCAG failure. Reporting it at high
-			// confidence produced 84 high-confidence findings against the W3C's own
-			// Before-After demo pages, which W3C's published reports record as
-			// having no failures. Kept, demoted, out of the headline count.
 			const normative = !rule.tags.includes("best-practice");
 			for (const node of rule.nodes) {
-				// 2.5.8 User Agent Control: a target the browser sizes and the author
-				// never touches does not fail. axe reports these anyway.
 				if (rule.id === "target-size" && uaExempt.has(node.target.join(" "))) continue;
-				// Glyph-only controls belong to 1.4.11 and are measured by nonTextContrast.
 				if (
 					rule.id === "color-contrast" &&
 					/content contains only non-text characters/i.test(node.failureSummary ?? "")
@@ -573,8 +507,6 @@ export async function runAxe(page: Page, pageId: string): Promise<CheckResult> {
 		}
 	}
 
-	// axe's own split is categorical: violations are findings; incomplete results
-	// need review and never gate, regardless of the selected confidence floor.
 	map(results.violations, "high");
 	map(results.incomplete);
 
@@ -661,7 +593,6 @@ const LOCAL_RESOURCE_RULE: RuleMetadata = {
 	assumptions: ["Only same-origin media, document, stylesheet, font, and CSS image references are checked."],
 };
 
-/** Find rendered local resource references that the package does not contain. */
 export async function localResources(page: Page, pageId: string): Promise<CheckResult> {
 	const collected = await page.evaluate(([locateSource, limit]) => {
 		const locate = (0, eval)(locateSource) as (element: Element) => string;
@@ -734,7 +665,6 @@ export async function localResources(page: Page, pageId: string): Promise<CheckR
 					try {
 						cssUrls(rule.styleSheet.cssRules, rule.styleSheet.href || new URL(rule.href, base).href);
 					} catch {
-						// A cross-origin stylesheet is outside this same-origin integrity check.
 					}
 				} else if ("cssRules" in rule) {
 					cssUrls((rule as CSSGroupingRule).cssRules, base);
@@ -745,7 +675,6 @@ export async function localResources(page: Page, pageId: string): Promise<CheckR
 			try {
 				cssUrls(sheet.cssRules, sheet.href || document.baseURI);
 			} catch {
-				// A cross-origin stylesheet is outside this same-origin integrity check.
 			}
 		}
 
@@ -848,7 +777,6 @@ interface ListenerSnapshot {
 	hasUndo: boolean;
 }
 
-/** Chromium exposes registered listeners to its command-line API without page mutation. */
 const LISTENER_PROBE = `((selector) => {
 	const read = (target) => Object.entries(getEventListeners(target)).flatMap(([type, entries]) =>
 		entries.map((entry) => ({ type, source: String(entry.listener) }))
@@ -907,11 +835,6 @@ async function inspectListeners(
 	}
 }
 
-/**
- * Conservative 2.1.1 proxy: direct click handlers on visible div/span controls
- * only. Native controls, delegated containers, named roles, tab stops, and
- * controls with their own key handler are left alone rather than guessed at.
- */
 export async function mouseOnlyControls(page: Page, pageId: string): Promise<CheckResult> {
 	return mouseOnlyControlsFrom(await inspectListeners(page), pageId);
 }
@@ -930,14 +853,8 @@ function mouseOnlyControlsFrom(inspected: ListenerInspection, pageId: string): C
 			const keyboardOnElement = ["keydown", "keypress", "keyup"].some((type) => types.has(type));
 			if (!el.visible || el.containsControl || el.staticGraphic || !types.has("click") || keyboardOnElement) return false;
 
-			// Case 1: a plain div or span with a click handler. Tab never reaches it.
 			if ((el.tag === "div" || el.tag === "span") && !el.tabindex && !el.role) return true;
 
-			// Case 2: it claims to be a button or link and is focusable, but nothing
-			// handles Enter or Space -- so a screen reader announces an operable
-			// control that does nothing. Worse than case 1, because it looks correct.
-			// Skipped when the document delegates keyboard events, since the handler
-			// may legitimately live on an ancestor.
 			const delegatesKeys = [...documentKeyTypes].length > 0;
 			return (el.role === "button" || el.role === "link") && el.tabindex && !delegatesKeys;
 		})
@@ -958,8 +875,6 @@ function mouseOnlyControlsFrom(inspected: ListenerInspection, pageId: string): C
 }
 
 function bareCharacter(source: string): string | undefined {
-	// A modifier or focus/target guard may make the shortcut conforming. Static
-	// source inspection cannot prove its branch, so precision wins and we skip it.
 	if (/\b(?:ctrlKey|altKey|metaKey|activeElement|currentTarget|target|closest|matches|tagName|contentEditable)\b/.test(source)) {
 		return undefined;
 	}
@@ -997,21 +912,6 @@ function characterKeyShortcutsFrom(inspected: ListenerInspection, pageId: string
 	return { findings, notes: [] };
 }
 
-/**
- * A down listener is not itself a failure (dragging starts that way). Only
- * direct completion calls with no same-target up/cancel path are reported.
- */
-/**
- * 2.5.2 is about the *action* completing on the down event, not about a fixed
- * list of APIs. Clearing a field on `pointerdown` is as unrecoverable as
- * submitting on it -- the bench case `onpointerdown="draft.value=''"` destroyed
- * a learner's answer and the original pattern, which only matched navigation and
- * submission calls, ignored it.
- *
- * Deliberately excludes down handlers that only set a class, style or attribute
- * for press feedback: that is the legitimate and by far the commonest use, and
- * flagging it would drown the real cases (spec §7).
- */
 const DOWN_ACTION =
 	/\.(?:click|submit|requestSubmit|dispatchEvent|showModal|close|remove|delete|reset|play|pause)\s*\(|\b(?:location(?:\.href)?\s*=|location\.(?:assign|replace)\s*\(|window\.open\s*\(|fetch\s*\(|history\.(?:pushState|replaceState|back)\s*\()|\.(?:value|checked|selectedIndex|textContent|innerHTML|innerText)\s*=(?!=)/;
 const RELEASE: Record<string, string[]> = {
@@ -1052,7 +952,6 @@ function pointerCancellationFrom(inspected: ListenerInspection, pageId: string):
 	return { findings, notes: [] };
 }
 
-/** One CDP snapshot feeds the three listener analyses. */
 export async function interactionChecks(page: Page, pageId: string): Promise<CheckResult> {
 	const inspected = await inspectListeners(page);
 	if (!inspected.snapshot) return { findings: [], notes: inspected.note ? [inspected.note] : [] };
@@ -1067,11 +966,6 @@ export async function interactionChecks(page: Page, pageId: string): Promise<Che
 	};
 }
 
-/**
- * CSS animations are automatic by definition; transitions are included only
- * while running. Preload/progress motion and motion without parallel page
- * content implement the criterion's essential/not-part-of-the-page exceptions.
- */
 export async function pauseStopHide(page: Page, pageId: string): Promise<CheckResult> {
 	const motion = await page.evaluate((locate) => {
 		type Motion = { selector: string; kind: string; duration: string };
@@ -1156,7 +1050,6 @@ export async function pauseStopHide(page: Page, pageId: string): Promise<CheckRe
 	};
 }
 
-/** `<audio>` only: observe more than three seconds of playback, then require a sound control. */
 export async function audioAutoplay(page: Page, pageId: string): Promise<CheckResult> {
 	if (await page.locator("audio").count() === 0) return { findings: [], notes: [] };
 	await page.waitForFunction(
@@ -1239,7 +1132,6 @@ export async function audioAutoplay(page: Page, pageId: string): Promise<CheckRe
 	return { findings, notes };
 }
 
-/** Tag every focusable so identity survives a round trip through evaluate(). */
 async function markFocusables(page: Page): Promise<number> {
 	return page.evaluate(
 		([selector, mark]) => {
@@ -1253,10 +1145,6 @@ async function markFocusables(page: Page): Promise<number> {
 	);
 }
 
-/**
- * Tab through the page recording where focus lands. Catches what axe has no rule
- * for: a trap Tab cannot leave, and a page Tab cannot enter at all.
- */
 export async function keyboardWalk(page: Page, pageId: string): Promise<CheckResult> {
 	const findings: Finding[] = [];
 	const notes: string[] = [];
@@ -1266,7 +1154,6 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 	const deadline = performance.now() + MAX_KEYBOARD_WALK_MS;
 	let presses = 0;
 	let budgetExhausted = false;
-	// Walking, confirmation and restoration all spend the same page budget.
 	const press = async (key: "Tab" | "Shift+Tab"): Promise<boolean> => {
 		if (presses >= MAX_KEYBOARD_PRESSES || performance.now() >= deadline) {
 			budgetExhausted = true;
@@ -1289,11 +1176,6 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 				([mark, attr, locate]) => {
 					const el = document.activeElement as HTMLElement | null;
 					if (!el || el === document.body) return null;
-					// Identity, not appearance. Tab reaches things the focusable selector
-					// does not list -- `<video controls>` is the common one -- and giving
-					// every unmarked element the same synthetic `<tag>` id made two
-					// different videos in a row look like one element focus never left.
-					// That fabricated four keyboard traps on a clean course.
 					if (el.dataset[mark] === undefined) {
 						el.dataset[mark] = `u${document.querySelectorAll(`[${attr}]`).length}`;
 					}
@@ -1309,11 +1191,7 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 			repeats = at.id === previous ? repeats + 1 : 1;
 			previous = at.id;
 
-			// Native media buttons and date/time segments move focus inside an unreadable
-			// user-agent shadow root. Repeated host identity alone does not prove a trap.
 			if (!trapped.has(at.id) && repeats >= TRAP_REPEAT_TABS) {
-				// A handle keeps the original identity, including after cloning or removal,
-				// and never waits for a replacement node with the same marker to appear.
 				const target = await page.evaluateHandle(() => document.activeElement as HTMLElement);
 				const saved = await target.evaluate((el) => el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
 					? { value: el.value, start: el.selectionStart, end: el.selectionEnd, direction: el.selectionDirection } : null);
@@ -1323,13 +1201,11 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 						const state = await target.evaluate((el) => ({ connected: el.isConnected, focused: document.activeElement === el }));
 						if (!state.connected) return null;
 						if (state.focused) continue;
-						// Reverse the probe to restore the native segment as well as its host.
 						for (let undo = 0; undo < count; undo++) {
 							if (!await target.evaluate((el) => el.isConnected) || !await press(key === "Tab" ? "Shift+Tab" : "Tab")) return null;
 						}
 						const restored = await target.evaluate((el) => {
 							if (!el.isConnected) return false;
-							// Page handlers may block the return trip even when escape succeeded.
 							if (document.activeElement !== el) el.focus();
 							return document.activeElement === el;
 						});
@@ -1343,8 +1219,6 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 					forward = await canEscape("Tab");
 					if (forward && !forward.escaped) backward = await canEscape("Shift+Tab");
 				} finally {
-					// Tab-consuming editors may insert text. Probes must not leave those edits
-					// behind for later checks, or change the user's selection.
 					await target.evaluate((el, saved) => {
 						if (!saved || !el.isConnected || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
 						el.value = saved.value;
@@ -1352,13 +1226,10 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 					}, saved);
 					await target.dispose();
 				}
-				// Restoration can arm new page handlers. Reconfirm a fresh run of repeats.
 				repeats = 0;
 				if (!forward || (!forward.escaped && !backward)) {
 					notes.push(`could not confirm a keyboard trap at ${at.where} on ${pageId}: probe target changed, restoration failed, or the keyboard budget was exhausted`);
 					order.push(at.id);
-					// A removed target leaves focus at the probe's destination. Remember it
-					// so later trap recovery does not jump backwards to that control.
 					const surviving = await page.evaluate((mark) => (document.activeElement as HTMLElement | null)?.dataset[mark], MARK);
 					if (surviving && surviving !== at.id) order.push(surviving);
 					continue;
@@ -1383,10 +1254,6 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 					basis: reverseEscape ? "WCAG 2.1.1 Keyboard (A)" : "WCAG 2.1.2 No Keyboard Trap (A)",
 					rule: "keyboard-trap",
 				});
-				// Step over the trap and keep walking. Returning here meant a page with
-				// two traps only ever reported one -- and when the player itself
-				// contains one (LiaScript does), every trap in the authored content
-				// downstream of it became invisible.
 				trapped.add(at.id);
 				if (trapped.size >= MAX_TRAPS) {
 					notes.push(`stopped the Tab key test on ${pageId} after ${MAX_TRAPS} focus traps`);
@@ -1432,7 +1299,6 @@ export async function keyboardWalk(page: Page, pageId: string): Promise<CheckRes
 	return { findings, notes };
 }
 
-/** Probe actual overflow with the browser's own keyboard scrolling behavior. */
 export async function keyboardScrollableRegions(page: Page, pageId: string): Promise<CheckResult> {
 	const candidates = await page.evaluate(([focusable, locate]) => {
 		const selector = (0, eval)(locate) as (el: Element) => string;
@@ -1539,22 +1405,6 @@ export async function keyboardScrollableRegions(page: Page, pageId: string): Pro
 	return { findings, notes };
 }
 
-/**
- * Does anything about this control change when it takes focus?
- *
- * This was a pixel comparison until a real course proved it unusable: headless
- * Chromium does not *paint* focus rings even though `:focus-visible` matches and
- * the computed outline changes. Verified on the same button in one run --
- * headless: screenshots byte-identical; headed: different. It produced 15
- * confident findings against correctly-built Mantine controls, penalising the
- * very `:focus-visible` pattern that is best practice. Running headed to fix it
- * would demand a display in CI.
- *
- * So: compare computed style instead. Reading `outline` alone would miss
- * box-shadow rings, background and border changes, pseudo-element indicators and
- * ancestor `:focus-within`, so all of those are sampled too. W3C specifies a
- * rendered outcome and this is a proxy for it, so findings stay medium.
- */
 export async function focusIndicators(page: Page, pageId: string): Promise<CheckResult> {
 	const findings: Finding[] = [];
 	const notes: string[] = [];
@@ -1592,21 +1442,11 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 				const effects = value.match(/[a-z-]+\([^)]+\)/g) ?? [];
 				return effects.length > 0 && effects.every((effect) => /^(?:blur\(0px\)|brightness\((?:1|100%)\)|contrast\((?:1|100%)\)|grayscale\((?:0|0%)\)|hue-rotate\(0deg\)|invert\((?:0|0%)\)|opacity\((?:1|100%)\)|saturate\((?:1|100%)\)|sepia\((?:0|0%)\))$/.test(effect)) ? "" : value;
 			};
-			// Element, three ancestors (for :focus-within), and both pseudo-elements.
 			const snapshot = (el: HTMLElement): string => {
 				const parts: string[] = [];
-				// Element, ancestors, siblings and a few descendants. The custom
-				// checkbox pattern -- visually-hidden input, ring drawn on the adjacent
-				// label via `#opt:focus-visible + label::before` -- puts the only
-				// indicator on a sibling. Sampling the element and its ancestors alone
-				// reported no visible focus indicator for a control that is plainly focused, which
-				// would have accused every page using that very common pattern.
 				for (const node of sampleNodes(el)) {
 					for (const pseudo of [null, "::before", "::after"]) {
 						const style = getComputedStyle(node, pseudo);
-						// A non-generated pseudo-element has computed styles but paints
-						// nothing. Including those values made inherited focus changes look
-						// like indicators that do not exist.
 						if (
 							pseudo &&
 							(style.content === "none" || style.content === "normal" || style.display === "none")
@@ -1683,9 +1523,6 @@ export async function focusIndicators(page: Page, pageId: string): Promise<Check
 		});
 	}
 
-	// A check that examines nothing returns the same empty result as a clean page.
-	// It has already happened once (a selector that matched no element), so the
-	// difference is reported rather than inferred.
 	if (limit > 0 && results.length === 0) {
 		notes.push(
 			`the focus indicator test measured none of ${limit} controls on ${pageId}. Treat it as not run, not as passed.`,
@@ -1817,8 +1654,6 @@ async function stateContrastSnapshots(
 				}
 				const own = snapshot(el, colorHelpers, locate);
 				if (!hidden(el)) { out.push(own); continue; }
-				// Compare the same visible representatives before and after focus.
-				// Static decoration must not count as a focus change.
 				const representatives = sampleNodes(el).filter((node) => node !== el)
 					.flatMap((node) => [null, "::before", "::after"].flatMap((pseudo) => {
 						if (hidden(node, !pseudo)) return [];
@@ -1838,7 +1673,6 @@ async function stateContrastSnapshots(
 	);
 }
 
-/** Measure authored hover/focus colours rather than assuming the default state represents them. */
 export async function stateContrast(page: Page, pageId: string): Promise<CheckResult> {
 	await page.addStyleTag({ content: NO_MOTION });
 	const total = await markFocusables(page);
@@ -1904,10 +1738,6 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 				rule: "state-text-contrast",
 			});
 
-			// Hover text still has to meet 1.4.3. A visual hover treatment is not,
-			// by itself, information required to identify the component or its state;
-			// treating every subtle hover fill as 1.4.11 produced 160 false defects
-			// on one real export.
 			if (state === "hover" || (!after.hidden && before.cueSignature === after.cueSignature)) continue;
 			const beforeCues = new Map(before.cues.map((cue) => [`${cue.target ?? ""}|${cue.name}`, cue.signature]));
 			const changed = after.cues
@@ -1933,11 +1763,6 @@ export async function stateContrast(page: Page, pageId: string): Promise<CheckRe
 	return { findings, needsReview, notes };
 }
 
-/**
- * 1.4.11 is a rendered-result criterion. Solid CSS boundaries and SVG paint
- * are measurable without guessing at raster pixels; semantic importance and
- * complex paint remain manual judgements, so findings are medium confidence.
- */
 export async function nonTextContrast(page: Page, pageId: string): Promise<CheckResult> {
 	const measured = await page.evaluate(([locate, colorHelpers]) => {
 		type RGB = [number, number, number];
@@ -2023,7 +1848,6 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 					Number.parseFloat(style[`border${side}Width`]) === 0
 				) continue;
 				const color = style[`border${side}Color`];
-				// A transparent border reserves layout but paints no identifying cue.
 				const declared = parse(color);
 				if (!declared || declared[3] === 0) continue;
 				const overOuter = paint(color, outer);
@@ -2042,7 +1866,6 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 				if (color) cues.push({ ratio: contrast(color, outer), name: "box shadow" });
 			}
 
-			// A contrasting visible label or icon can identify a control without a boundary.
 			const glyph = parse(style.color);
 			const glyphRatio = glyph && glyph[3] > 0 ? contrast(paint(style.color, inside) ?? inside, inside) : 0;
 			const hasVisibleGlyph =
@@ -2084,7 +1907,6 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 				const rect = shape.getBoundingClientRect();
 				const backdrop = [...painted].reverse().find((item) => {
 					if (item.line) {
-						// A line's bounds include unpainted space; sample its actual stroke.
 						const matrix = item.line.getScreenCTM();
 						return matrix && item.line.isPointInStroke(new DOMPoint(
 							(rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2,
@@ -2161,7 +1983,6 @@ export async function nonTextContrast(page: Page, pageId: string): Promise<Check
 	};
 }
 
-/** Only total opaque coverage fails AA; partial overlap belongs to 2.4.12 AAA. */
 export async function focusNotObscured(page: Page, pageId: string): Promise<CheckResult> {
 	const total = await markFocusables(page);
 	const limit = Math.min(total, MAX_FOCUS_CHECKS);
@@ -2249,7 +2070,6 @@ async function horizontalOverflow(page: Page): Promise<HorizontalOverflow[]> {
 		for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
 			const rect = el.getBoundingClientRect();
 			if (rect.width === 0 || rect.right <= width + 1) continue;
-			// Only the outermost offender: an overflowing parent drags its children.
 			if (el.parentElement && el.parentElement.getBoundingClientRect().right > width + 1) continue;
 			out.push({
 				selector: selector(el),
@@ -2264,11 +2084,6 @@ async function horizontalOverflow(page: Page): Promise<HorizontalOverflow[]> {
 	}, [EXEMPT, UNIQUE_SELECTOR] as const);
 }
 
-/**
- * 1.4.10 at a 320 CSS px viewport. `scrollWidth > clientWidth` alone is not the
- * test — maps, diagrams, video and data tables are exempt and legitimately
- * overflow, so exemption-dependent overflow is reported as needs-review.
- */
 export async function reflow(page: Page, pageId: string): Promise<CheckResult> {
 	const original = page.viewportSize();
 	let overflow: HorizontalOverflow[] = [];
@@ -2288,8 +2103,6 @@ export async function reflow(page: Page, pageId: string): Promise<CheckResult> {
 			evidence: `right edge at ${o.right}px in a 320px viewport`,
 			fix: "Let the container wrap or shrink; avoid fixed widths above 320px.",
 			lens: "a11y",
-			// Exempt content may legitimately overflow, so only non-exempt text and
-			// controls are a conclusive failure.
 			confidence: o.exempt || !o.text ? "medium" : "high",
 			basis: "WCAG 1.4.10 Reflow (AA)",
 			rule: "reflow-320",
@@ -2382,7 +2195,6 @@ async function textClipState(page: Page): Promise<TextClipState[]> {
 	);
 }
 
-/** Exercise the new OS text preference only when the document explicitly opts in. */
 export async function textScale(page: Page, pageId: string): Promise<CheckResult> {
 	const optedIn = await page.evaluate(() =>
 		document.querySelector<HTMLMetaElement>('meta[name="text-scale" i]')?.content.trim().toLowerCase() === "scale",
@@ -2477,11 +2289,6 @@ export async function textScale(page: Page, pageId: string): Promise<CheckResult
 	};
 }
 
-/**
- * 1.4.12. Apply the four values and look for text that no longer fits. Only
- * clipping by an `overflow: hidden|clip` ancestor is conclusive — rectangle
- * overlap alone is far too noisy to report (F104).
- */
 export async function textSpacing(page: Page, pageId: string): Promise<CheckResult> {
 	const baseline = await textClipState(page);
 
@@ -2525,19 +2332,7 @@ export async function textSpacing(page: Page, pageId: string): Promise<CheckResu
 	};
 }
 
-/**
- * Alt text that is definitively wrong on its face: an unsubstituted template
- * variable, or a filename. axe's `image-alt` only checks presence, so a
- * non-empty string of either kind passes it.
- *
- * Deliberately excludes vague-but-real alt ("image", "photo"). Judging whether
- * alt text is *meaningful* is class J in the pre-registration and outside this check;
- * adding it here after the fact would be scoring my own homework.
- */
 const TEMPLATE = /\{\{.*\}\}|\$\{.*\}|<%.*%>|\{[a-z_][a-z0-9_]*\}/i;
-// Anchored to the whole value: `alt="Screenshot showing logo.svg"` is a
-// description, not a filename, and matching any string that merely ends in an
-// extension accused it.
 const FILENAME = /^[\w\-. ]{1,60}\.(jpe?g|png|gif|svg|webp|avif|bmp)$|^(img|dsc|screenshot)[-_ ]?\d+$/i;
 
 export async function altTextQuality(page: Page, pageId: string): Promise<CheckResult> {
@@ -2575,28 +2370,6 @@ export async function altTextQuality(page: Page, pageId: string): Promise<CheckR
 	return { findings, notes: [] };
 }
 
-/**
- * Link text that is uninformative on its own. Not a judgement about whether a
- * phrase is *meaningful* -- that needs to know what the link points at and what
- * the user wants, and belongs to a later tier. This is the narrower, decidable
- * question: is the entire accessible name one of a known set of phrases that
- * carry no destination information?
- *
- * Screen-reader users navigate by pulling up a list of links. Twelve entries
- * reading "click here" is a list of nothing.
- *
- * Also reports the stronger case: the same link text pointing at different
- * destinations on one page, which fails 2.4.4 even when the phrase itself is
- * fine ("Read more" under six articles).
- */
-/**
- * Only phrases that stay uninformative *with* their surroundings. 2.4.4 is
- * "Link Purpose (In Context)", so context is allowed to disambiguate, and an
- * earlier, longer list flagged `<a href="info.html">Info</a>` in a navigation
- * bar -- a perfectly good label. "Next", "Download", "Continue", "View" and
- * "Start" went the same way: fine in pagination, next to a named file, or in a
- * wizard. Precision is this tool's whole asset, so the list stays short.
- */
 const USELESS_LINK_TEXT = new Set([
 	"click here", "click here for more", "click this link", "follow this link",
 	"here", "read more", "more", "learn more", "see more", "this", "this link",
@@ -2612,7 +2385,6 @@ export async function linkTextQuality(page: Page, pageId: string): Promise<Check
 				return rect.width > 0 && rect.height > 0 && !el.closest("[aria-hidden=true]");
 			})
 			.map((el) => ({
-				// The accessible name wins: an aria-label makes visible "click here" fine.
 				name: (el.getAttribute("aria-label") ?? el.innerText ?? "").replace(/\s+/g, " ").trim(),
 				href: el.getAttribute("href") ?? "",
 				selector: selector(el),
@@ -2633,12 +2405,6 @@ export async function linkTextQuality(page: Page, pageId: string): Promise<Check
 				evidence: `accessible name is exactly "${link.name}" and destination is ${JSON.stringify(link.href)}; surrounding text was not assessed`,
 				fix: "Make the link text name its destination, or add an aria-label that does.",
 				lens: "a11y",
-				// 2.4.4 (A) allows the *programmatically determined context* -- the
-				// enclosing sentence -- to supply the purpose, and "To book a tour,
-				// click here" does exactly that. Two independent adjudicators called
-				// this FALSE under 2.4.4 and they were right. The criterion that
-				// requires the text to stand alone is 2.4.9, which is AAA, so this is
-				// advisory rather than a conformance failure at AA.
 				confidence: "low",
 				basis: "WCAG 2.4.9 Link Purpose (Link Only) (AAA)",
 				rule: "link-text-uninformative",
@@ -2658,9 +2424,6 @@ export async function linkTextQuality(page: Page, pageId: string): Promise<Check
 			evidence: `accessible name ${JSON.stringify(name)}, ${group.targets.size} distinct destinations: ${[...group.targets].map((target) => JSON.stringify(target)).join(", ")}`,
 			fix: "Give each link text that distinguishes its destination, or add distinguishing aria-labels.",
 			lens: "a11y",
-			// This one does fail 2.4.4: identical names on one page cannot be told
-			// apart from a link list, and context cannot disambiguate two links that
-			// read the same.
 			confidence: "medium",
 			basis: "WCAG 2.4.4 Link Purpose (In Context) (A)",
 			rule: "link-text-ambiguous",
@@ -2669,7 +2432,6 @@ export async function linkTextQuality(page: Page, pageId: string): Promise<Check
 	return { findings, notes: [] };
 }
 
-/** Check an author-declared dark presentation without doubling every interaction probe. */
 export async function darkSchemeVisuals(page: Page, pageId: string): Promise<CheckResult> {
 	const declaration = await page.evaluate(() => {
 		const meta = document.querySelector<HTMLMetaElement>('meta[name="color-scheme" i]')?.content ?? "";

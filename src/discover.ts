@@ -2,7 +2,6 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 
 export interface DiscoveredPage {
-	/** Path relative to the package root, e.g. `glossary.html`. */
 	file: string;
 	url: string;
 }
@@ -10,7 +9,6 @@ export interface DiscoveredPage {
 export interface RedirectStub {
 	file: string;
 	target: string;
-	/** False when the stub points at a file that is not in the package. */
 	resolved: boolean;
 }
 
@@ -33,12 +31,6 @@ async function htmlFiles(root: string, dir = root, found: string[] = []): Promis
 
 interface Redirect {
 	target: string;
-	/**
-	 * Zero delay only. G110 lists a zero-delay meta refresh as a sufficient
-	 * technique for a client-side redirect, while any delay above zero is a
-	 * 2.2.1 timing failure on a real page -- so a delayed refresh is never a
-	 * routing stub, however little content it carries.
-	 */
 	immediate: boolean;
 }
 
@@ -52,22 +44,6 @@ function redirect(html: string): Redirect | null {
 	return null;
 }
 
-/**
- * A redirect stub is a file that exists only to forward to a real page. Some
- * exported courses emit one per logical page, each carrying a
- * `<meta http-equiv="refresh">`. Auditing them reports a WCAG 2.2.1 failure per
- * stub for a file no learner ever sees, which is exactly the over-reporting that
- * sinks audit tools (spec §7).
- *
- * The dangerous direction is the other one: a refresh on a page with real content
- * IS a genuine 2.2.1 failure, and misclassifying it as a stub hides it. So the
- * bar for "stub" is deliberately high -- no headings, no links, images, controls,
- * media, tables, lists or forms anywhere, and almost no text.
- *
- * ponytail: residual blind spot is a page of nothing but a short paragraph plus a
- * refresh, which no heuristic can tell from a stub. Excluded files are listed in
- * the report so the choice stays visible.
- */
 const STUB_MAX_TEXT = 200;
 const CONTENT_ELEMENT = /<(a\s|a>|img|button|input|select|textarea|video|audio|table|ul|ol|form|h[1-6])[\s>]/i;
 

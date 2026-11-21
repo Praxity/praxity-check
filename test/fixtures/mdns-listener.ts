@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { createSocket, type Socket } from "node:dgram";
 import { networkInterfaces, platform } from "node:os";
 
-/** Chromium advertises its WebRTC host candidates as random UUID .local names. */
 export async function observeMdns() {
 	const sockets: Socket[] = [];
 	const names: string[] = [];
@@ -44,7 +43,6 @@ export async function observeMdns() {
 					socket.addMembership("ff02::fb", `::%${defaultZone}`);
 				}
 			}
-			// Multicast controls verify reception despite other processes sharing 5353.
 			socket.setMulticastLoopback(true);
 			const packet = Buffer.concat([Buffer.alloc(12), Buffer.from([36]), Buffer.from(controlName), Buffer.from([5]), Buffer.from("local"), Buffer.from([0, 0, 1, 0, 1])]);
 			packet.writeUInt16BE(1, 4);

@@ -77,3 +77,9 @@ its BSD licence and bundled notices; Playwright also installs FFmpeg under
 LGPL-2.1+ and Windows Winldd. Temurin Java is GPL-2.0 with the Classpath Exception.
 veraPDF is available under GPL-3.0+ or MPL-2.0+. Their notices remain in the
 installed files. See [component archives](docs/offline-components.md).
+
+## Fixture and component-pin provenance
+
+`scripts/package-pdf-fixture.mjs` generates an original synthetic PDF. Its Type 3 A glyph avoids host fonts and third-party assets.
+
+The Temurin Java hashes in `src/components.ts` were checked against the adjacent `.sha256.txt` release assets at <https://github.com/adoptium/temurin17-binaries/releases/tag/jdk-17.0.20.1%2B1>. Browser archive hashes in `browserArchives` were measured from the official archives selected by Playwright 1.62.1. Archive URLs and hashes remain in the component manifest.

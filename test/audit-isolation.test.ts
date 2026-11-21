@@ -33,7 +33,7 @@ test("a closing page's delayed CONNECT cannot mark the next clean page unchecked
 	let proxy: URL;
 	const relay = createTcpServer(socket => {
 		sockets.add(socket);
-		socket.on("error", () => {}); // Closing a denied tunnel can reset its peer.
+		socket.on("error", () => {});
 		let bytes = Buffer.alloc(0);
 		socket.on("data", chunk => {
 			bytes = Buffer.concat([bytes, chunk]);
@@ -46,7 +46,6 @@ test("a closing page's delayed CONNECT cannot mark the next clean page unchecked
 			upstream.on("data", data => socket.write(data));
 			upstream.on("end", () => socket.end());
 			upstream.once("connect", () => {
-				// Keep the final header bytes in flight until the next page navigates.
 				upstream.write(bytes.subarray(0, -2), () => {
 					deliver = () => { if (!upstream.destroyed) upstream.write(bytes.subarray(-2)); };
 					heldResolve();

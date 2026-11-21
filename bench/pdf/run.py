@@ -35,7 +35,6 @@ def profile_for(paths, directory, immutable):
         rules.append(f'(deny file-read* file-write* (subpath {json.dumps(str(Path(path).resolve()))}))')
     for name in immutable:
         rules.append(f'(deny file-write* (literal {json.dumps(str(directory / name))}))')
-    # A directory rename must not move protected paths out of the sandbox rules.
     parents = {directory, *directory.parents}
     for path in paths:
         parents.update(Path(path).resolve().parents)
@@ -112,7 +111,6 @@ def run(plan_path, output, *, bundle_names=pdf_bundle_names, prompt_template=PRO
     write_json(output / 'order.json', trials)
     for trial in trials:
         (output / trial['trialId']).mkdir(mode=0o700)
-    # Preflight proves deny rules actually apply before any paid model call.
     sentinel = output / 'protected-sentinel.txt'
     sentinel.write_text('not-for-reviewers')
     protected += [sentinel, output / 'plan.json', output / 'order.json', output / 'results.json', output / 'runner.pid', output / 'CANCEL', output / 'run-prompt-template.md']

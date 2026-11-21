@@ -7,7 +7,6 @@ export type PdfEngineEvidence = { engine: typeof pdfEngineVersion; operation: st
 type ExtractionEvaluation = { rule: string; outcome: "passed" | "untested"; reason: string };
 type Warning = { rule: string; message: string; remedy: string; evidence: string };
 
-/** Read the caller's immutable snapshot. Each inventory fails independently and retains its diagnostic. */
 export async function extractPdfFacts(snapshot: string, limits: PdfEngineLimits = {}) {
 	const bytes = await readFile(snapshot);
 	const result = {

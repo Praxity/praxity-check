@@ -1,4 +1,3 @@
-// package.json owns the required range. Accept its minimum-version format explicitly.
 export function requireNode(version: string, range: string): void {
 	const minimum = /^>=(\d+)\.(\d+)(?:\.(\d+))?$/.exec(range);
 	const actual = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version);

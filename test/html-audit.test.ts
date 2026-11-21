@@ -15,7 +15,6 @@ const CONTENT = `<!doctype html><html lang="en"><head><title>Evidence</title></h
 
 function observeBrowser(t: TestContext, observe: (browser: Browser) => void) {
 	const launch = chromium.launch.bind(chromium);
-	// Faults enter through Playwright's public interface; checks still use real Chromium.
 	t.mock.method(chromium, "launch", async (options: Parameters<typeof chromium.launch>[0]) => {
 		const browser = await launch(options);
 		observe(browser);

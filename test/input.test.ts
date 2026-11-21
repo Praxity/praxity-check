@@ -154,7 +154,6 @@ test("openInput rejects unsafe archives and extracts safe ones", async (t) => {
 			assert.ok((await rejection(archive)) instanceof UnsafeArchiveError);
 		});
 
-		// setup.test.ts proves the production 20000-entry cap through the same extractor.
 		await t.test("rejects more entries than the limit", async () => {
 			const archive = join(root, "too-many.zip");
 			await writeFile(archive, zip(Array.from({ length: 4 }, () => ({ name: "directory/" }))));

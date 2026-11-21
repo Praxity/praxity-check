@@ -5,7 +5,6 @@ import type { BlockedRequest } from "./report.ts";
 export const OFFLINE_WEBRTC_ARG = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp";
 const EVIDENCE_WINDOW_MS = 1_000;
 
-/** Installed before course scripts; the UDP flag alone does not reliably suppress STUN. */
 export function blockWebRtc({ binding }: { binding?: string } = {}) {
 	const notify = binding ? (globalThis as any)[binding] as () => Promise<void> : undefined;
 	for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection"]) {
@@ -23,7 +22,6 @@ function authority(value: string): string {
 	return `${url.hostname}:${url.port || (url.protocol === "https:" || url.protocol === "wss:" ? "443" : "80")}`;
 }
 
-/** Deny traffic that Playwright routing misses, including redirects and workers. */
 export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedRequest[]) {
 	const origin = new URL(auditOrigin);
 	const redirects = new Map<string, string>();
@@ -34,7 +32,7 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 	const key = (request: BlockedRequest) => {
 		try {
 			if (request.method === "CONNECT" || request.method === "WEBSOCKET" || new URL(request.url).protocol === "https:") return `tunnel\n${authority(request.url)}`;
-		} catch { /* A direct proxy client can send an origin-form or malformed URL. */ }
+		} catch {}
 		return `${request.method}\n${request.url}`;
 	};
 	const remember = (pending: typeof proxyPending, request: BlockedRequest) => {
@@ -58,7 +56,6 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 	};
 	const proxyRecord = (request: BlockedRequest) => {
 		if (closing) return;
-		// Every denied wire attempt owns an entry; browser metadata can never erase it.
 		if (redirects.has(request.url)) request.resourceType = redirects.get(request.url)!;
 		const browser = recent(browserPending, request);
 		if (browser) Object.assign(request, browser);
@@ -69,7 +66,7 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 		if (closing || ![301, 302, 303, 307, 308].includes(status) || !location) return;
 		let target: URL;
 		try { target = new URL(location, responseUrl); }
-		catch { return; } // An invalid Location cannot produce an outbound request.
+		catch { return; }
 		target.hash = "";
 		redirects.set(target.href, resourceType);
 		for (const item of blocked) if (item.url === target.href && item.resourceType === "other") item.resourceType = resourceType;
@@ -79,7 +76,6 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 		response.destroy();
 	});
 	server.on("connect", (request, socket) => {
-		// Chromium tunnels both WS and TLS. Browser events usually supply the full URL.
 		proxyRecord({ url: `connect://${request.url}`, method: "CONNECT", resourceType: "other" });
 		socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
 	});
@@ -106,7 +102,6 @@ export async function blockAuditNetwork(auditOrigin: string, blocked: BlockedReq
 		proxy,
 		args: [
 			`--proxy-server=${proxy.server}`,
-			// Subtract Chromium's implicit loopback exemption before adding the exact origin.
 			`--proxy-bypass-list=${proxy.bypass.replaceAll(",", ";")}`,
 			OFFLINE_WEBRTC_ARG,
 		],

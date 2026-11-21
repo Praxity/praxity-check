@@ -6,8 +6,6 @@ import { SURFACE_IDS, type prepareInteractionReview } from "./interaction-review
 import type { Discovery } from "./discover.ts";
 import { assertOutputOutside } from "./input.ts";
 
-// Keep the accepted format stable when collection budgets change, so saved
-// bundles remain importable without tying this module's limit to collection.
 const MAX_RETAINED_CANDIDATES = 80;
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -42,8 +40,6 @@ export const htmlReviewSchema = {
 		findings: { type: "array", maxItems: 200, items: object({ page: prose, candidateId: sha, stateId: sha, check: { type: "string", enum: ["accessibility"] }, category: { type: "string", enum: categories }, claim: { type: "string", enum: ["structure", "executed-behavior", "coverage"] }, confidence: { type: "string", enum: ["high", "medium", "low"] }, message: prose, action: prose, consequence: prose, verification: prose, evidence: object({ observation: prose, traceIds: list(sha, 32) }) }) },
 	}),
 };
-// Keep generated enums small enough for structured-output providers. Larger
-// packets keep the format constraint; production import checks every reference.
 function bundleSchema(contentSha256: string, evidenceSha256: string, evidence: Evidence) {
 	const boundedEnum = (values: string[], fallback: object) => {
 		const unique = [...new Set(values)];
@@ -77,7 +73,6 @@ function strings(value: unknown, max: number): asserts value is string[] {
 function digest(value: unknown): asserts value is string { if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw new Error("Invalid HTML review SHA-256 identity"); }
 function optionalText(value: unknown) { if (value !== undefined) text(value, 100_000); }
 
-/** The same bounded reader handles review JSON and the retained bundle files. */
 async function readBounded(path: string, limit: number) {
 	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 	try {

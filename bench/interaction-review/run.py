@@ -85,7 +85,6 @@ def execute_html_trial(*, trial, directory, names, blocked, prompt, codex, timeo
             attempt.update(command=command, promptSha256=hashlib.sha256(prompt.encode()).hexdigest())
             attempt.update(runner.invoke(command, directory, timeout, directory / 'stdout.jsonl',
                                          directory / 'stderr.log', prompt, env))
-            # Preserve any final response and usage even when the CLI fails after emitting it.
             try:
                 response, usage = final_response(directory / 'stdout.jsonl')
                 attempt['usage'] = usage

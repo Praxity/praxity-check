@@ -31,7 +31,6 @@ export async function downloadVerified(input: Pick<Archive, "url" | "sha256">, p
         if (!response.ok)
             throw new Error(`Download failed (${response.status}): ${input.url}`);
         bytes = Buffer.from(await response.arrayBuffer());
-        // Save only verified bytes. Consumers use this buffer, since the saved path can change.
         if (createHash("sha256").update(bytes).digest("hex") !== input.sha256)
             throw new Error(`SHA-256 mismatch: ${input.url}`);
         await fs.writeFile(path, bytes, { flag: "wx" });
@@ -46,8 +45,6 @@ export function setupHost(overrides: Partial<SetupHost> = {}): SetupHost {
     return host;
 }
 async function installPlaywright(host: ComponentHost, directory: string, archives: Map<string, Buffer>) {
-    // The official installer consumes verified archives over loopback, including offline use.
-    // Its custom download host and cache folder are supported settings; no Playwright patch.
     const server = createServer((request, response) => {
         const name = basename(new URL(request.url!, "http://localhost").pathname), bytes = archives.get(name);
         if (!bytes) {
@@ -64,12 +61,9 @@ async function installPlaywright(host: ComponentHost, directory: string, archive
         if (!address || typeof address === "string")
             throw new Error("Browser archive server did not start");
         const require = createRequire(import.meta.url), cli = join(dirname(require.resolve("playwright/package.json")), "cli.js");
-        // Only OS paths, temporary folders and locale settings cross this process boundary.
-        // Inherited mirrors, proxies and Node hooks could otherwise bypass verified archives.
         const allowed = new Set(["PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "LANG", "LC_ALL", "LC_CTYPE"]);
         const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(host.env).filter(([key]) => allowed.has(host.platform === "win32" ? key.toUpperCase() : key)));
         const loopback = `http://127.0.0.1:${address.port}`;
-        // Playwright reads each direct variable before its npm_config and npm_package_config aliases.
         for (const name of ["PLAYWRIGHT_DOWNLOAD_HOST", "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST", "PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST"]) {
             for (const key of [name, `npm_config_${name.toLowerCase()}`, `npm_package_config_${name.toLowerCase()}`])
                 env[key] = loopback;
@@ -94,7 +88,6 @@ function selectedComponents(manifest: Component[], selectors: string[]) {
     for (const component of manifest)
         if (!selectors.length || selectors.includes(component.id) || component.checks.some(check => selectors.includes(check)))
             selected.add(component.id);
-    // veraPDF's headless installer needs Java. System or explicit Java is reused below.
     if (selected.has("verapdf"))
         selected.add("java");
     return manifest.filter(component => selected.has(component.id)).sort((a, b) => Number(b.id === "java") - Number(a.id === "java"));
@@ -201,7 +194,6 @@ export async function setup(options: SetupOptions, host: SetupHost) {
             }
             await writeInventory(payload, component, host);
             await host.fs.mkdir(dirname(destination), { recursive: true });
-            // Never replace an existing version silently. Preserve damaged installations for inspection.
             try {
                 await host.fs.lstat(destination);
                 throw new Error(`${component.id} version folder already exists but is not intact; move it aside and run check setup ${component.id}`);
@@ -218,7 +210,6 @@ export async function setup(options: SetupOptions, host: SetupHost) {
             await host.fs.rm(staging, { recursive: true, force: true });
         }
     }
-    // Verify the runtime selections after publishing. Explicit overrides can still win.
     const resolutions = await Promise.all(selected.map(component => resolveComponent(host, component.id)));
     const unusable = resolutions.filter(component => !component.usable);
     unusable.forEach(component => host.print(component.reason!));

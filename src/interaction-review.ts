@@ -5,8 +5,6 @@ import type { DiscoveredPage } from "./discover.ts";
 import { PROJECT_URL, TOOL_NAME, type BlockedRequest } from "./report.ts";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
-// ponytail: fixed caps keep model input predictable; add CLI knobs only after a
-// real package repeatedly needs a different ceiling.
 const MAX_PER_SURFACE_PER_PAGE = 8;
 const MAX_UNIQUE_CANDIDATES = 80;
 const MAX_OCCURRENCES_SHOWN = 8;
@@ -67,7 +65,6 @@ const SURFACES = [
 
 type SurfaceId = (typeof SURFACES)[number]["id"];
 
-// The id-only interface preserves locality for this module's selectors and rules.
 export const SURFACE_IDS: readonly SurfaceId[] = SURFACES.map((surface) => surface.id);
 
 interface DomSlice {
@@ -111,8 +108,6 @@ function indented(value: string): string {
 	return value.split("\n").map((line) => `    ${line}`).join("\n");
 }
 
-// ponytail: inspect two adjacent elements, not arbitrary page regions. Distant or
-// deeply nested panels need explicit references or reviewer follow-up.
 const DISCLOSURE_NEARBY = ((root: Element): Element[] => {
 	if (root.matches("details")) return Array.from(root.children).filter((child) => !child.matches("summary")).slice(0, 2);
 	if (!root.matches('button[aria-expanded], [role="button"][aria-expanded]')) return [];
@@ -191,8 +186,6 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 			const element = document.getElementById(id);
 			if (element && !interesting.includes(element)) interesting.push(element);
 		}
-		// The announcement channel usually sits outside the component it reports on,
-		// so page-level live regions travel with every trace.
 		for (const region of Array.from(document.querySelectorAll('[aria-live], [role="status"], [role="alert"]')).slice(0, 4)) {
 			if (!interesting.includes(region)) interesting.push(region);
 		}
@@ -218,7 +211,6 @@ async function dynamicState(page: Page, rootSelector: string): Promise<string> {
 	return clip(JSON.stringify(state), 6_000);
 }
 
-/** Compare only retained fields, never infer DOM mutations or task completion. */
 export function summarizeRetainedState(before: string, after: string): string[] {
 	type ElementState = { selector: string; context?: string; text: string; visible: boolean; attributes: Record<string, string>; properties: Record<string, string | number | boolean> };
 	const object = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -413,9 +405,6 @@ async function reorderTraces(page: Page, root: Locator, selector: string): Promi
 	if (!await handle.count() || !await handle.isVisible()) {
 		return { traces: [], note: "The draggable item exposed no visible focusable handle; keyboard reorder remains unexercised." };
 	}
-	// State is recorded on the list, not the item: the announcement rule needs the
-	// item's new neighbour and absolute position, and a moved item's positional
-	// selector no longer identifies it.
 	const scope = await root.evaluate((element, locateSource) => {
 		const locate = (0, eval)(locateSource) as (item: Element | null) => string;
 		return locate(element.closest('ul, ol, [role="list"], [role="listbox"], [role="tree"], [role="grid"]') ?? element.parentElement ?? element);
@@ -669,8 +658,6 @@ export async function prepareInteractionReview(
 						const result = pageResults.at(-1);
 						if (resetNote && result) result.note = [result.note, `candidate reset: ${resetNote}`].filter(Boolean).join("; ");
 					}
-					// Identical markup can have opposite keyboard behaviour. This review
-					// exists for that difference, so dedupe only after observing it.
 					const signature = `${surface.id}\n${dom.html}\n${JSON.stringify(prepared)}`;
 					const existing = bySignature.get(signature);
 					if (existing) {

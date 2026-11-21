@@ -31,7 +31,6 @@ test("skill gives the Rubato command and checks exports, not course source", asy
 	assert.match(text, /export HTML first with the prax-format skill's export step/);
 	assert.match(text, /Fix authored causes in the course source with the prax-format skill, then export and check again; never patch the export\./);
 	assert.match(text, /Studio's own page chrome \(navigation, sidebar, pager, menus\) are Studio issues/);
-	// Rubato installs skill/ alone; a relative link would leave it.
 	assert.doesNotMatch(text, /\]\((?![a-z][\w+.-]*:|#)[^)]*\)/i);
 });
 
@@ -88,7 +87,6 @@ function run(launcher, args, root, inherited = {}) {
 	if (process.env.CHECK_COMPONENTS_DIR) env.CHECK_COMPONENTS_DIR = process.env.CHECK_COMPONENTS_DIR;
  Object.assign(env, inherited);
 	if (windows) {
-		// Node cannot execFile a .cmd. The absolute system shell is the only external launcher tool.
 		const command = `"${launcher}" ${args.map(arg => `"${arg}"`).join(" ")}`;
 		return spawnSync(join(process.env.SystemRoot, "System32", "cmd.exe"), ["/d", "/s", "/c", `"${command}"`], { cwd: root, env, encoding: "utf8", windowsVerbatimArguments: true });
 	}
@@ -124,7 +122,6 @@ async function proveWindowsPdf(launcher, root) {
 	assert.deepEqual(report.facts.words.map(word => word.text), ["A"]);
 	for (const operation of ["open", "pages", "fonts", "images", "words"]) assert.ok(report.evidence.some(item => item.operation === operation && item.outcome === "passed"), operation + " must extract facts");
 
-	// Changing this one PDF/UA requirement checks both the finding and launcher exit code.
 	const failingInput = join(root, "synthetic title display failure.pdf");
 	await writeFile(failingInput, syntheticPdfUa({ displayTitle: false }));
 	const failingOutput = join(root, "PDF UA failing report.json");
@@ -151,7 +148,6 @@ async function proveWindowsPdf(launcher, root) {
 	const facts = JSON.parse(await readFile(join(reviewDirectory, bundle.artifacts[0].facts), "utf8"));
 	assert.deepEqual(facts.words.map(word => word.text), ["A"]);
 
-	// Design evidence exercises real PDFium spans and detail crops.
 	const designDirectory = join(root, "PDF design evidence manual review");
 	const design = run(launcher, ["prepare-review", input, "--tier", "inference", "--checks", "design", "--reviewer", "manual", "--design-evidence", "--output", designDirectory], root);
 	assert.equal(design.status, 0, design.stderr || design.stdout || String(design.error));
@@ -217,7 +213,6 @@ async function proveArtifact(staged, root, html) {
 		assert.equal(report.counts.confidence.high, 0);
 		assert.ok(report.pages.every(page => page.audited));
 		assert.equal(report.environment.components[0].source, "setup");
-		// A failing synthetic page checks that the wrapper preserves findings exit code 1 too.
 		await writeFile(join(course, "index.html"), '<!doctype html><html lang="en"><head><title>Practice lesson</title></head><body><main><h1>Practice lesson</h1><button></button></main></body></html>');
 		const failing = run(launcher, ["check", course, "--json", join(root, "failing report.json")], root);
 		assert.equal(failing.status, 1, failing.stderr || failing.stdout);
@@ -392,7 +387,6 @@ test("portable build relocates, retains its inventory and runs with only externa
 	const report = JSON.parse(await readFile(reportPath, "utf8"));
 	assert.equal(report.machineStatus, "complete");
 	assert.deepEqual(report.facts.words.map(word => word.text), ["PDF", "facts", "fixture"]);
-	// Simulate an older runtime at the process boundary, before any CLI input is read.
 	const oldVersion = join(root, "old-version.cjs");
 	await writeFile(oldVersion, 'Object.defineProperty(process, "version", { value: "v22.17.0" });\n');
 	await rm(join(artifact, "node_modules"), { recursive: true });

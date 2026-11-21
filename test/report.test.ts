@@ -374,7 +374,6 @@ test("generated assessment ids do not create baseline churn", () => {
 	const prior = JSON.parse(JSON.stringify(report("th#rs-cat-0suiak-item-assessment-164-category-1-0"))) as {
 		needsReview: Array<Record<string, unknown>>;
 	};
-	// This is the raw-selector occurrence ID emitted by v0.2.0.
 	prior.needsReview[0]!.occurrenceId = "occ_bf73f072c1c88741";
 	const current = report(
 		"th#rs-cat-rau2xd-item-assessment-164-category-1-0",

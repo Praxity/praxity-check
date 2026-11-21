@@ -43,7 +43,6 @@ class Page:
         self.commands.append(f'{color[0]} {color[1]} {color[2]} rg BT /{font} {size} Tf 1 0 0 1 {x} {y} Tm ({escaped}) Tj ET Q')
         fact = dict(kind='text', text=value, origin=[x,y], font=font, size=size,
                     color=list(color), clipBox=clip)
-        # Courier has exactly 600-unit advance. Other fonts export origins only.
         if font == 'F1':
             fact['advanceBox'] = [x, y, len(value)*size*.6, size]
         self.facts.append(fact)
@@ -60,7 +59,6 @@ class Page:
 
 
 def write_pdf(path, pages):
-    # Same direct PDF object format as generate.py, with variable pages and fonts.
     objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'',
                b'<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>',
                b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
@@ -85,7 +83,6 @@ def write_pdf(path, pages):
     path.write_bytes(data)
 
 
-# Each entry is an original document purpose, layout and three independent tasks.
 CASES = [
  dict(title='Open studio afternoon', context='Volunteers use this printed agenda to prepare and run a community art afternoon.', layout='agenda',
       modules=[('Room handover','Return the room key before 18:00.'), ('Attendance record','Adults','Children'), ('Before doors open','Count all chairs before opening.')]),
@@ -209,7 +206,6 @@ def module(p, cat, args, x,y, flawed):
     extra=[]
     if cat == 'clipping':
         text=values[0]
-        # Last 11 characters vanish, while the title and initial instruction remain.
         width=(len(text)-11)*6.6
         clip=[x,y-45,width,22] if flawed else None
         p.text(x,y-34,text,11,clip=clip)
@@ -277,7 +273,6 @@ def make_case(index, flawed):
         d.update(id=f'P{index+1:02d}-D{n}',page=page)
         if flawed: defects.append(d)
         allowed.extend(extra)
-    # One ordinary hyphenated word and intentional spare space are negative controls.
     if case['layout']=='two-page-reference':
         pages[0].text(36,214,'Copy the number the scale dis-',11)
         pages[0].text(36,198,'plays, including its units.',11)
@@ -290,7 +285,6 @@ def generate(out, seed=20260914, render=True):
     renders=out/'renders'
     if render: renders.mkdir()
     rng=random.Random(seed)
-    # Shuffle documents first; opaque IDs are drawn independently of case/variant.
     order=[(i,v) for i in range(12) for v in (False,True)]; rng.shuffle(order)
     key=dict(schemaVersion='pdf-expanded-private-1',seed=seed,
              corpusId='original-workplace-expanded',version='2',

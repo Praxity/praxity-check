@@ -1,4 +1,3 @@
-// Original synthetic PDF. The Type 3 A glyph avoids host fonts and third-party assets.
 export function syntheticPdfUa({ displayTitle = true } = {}) {
 	const stream = (content, attributes = "") => `<< /Length ${Buffer.byteLength(content)} ${attributes} >>\nstream\n${content}\nendstream`;
 	const metadata = '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfuaid:part="1"/><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Synthetic letter A</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>';

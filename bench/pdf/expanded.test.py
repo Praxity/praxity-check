@@ -72,19 +72,16 @@ def main():
                 elif d['category']=='color-only-meaning':
                     swatches=[o for o in ops if o['kind']=='rectangle']
                     assert len(swatches)==2
-                    # The existing grayscale conversion uses encoded-channel luma.
                     luma=lambda rgb: sum(a*b for a,b in zip(rgb,(.299,.587,.114)))
                     assert abs(luma(swatches[0]['color'])-luma(swatches[1]['color']))<.002
                 else:
-                    assert len(texts)==7  # standalone note plus six data cells, no header
+                    assert len(texts)==7
         for pair_id in {c['pairId'] for c in cases}:
             clean=next(c for c in cases if c['pairId']==pair_id and c['variant']=='clean')
             bad=next(c for c in cases if c['pairId']==pair_id and c['variant']=='flawed')
             assert clean['useContext']==bad['useContext']
             assert clean['pageCount']==bad['pageCount']
             assert words(clean,root)==words(bad,root)+Counter(' '.join(clean['cleanOnlyText']).split()), pair_id
-            # The PDF source still carries clipped/overprinted text. Visual review must
-            # establish visibility; extraction alone cannot prove those defects.
             source=lambda c: Counter(o['text'] for p in c['pages'] for o in p['operations'] if o['kind']=='text')
             assert source(clean)==source(bad)+Counter(clean['cleanOnlyText'])
         again=generate(Path(temp)/'again',render=False)

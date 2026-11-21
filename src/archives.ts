@@ -3,17 +3,9 @@ import * as nodeFs from "node:fs/promises";
 import { dirname, isAbsolute, join, posix, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import yauzl from "yauzl";
-/** Extraction limits bound disk use when unpacking untrusted content. */
-// Video-heavy courses can legitimately exceed 512MB unpacked. The ratio check
-// below is what actually defends against a bomb; this cap only bounds disk use.
 export const MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024;
 export const MAX_ENTRIES = 20000;
 const MAX_RATIO = 100;
-/**
- * Injectable so the bomb tests can assert the caps with a small fixture. Proving
- * the 4GiB cap otherwise needs a 4GiB fixture, and a test too expensive to run
- * is a test that stops being run.
- */
 export interface Limits {
     maxTotalBytes?: number;
     maxEntries?: number;
@@ -21,19 +13,11 @@ export interface Limits {
     component?: boolean;
     validateOnly?: boolean;
 }
-/** Below this, a high ratio is normal (a 40-byte file of zeroes compresses hard). */
 const RATIO_FLOOR_BYTES = 1024 * 1024;
 const S_IFMT = 0xf000;
 const S_IFLNK = 0xa000;
 export class UnsafeArchiveError extends Error {
 }
-/**
- * yauzl validates entry names and declared sizes itself and rejects with a plain
- * Error before our own guards ever see the entry. The archive is still refused,
- * but the caller cannot tell "malicious" from "corrupt" â€” so the ones that mean
- * an attack get relabelled. Our guards below stay in place for what yauzl does
- * not cover: symlinks, entry count, ratio, and real expanded bytes.
- */
 const YAUZL_UNSAFE = /invalid relative path|absolute path|too many bytes in the stream|invalid characters in fileName/i;
 export function asUnsafe(err: unknown): Error {
     if (err instanceof UnsafeArchiveError)
@@ -41,11 +25,6 @@ export function asUnsafe(err: unknown): Error {
     const message = err instanceof Error ? err.message : String(err);
     return YAUZL_UNSAFE.test(message) ? new UnsafeArchiveError(message) : (err as Error);
 }
-/**
- * Reject before extracting, not after. A path is safe only if it resolves inside
- * the destination -- checking for ".." misses symlink chains and absolute paths
- * on the other platform's separator.
- */
 function safeEntryPath(root: string, fileName: string): string {
     if (isAbsolute(fileName) || /^[a-zA-Z]:/.test(fileName)) {
         throw new UnsafeArchiveError(`archive entry has an absolute path: ${fileName}`);
@@ -111,8 +90,6 @@ export async function extractZip(zipPath: string | Buffer, root: string, limits:
                         zip.readEntry();
                         return;
                     }
-                    // The declared size is attacker-controlled, so it gates cheaply here and
-                    // the real byte count below is what actually enforces the cap.
                     if (entry.uncompressedSize > RATIO_FLOOR_BYTES &&
                         entry.uncompressedSize / Math.max(entry.compressedSize, 1) > maxRatio) {
                         throw new UnsafeArchiveError(`archive entry has a suspicious compression ratio: ${entry.fileName}`);
@@ -151,7 +128,6 @@ export async function extractZip(zipPath: string | Buffer, root: string, limits:
         zip.readEntry();
     });
 }
-// Component archives are pinned, but extraction also enforces a filesystem boundary.
 const maxBytes = 512 * 1024 * 1024;
 function entryPath(root: string, name: string) {
     if (!name || name.includes("\\") || name.includes(":") || name.includes("\0") || name.startsWith("/") || name.split("/").includes(".."))
@@ -267,8 +243,6 @@ async function tarArchive(compressed: Buffer, root: string, files: typeof nodeFs
     }
     if (!ended || longName || longLink || Object.keys(pax).length)
         throw new Error("Truncated tar archive");
-    // Temurin links licence texts inside the archive. Materialize only internal regular files;
-    // never create filesystem links or follow a link outside this staging directory.
     while (links.length) {
         let progress = false;
         for (let index = links.length - 1; index >= 0; index--) {
@@ -277,7 +251,6 @@ async function tarArchive(compressed: Buffer, root: string, files: typeof nodeFs
                 const target = await files.lstat(link.target);
                 if (!target.isFile())
                     throw new Error(`Archive link target is not a file: ${link.target}`);
-                // Materialized links consume disk space just like ordinary extracted files.
                 charge(target.size);
                 await files.mkdir(dirname(link.path), { recursive: true });
                 await files.copyFile(link.target, link.path, nodeFs.constants.COPYFILE_EXCL);

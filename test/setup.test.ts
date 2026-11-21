@@ -124,7 +124,6 @@ test("setup installs ZIP browser, Java and headless veraPDF fixtures and invento
     assert.deepEqual((await setup({ yes: true }, host)).installed, []);
 });
 
-// Every hostile variable is set at once; the process-boundary assertions below check each one by name.
 const UNTRUSTED_INSTALLER_VARIABLES = [
  "PLAYWRIGHT_DOWNLOAD_HOST", "npm_config_playwright_download_host", "npm_package_config_playwright_download_host",
  "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "npm_config_playwright_chromium_download_host", "npm_package_config_playwright_chromium_download_host",
@@ -162,10 +161,8 @@ for (const offline of [false, true]) {
    fetchFile: async url => new Response(Uint8Array.from(archives.get(basename(new URL(url).pathname))!)) });
   const run = host.run;
   host.run = async (file, args, env) => {
-   // The ZIP contains synthetic runtime bytes; only Playwright's installer is executable.
    if (file === join(componentDirectory(host, component), component.entryPoint) && args.includes("--version"))
     return { stdout: "Chromium 151.0.7922.34", stderr: "", code: 0 };
-   // Exercise the real installer and check its environment at the process boundary.
    for (const name of ["PLAYWRIGHT_DOWNLOAD_HOST", "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "PLAYWRIGHT_FIREFOX_DOWNLOAD_HOST", "PLAYWRIGHT_WEBKIT_DOWNLOAD_HOST"]) {
     for (const key of [name, `npm_config_${name.toLowerCase()}`, `npm_package_config_${name.toLowerCase()}`]) {
      assert.equal(new URL(env[key]!).hostname, "127.0.0.1", key);
@@ -293,7 +290,6 @@ test("PDF setup uses managed installer Java when a system wrapper has no usable 
   await fs.mkdir(system);
   await fs.writeFile(wrapper, "system wrapper uses Java on PATH");
   if (failure !== "missing") await fs.writeFile(java, "unusable system Java");
-  // Resolve the simulated PATH against the fixture, independently of the checkout drive.
   host.cwd = root;
   host.env.PATH = "system";
   const stat = host.fs.stat;
@@ -423,7 +419,6 @@ for (const offline of [true, false]) {
 
 test("tar link copies count toward the expanded byte limit before copying", async t => {
     const { root } = await fixture(t);
-    // The filesystem adapter avoids allocating hundreds of MiB in this regression test.
     for (const type of ["1", "2"]) {
         for (const count of [511, 512, 600]) {
             let copies = 0;

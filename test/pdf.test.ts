@@ -6,7 +6,6 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { checkPdf, pdfHumanSummary } from "../src/pdf.ts";
 
-// Synthetic objects with a real xref, one unembedded font and a 1-pixel raster at 72 points.
 function fixture() {
 	const stream = "BT /F1 12 Tf 20 100 Td (Synthetic PDF) Tj ET q 72 0 0 72 20 20 cm /Im1 Do Q";
 	const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /CropBox [10 10 602 782] /Rotate 90 /Resources << /Font << /F1 4 0 R >> /XObject << /Im1 6 0 R >> >> /Contents 5 0 R >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`, "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\nX\nendstream"];

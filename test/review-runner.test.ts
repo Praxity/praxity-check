@@ -104,7 +104,6 @@ const prompt = fs.readFileSync(0, 'utf8');
  process.exit(0);
 `;
 	if (process.platform === "win32") {
-		// Intercept only the executable boundary in the parent; no Node hook reaches the reviewer.
 		await writeFile(fixture, reviewer);
 		await writeFile(join(bin, "launch.cjs"), `const cp = require('node:child_process'); const spawn = cp.spawn; cp.spawn = (command, args, options) => command === 'codex' ? spawn(process.execPath, [${JSON.stringify(fixture)}, ...args], options) : spawn(command, args, options); require('node:module').syncBuiltinESMExports();`);
 	} else {
@@ -148,7 +147,6 @@ const prompt = fs.readFileSync(0, 'utf8');
 		const mode = (await stat(join(bundle, "review.json"))).mode;
 		assert.equal(mode & 0o111, 0);
 		assert.equal(mode & 0o600, 0o600);
-		// Windows reports DOS read/write attributes, not Unix owner-only permissions.
 		if (process.platform !== "win32") assert.equal(mode & 0o777, 0o600);
 		const failed = join(dir, `${kind}-failed`);
 		const invalid = run(target!, failed, [], { ...env, MOCK_BAD_REVIEW: "1" });

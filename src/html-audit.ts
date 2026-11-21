@@ -48,34 +48,6 @@ export interface HtmlAuditResult {
 	environment: Omit<AuditEnvironment, "runtime">;
 }
 
-/**
- * Audit discovered pages and declared states. The interface lets tests exercise
- * whole audits. The module's depth hides browser settings, check order,
- * context lifetimes and time limits; probe restoration keeps its locality in
- * checks.ts. Returns page results, blocked requests and the browser version,
- * viewport and colour scheme.
- * Each initial page and declared state has fresh storage. Storage persists
- * across navigation within that page or state's checks and actions.
- *
- * A failed check retains earlier check results and records unchecked coverage.
- * The 60s limit covers checks only, after settling, triage and title retrieval.
- * A timeout retains completed checks' findings, review items, notes, evaluations
- * and rules; every unfinished check is recorded as unchecked with the timeout
- * reason. The page remains audited. After an initial timeout, declared states
- * are recorded as unchecked and skipped. Scenario timeouts also retain completed
- * checks and allow later states to run. States concatenate their results without
- * deduplication.
- *
- * Initial page creation, navigation, settling, triage or title retrieval failure
- * retains an unaudited page with no findings and records skipped declared states.
- * Scenario context or page creation, navigation, settling, triage or action failure
- * records that state as unchecked. Earlier evidence survives and later pages and
- * states continue. Page and context cleanup failures become notes, preserving the
- * evidence. Only browser launch and initial context creation failures reject the
- * audit. Browser-close failures do not replace the outcome.
- * Repeated initial destinations retain findings and declared-state results but
- * mark the input's distinct-destination coverage unchecked and unaudited.
- */
 export async function auditHtml(
 	options: HtmlAuditOptions,
 	/** @internal Tests shorten the check deadline without changing production options. */
@@ -100,12 +72,6 @@ export async function auditHtml(
 	}), component);
 }
 
-/**
- * Borrow a context with the audit's launch settings and network policy for the
- * callback's lifetime. This seam gives prepare-review the same policy without
- * exposing check execution. The module closes the browser when the callback
- * finishes; launch, context creation and callback failures reject unchanged.
- */
 export async function withAuditContext<T>(
 	options: Pick<HtmlAuditOptions, "auditOrigin" | "allowNetwork">,
 	run: (context: BrowserContext, blockedRequests: BlockedRequest[]) => Promise<T>,
@@ -139,8 +105,6 @@ async function withAuditBrowser<T>(
 	const blockedRequests: BlockedRequest[] = [];
 	const guard = options.allowNetwork ? undefined : await blockAuditNetwork(options.auditOrigin, blockedRequests);
 	let browser: Browser | undefined;
-	// Auditing author intent requires a browser that does not silently suppress
-	// autoplay before the 1.4.2 probe can observe it.
 	try {
 		browser = await chromium.launch({
 			executablePath: component.path!,
@@ -149,23 +113,12 @@ async function withAuditBrowser<T>(
 		});
 		return await run(browser, blockedRequests);
 	} finally {
-		// Preserve the CLI's outcome when browser cleanup fails.
 		await browser?.close().catch(() => {});
 		await guard?.close();
 	}
 }
 
-/**
- * Each check is isolated. One evaluate exception used to escape here, unwind
- * auditPages and discard every page already audited along with the JSON -- a
- * whole package report lost to one malformed element. A check that fails is
- * recorded as not run, which is materially different from a check that ran and
- * found nothing.
- */
 async function runChecks(page: Page, pageId: string, timeoutMs: number): Promise<{ result: CheckResult; timedOut: boolean }> {
-	// Order matters: motion must be observed before anything interacts with the
-	// page, and the last group mutates the viewport or document, so it runs after
-	// every check that reads the natural page state.
 	const natural = [
 		pauseStopHide, audioAutoplay, runAxe, scopeCoverage, interactionChecks,
 		keyboardWalk, altTextQuality, linkTextQuality, localResources,
@@ -198,7 +151,6 @@ async function runChecks(page: Page, pageId: string, timeoutMs: number): Promise
 	};
 	const run = async (check: (page: Page, pageId: string) => Promise<CheckResult>, newVariantsOnly = false) => {
 		try {
-			// Merge only the race winner, so a late check cannot alter returned evidence.
 			const result = await Promise.race([check(page, pageId), timeout]);
 			const findingKeys = new Set(findings.map((item) => `${item.rule}\0${item.selector ?? ""}`));
 			const reviewKeys = new Set(needsReview.map((item) => `${item.rule}\0${item.selector ?? ""}`));
@@ -246,7 +198,6 @@ async function createAuditContext(
 	allowNetwork: boolean,
 	allBlockedRequests: BlockedRequest[],
 ) {
-	// Separate listeners and counts keep every wire attempt with its issuing context.
 	const blockedRequests: BlockedRequest[] = [];
 	const guard = allowNetwork ? undefined : await blockAuditNetwork(auditOrigin, blockedRequests);
 	let context: BrowserContext | undefined;
@@ -259,8 +210,6 @@ async function createAuditContext(
 		if (errors.length) throw new AggregateError(errors, "audit context cleanup failed");
 	})();
 	try {
-		// A fresh context has no registrations to clear; blocking service workers
-		// also prevents the package from installing one during the run (spec §4).
 		context = await browser.newContext({
 			serviceWorkers: "block",
 			viewport: VIEWPORT,
@@ -281,7 +230,6 @@ async function createAuditContext(
 				});
 				void (async () => {
 					const session = await context!.newCDPSession(page);
-					// Chromium can omit Playwright redirect events before the next interception.
 					session.on("Network.requestWillBeSent", ({ redirectResponse, type }) => {
 						if (!redirectResponse) return;
 						const location = Object.entries(redirectResponse.headers as Record<string, string>)
@@ -294,7 +242,6 @@ async function createAuditContext(
 			context.on("response", (response) => {
 				guard.redirect(response.url(), response.status(), response.headers().location, response.request().resourceType());
 			});
-			// Redirects emit requests even when Playwright skips their route handler.
 			context.on("request", (request) => {
 				if (!isAuditServerUrl(request.url(), auditOrigin)) guard.record({
 					url: request.url(), method: request.method(), resourceType: request.resourceType(),
@@ -471,7 +418,6 @@ async function auditPages(
 		try {
 			await context?.close();
 		} catch (error) {
-			// The context remains unused when discovery is empty.
 			audits.at(-1)?.notes.push(`initial context cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}

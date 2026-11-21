@@ -32,11 +32,8 @@ export type PdfEngine = {
 	close(): Promise<void>;
 };
 
-/** One worker per document. Every operation has its own 30 s deadline, matching the former tool deadlines. */
 export async function openPdf(bytes: Uint8Array, limits: PdfEngineLimits = {}): Promise<PdfEngine> {
 	const deadlineMs = limits.deadlineMs ?? 30_000;
-	// 512 MiB allows large source PDFs and 1600 px overviews while bounding wasm growth.
-	// Worker resourceLimits only bound V8; the worker checks wasm memory after every native call.
 	const maxWasmBytes = limits.maxWasmBytes ?? 512 * 1024 * 1024;
 	if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || !Number.isSafeInteger(maxWasmBytes) || maxWasmBytes < 1) throw new Error("Invalid PDF engine limits");
 	const copy = Uint8Array.from(bytes);

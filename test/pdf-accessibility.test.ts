@@ -206,8 +206,6 @@ test("CLI retains partial findings and structured coverage with unchecked diagno
 	const executable = join(dir, process.platform === "win32" ? "verapdf.exe" : "verapdf"), input = join(dir, "synthetic.pdf"), output = join(dir, "report.json");
 	const data = cappedPayload();
 	if (process.platform === "win32") {
-		// execFile cannot run shebang scripts or .cmd files on Windows. Compile a
-		// fixture executable with the compiler included in Windows' .NET Framework.
 		const fixture = join(dir, "Validator.cs");
 		await writeFile(fixture, `using System;
 using System.IO;
@@ -236,7 +234,6 @@ class Validator {
 	assert.equal(validation.validator.machineCompliant, false);
 	assert.equal(validation.findings.length, 1);
 	assert.equal(validation.evaluations[0]?.outcome, "untested");
-	// PDF facts are deliberately unavailable; this check isolates validator output propagation.
 	await writeFile(input, "%PDF-1.7\nsynthetic placeholder");
 	const cli = spawnSync(process.execPath, [resolve("src/cli.ts"), "check", input, "--verapdf", executable, "--json", output], { encoding: "utf8", env: { ...process.env, PATH: dir } });
 	assert.equal(cli.status, 2, cli.stderr);

@@ -15,7 +15,6 @@ type Issue = { id: string; rule: string; severity: "serious" | "moderate"; confi
 export type { PdfOptions } from "./selection.ts";
 
 
-/** Check a read-only private snapshot. The report retains engine and validator evidence before cleanup. */
 export async function checkPdf(path: string, options: PdfOptions = {}) {
 	const policy = normalizePdfPolicy(options);
 	const selection = selectChecks(policy);
@@ -94,7 +93,6 @@ export async function checkPdf(path: string, options: PdfOptions = {}) {
 	} finally { await rm(dir, { recursive: true, force: true }); }
 }
 
-/** Human summary of the same findings retained in JSON. Repeated occurrences share one explanation. */
 export function pdfHumanSummary(report: Pick<Awaited<ReturnType<typeof checkPdf>>, "document" | "machineStatus" | "findings" | "needsReview" | "evaluations"> & { selection?: ReturnType<typeof selectChecks> }, jsonPath?: string): string {
 	const lines = [
 		`PDF: ${report.document.path}`,
@@ -156,7 +154,6 @@ export async function pdfCli(args: string[]): Promise<number> {
 	if (options.tier === "inference" && !reviewPaths.length) throw new Error("--tier inference requires --review; prepare a review first with prepare-review --tier inference.");
 	if (options.tier === "deterministic" && reviewPaths.length) throw new Error("--review requires --tier inference.");
 	const target = resolve(args[1]!);
-	// Compare inode identity as well as paths, protecting symlink and hardlink aliases.
 	if (json) {
 		const source = await stat(target);
 		const output = await stat(json).catch((e: NodeJS.ErrnoException) => { if (e.code !== "ENOENT") throw e; return undefined; });
@@ -189,7 +186,6 @@ export async function pdfCli(args: string[]): Promise<number> {
 		try {
 			const pending = join(staging, "report.json");
 			await writeFile(pending, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
-			// Replacing the directory entry never writes through a symlink or hardlink.
 			await rename(pending, json);
 		} finally { await rm(staging, { recursive: true, force: true }); }
 	}
