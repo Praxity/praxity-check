@@ -24,7 +24,6 @@ function integer(value: unknown, min = 0): asserts value is number {
 }
 const counts = () => ({ attempted: 0, valid: 0, failed: 0, invalid: 0, contaminated: 0, expected: 0, detected: 0, findings: 0, unsupported: 0, controlTrials: 0, controlFalseAlarms: 0, contextQuestions: 0, suggestions: 0, supported: 0, actionable: 0, unexpectedDefects: 0 });
 
-/** Counts blinded judgments; never decides whether finding prose is true. */
 export async function scoreRun(runPath: string) {
   const base = dirname(resolve(runPath));
   const file = async (path: unknown) => { text(path); return readFile(resolve(base, path)); };
@@ -85,7 +84,6 @@ export async function scoreRun(runPath: string) {
     await checkedFile(join(bundlePath, 'evidence.json'), trial.evidenceSha256);
     await checkedFile(trial.promptPath, trial.promptSha256);
     await checkedFile(trial.reviewPath, trial.reviewSha256);
-    // A trial copy may hold the response, but its packet must be the frozen packet.
     for (const name of ['manifest.json', 'evidence.json']) {
       if (!((await file(join(dirname(resolve(base, trial.reviewPath)), name))).equals(await readFile(join(bundlePath, name))))) throw new Error('Review packet differs from frozen bundle');
     }

@@ -1,0 +1,6 @@
+{
+	"ignore": [
+		"bench/act/WAI/content-assets/wcag-act-rules/test-assets/focus-visible-oj04fd/styles.css"
+	],
+	"files": {}
+}

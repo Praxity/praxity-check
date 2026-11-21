@@ -9,7 +9,6 @@ import { PROJECT_URL, TOOL_NAME } from "./report.ts";
 
 const run = promisify(execFile);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-/** The Guidepup that drives VoiceOver, read from the alias package so the evidence names what ran. */
 export function voiceOverGuidepupVersion(): string {
 	return (createRequire(import.meta.url)("@guidepup/guidepup-voiceover/package.json") as { version: string }).version;
 }
@@ -193,8 +192,6 @@ export function clusterSpeechEvents(events: number[]): number[] {
 function eventsNearExpected(capture: SpeechCapture, expected: string, afterMs: number): number[] {
 	const observedAt = capture.changes.find((change) => includesPhrase(change.phrase, expected))?.atMs;
 	if (observedAt === undefined) return [];
-	// ponytail: cluster the native log burst and bound it to the observed phrase.
-	// Replace this if macOS exposes a supported text-bearing speech event stream.
 	return clusterSpeechEvents(capture.speechEventsMs).filter((atMs) => atMs >= observedAt - 750 && atMs <= observedAt + afterMs);
 }
 
@@ -254,7 +251,6 @@ async function captureSpeech(
 	}
 }
 
-/** Guidepup wraps the step that failed in `cause`; the CLI prints only the message, so carry the chain in it. */
 export function withCauses(error: unknown): Error {
 	const messages: string[] = [];
 	for (let current: unknown = error, depth = 0; current !== undefined && depth < 5; depth++) {
@@ -265,9 +261,6 @@ export function withCauses(error: unknown): Error {
 	return new Error(messages.join(": "), { cause: error });
 }
 
-// VoiceOver stays on Guidepup 0.24.1, which this workflow was validated with. 0.34.0 rewrites
-// VoiceOver's preferences before every start and fails when VoiceOver's portable `.scrd.vou`
-// is a directory (it removes the path without recursion).
 async function loadVoiceOver(): Promise<typeof import("@guidepup/guidepup-voiceover")["voiceOver"]> {
 	return (await import("@guidepup/guidepup-voiceover")).voiceOver;
 }

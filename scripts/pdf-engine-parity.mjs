@@ -1,4 +1,3 @@
-// Development oracle only. Native Poppler is never a product dependency.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";

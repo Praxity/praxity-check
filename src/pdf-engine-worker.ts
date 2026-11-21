@@ -8,7 +8,6 @@ const { bytes, maxWasmBytes, wasmPath } = workerData as { bytes: Uint8Array; max
 let fatal = false;
 const diagnostics: string[] = [];
 const native = await init({ wasmBinary: await readFile(wasmPath), printErr: (message: string) => diagnostics.push(message) });
-// Emscripten exports HEAPU8 at runtime; the package omits it from its declarations.
 const memory = native.pdfium as typeof native.pdfium & { HEAPU8: Uint8Array };
 function ceiling() {
 	if (memory.HEAPU8.buffer.byteLength > maxWasmBytes) {
@@ -16,7 +15,6 @@ function ceiling() {
 		throw new Error(`PDFium wasm memory ceiling exceeded (${memory.HEAPU8.buffer.byteLength} > ${maxWasmBytes} bytes)`);
 	}
 }
-// Check after each PDFium call, including calls made inside page and object loops.
 const p = new Proxy(native, { get(target, key, receiver) {
 	const value: unknown = Reflect.get(target, key, receiver);
 	return typeof value === "function" ? (...args: unknown[]) => { const result: unknown = value.apply(target, args); ceiling(); return result; } : value;
@@ -43,11 +41,7 @@ let document = 0, analysisDocument = 0, sourceBuffer = 0;
 let extractionFailure: Error | undefined;
 const extractionAnnotationTransforms = new Map<number, (Matrix | undefined)[]>();
 const formEnvironments = new Map<number, number>();
-// Match normal display rendering, including the explicit widget rendering below.
-// Invisible applies to unknown subtypes; PDFium still renders known subtypes.
 const annotationVisible = (annot: number) => !(p.FPDFAnnot_GetFlags(annot) & (2 | 32));
-// PDFium generates these normal appearances when rendering a missing /AP.
-// Widgets use the form environment; Stamp and unsupported subtypes require saved appearances.
 const generatedAppearanceSubtypes = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 28]);
 function formEnvironment(doc: number) {
 	if (p.FPDF_GetFormType(doc) !== 1) return 0;
@@ -64,39 +58,29 @@ function extractionDocument() {
 	if (analysisDocument) return analysisDocument;
 	try {
 		analysisDocument = p.FPDF_LoadMemDocument(sourceBuffer, bytes.length, ""); checked(analysisDocument, "extraction copy");
-		// Flatten only the extraction copy: appearance streams become ordinary form objects.
-		// Reopening each page reparses the generated content; the original retains annotations for rendering.
 		for (let i = 0; i < p.FPDF_GetPageCount(analysisDocument); i++) {
 			const page = p.FPDF_LoadPage(analysisDocument, i); checked(page, "extraction page");
 			try {
 				const original = geometry(page, i + 1, analysisDocument);
 				const environment = formEnvironment(analysisDocument);
-				// Loading the form view creates missing normal appearances, including button captions.
-				// No document, page or JavaScript action is invoked.
 				if (environment) { p.FORM_OnAfterLoadPage(page, environment); p.FORM_OnBeforeClosePage(page, environment); }
 				const count = p.FPDFPage_GetAnnotCount(page);
 				const transforms: (Matrix | undefined)[] = [];
 				for (let j = 0; j < count; j++) {
 					const annot = p.FPDFPage_GetAnnot(page, j); checked(annot, "extraction annotation");
 					try {
-						// Flatten handles Hidden and Invisible but omits NoView. Hide those on this copy.
 						if (!annotationVisible(annot)) { checked(p.FPDFAnnot_SetFlags(annot, p.FPDFAnnot_GetFlags(annot) | 2), "annotation visibility"); continue; }
-						// Flatten suppresses Invisible even for known subtypes, unlike the renderer.
 						if (p.FPDFAnnot_GetSubtype(annot) !== 0) checked(p.FPDFAnnot_SetFlags(annot, p.FPDFAnnot_GetFlags(annot) & ~1), "known annotation visibility");
 						if (!p.EPDFAnnot_HasAppearanceStream(annot, 0) && generatedAppearanceSubtypes.has(p.FPDFAnnot_GetSubtype(annot))) {
 							checked(p.EPDFAnnot_GenerateAppearance(annot), `missing annotation appearance on page ${i + 1}`);
-							// A borderless Link deliberately succeeds without painting an appearance.
 							if (p.FPDFAnnot_GetSubtype(annot) !== 2) checked(p.EPDFAnnot_HasAppearanceStream(annot, 0), `generated annotation appearance on page ${i + 1}`);
 						}
-						// Flatten emits appearance forms in annotation order, excluding Popup and empty appearances.
 						if (p.FPDFAnnot_GetSubtype(annot) !== 16 && !(p.FPDFAnnot_GetFlags(annot) & 1) && p.EPDFAnnot_HasAppearanceStream(annot, 0)) {
 							transforms.push(original.rotation && (p.FPDFAnnot_GetFlags(annot) & 16) ? noRotateTransform(annot, original.rotation) : undefined);
 						}
 					} finally { p.FPDFPage_CloseAnnot(annot); }
 				}
 				if (count) {
-					// Flatten reads only local boxes and overwrites MediaBox with CropBox.
-					// Materialize effective boxes first, then restore them before reopening the page.
 					setBoxes(page, original.boxes);
 					checked(p.FPDFPage_Flatten(page, 0), "visible annotation appearances");
 					setBoxes(page, original.boxes);
@@ -107,7 +91,6 @@ function extractionDocument() {
 		}
 		return analysisDocument;
 	} catch (error) {
-		// A partly flattened copy cannot supply a successful inventory on a later call.
 		extractionFailure = error instanceof Error ? error : new Error(String(error));
 		throw extractionFailure;
 	}
@@ -147,11 +130,9 @@ function geometry(page: number, number: number, doc = document): PdfPage {
 	const boxes: Record<string, number[]> = {}, buffer = alloc(16);
 	try {
 		for (const [name, get] of [["MediaBox", p.FPDFPage_GetMediaBox], ["CropBox", p.FPDFPage_GetCropBox], ["BleedBox", p.FPDFPage_GetBleedBox], ["TrimBox", p.FPDFPage_GetTrimBox], ["ArtBox", p.FPDFPage_GetArtBox]] as const) {
-			// Only MediaBox and CropBox inherit. The other boxes default to effective CropBox.
 			const inherited = name === "MediaBox" || name === "CropBox";
 			const ok = inherited ? p.EPDF_GetPageBoxByIndex(doc, number - 1, name === "MediaBox" ? 0 : 1, buffer) : get(page, buffer, buffer + 4, buffer + 8, buffer + 12);
 			if (ok) {
-				// FS_RECTF uses left, top, right, bottom; the direct getters use left, bottom, right, top.
 				const [l, b, r, t] = Array.from(new Float32Array(memory.HEAPU8.buffer, buffer, 4)) as [number, number, number, number];
 				boxes[name] = [Math.min(l, r), Math.min(b, t), Math.max(l, r), Math.max(b, t)];
 			}
@@ -178,7 +159,6 @@ function noRotateTransform(annot: number, rotation: number): Matrix {
 		checked(p.FPDFAnnot_GetRect(annot, ptr), "NoRotate annotation rectangle");
 		const [l, t, r, b] = Array.from(new Float32Array(memory.HEAPU8.buffer, ptr, 4)) as [number, number, number, number];
 		const left = Math.min(l, r), top = Math.max(t, b);
-		// Match CPDF_Annot's renderer: counter page rotation around the PDF top-left.
 		const [c, s] = (rotation === 90 ? [0, 1] : rotation === 180 ? [-1, 0] : [0, -1]) as [number, number];
 		return [c, s, -s, c, left - c*left + s*top, top - s*left - c*top];
 	} finally { free(ptr); }
@@ -186,8 +166,6 @@ function noRotateTransform(annot: number, rotation: number): Matrix {
 function compensateAnnotationRotation(page: number, number: number) {
 	const transforms = extractionAnnotationTransforms.get(number);
 	if (!transforms) return;
-	// Flatten appends one form containing the appearance instances. Reapply on each
-	// reopened extraction page; editing an instance preserves shared streams and page text.
 	const form = p.FPDFPage_GetObject(page, p.FPDFPage_CountObjects(page) - 1);
 	if (!form || p.FPDFPageObj_GetType(form) !== 5 || p.FPDFFormObj_CountObjects(form) !== transforms.length) throw new Error("PDFium could not match flattened annotation appearances for NoRotate compensation");
 	const ptr = alloc(24);
@@ -254,7 +232,6 @@ function images(): PdfImage[] {
 }
 function presentation(box: number[], page: PdfPage) {
 	const crop = page.boxes.CropBox!, media = page.boxes.MediaBox!;
-	// Native display geometry clips the CropBox to the MediaBox. Keep raw boxes in facts.
 	const left = Math.max(crop[0]!, media[0]!), bottom = Math.max(crop[1]!, media[1]!), right = Math.min(crop[2]!, media[2]!), top = Math.min(crop[3]!, media[3]!);
 	const point = (x: number, y: number): [number, number] => page.rotation === 90 ? [y-bottom, x-left] : page.rotation === 180 ? [right-x, y-bottom] : page.rotation === 270 ? [top-y, right-x] : [x-left, top-y];
 	const a = point(box[0]!, box[2]!), b = point(box[1]!, box[3]!);
@@ -270,8 +247,6 @@ function characters(page: number, number: number) {
 		if (count < 0 || count > 200_000) throw new Error("Too much extracted text");
 		for (let i = 0; i < count; i++) {
 			const unicode = p.FPDFText_GetUnicode(textPage, i);
-			// Missing mappings and replacement glyphs supply no trustworthy extractable word.
-			// Record the loss explicitly rather than counting PDFium's character-code fallback.
 			if (p.FPDFText_HasUnicodeMapError(textPage, i) === 1) { recovered++; continue; }
 			if (!unicode || unicode === 0xfffd) { recovered++; continue; }
 			if (unicode < 32 && ![9,10,13].includes(unicode)) { recovered++; continue; }
@@ -292,7 +267,6 @@ function characters(page: number, number: number) {
 				size *= Math.hypot(m[2]!, m[3]!);
 				angle = Math.atan2(m[1]!, m[0]!);
 			}
-			// Loose boxes include advance widths; tight glyph bearings must not split digits or italic text.
 			let loose = box;
 			if (p.FPDFText_GetLooseCharBox(textPage, i, ptr+64)) {
 				const b = new Float32Array(memory.HEAPU8.buffer, ptr+64, 4);
@@ -345,7 +319,6 @@ function replacements(page: number, geometry: PdfPage) {
 				const group = groups.get(mark);
 				if (group) { group.rect = union(group.rect, rect); group.objects.push(object); }
 				else groups.set(mark, { text, rect, objects: [object] });
-				// The outer replacement owns the enclosed marked content.
 				break;
 			}
 		}, false);
@@ -427,16 +400,12 @@ function render(number: number, options: PdfRender) {
 		const bitmap = p.FPDFBitmap_Create(width, height, 0); checked(bitmap, "render bitmap");
 		try {
 			p.FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xffffffff);
-			// FPDF_ANNOT renders annotation appearances; LCD text changes pixels and is deliberately disabled.
 			const ptr = alloc(40);
 			try {
 				const scaleX = "height" in options ? fullWidth/g.width : options.dpi/72;
 				const scaleY = "height" in options ? fullHeight/g.height : options.dpi/72;
 				new Float32Array(memory.HEAPU8.buffer, ptr, 10).set([scaleX, 0, 0, scaleY, -x, -y, 0, 0, width, height]);
-				// The native display matrix already accounts for CropBox and page rotation.
-				// An explicit scale preserves fractional dimensions instead of rounding the page viewport.
 				p.FPDF_RenderPageBitmapWithMatrix(bitmap, page, ptr, ptr+24, 1);
-				// FPDF_ANNOT omits widgets. Render their normal appearances with the same matrix.
 				for (let i = 0; i < p.FPDFPage_GetAnnotCount(page); i++) {
 					const annot = p.FPDFPage_GetAnnot(page, i); checked(annot, "render annotation");
 					try {

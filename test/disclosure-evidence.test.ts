@@ -3,7 +3,6 @@ import test from "node:test";
 import { chromium } from "playwright";
 import { prepareInteractionReview } from "../src/interaction-review.ts";
 
-// Fresh synthetic variants live outside the frozen benchmark corpus.
 test("disclosure evidence observes adjacent content and tries each key from reset DOM", async () => {
 	const variants = ["native-clean", "native-stale", "custom-clean", "custom-stale", "custom-inert", "enter-only", "unrelated", "details"];
 	const browser = await chromium.launch();

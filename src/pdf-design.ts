@@ -30,7 +30,6 @@ export function measurePdfDesignPage(data: PdfPageSpans, requirements: PdfDesign
 	};
 }
 
-/** Enrich an existing private review bundle using its immutable PDF snapshot. Failures reject. */
 export async function preparePdfDesignEvidence(path: string, outputDirectory: string, pages: PdfPage[], requirements: PdfDesignRequirements = {}) {
 	if (Object.keys(requirements).some(key => key !== "minTextSizePt") || (requirements.minTextSizePt !== undefined && (!Number.isFinite(requirements.minTextSizePt) || requirements.minTextSizePt <= 0))) throw new Error("Invalid explicit design requirements");
 	if (!pages.length || pages.length > 24 || new Set(pages.map(p => p.page)).size !== pages.length || pages.some(p => !Number.isSafeInteger(p.page) || p.page < 1)) throw new Error("Select 1-24 unique pages for design evidence");

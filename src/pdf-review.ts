@@ -72,7 +72,6 @@ function normalizePdfReview(review: PdfReview) {
 	})) };
 }
 
-/** Bounded reads shared with the PDF benchmark scorer. */
 export async function readPdfEvidence(path: string): Promise<Buffer> {
 	const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
 	try {
@@ -96,7 +95,6 @@ function bundleObject(value: unknown): asserts value is Record<string, unknown> 
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid bundle object");
 }
 
-/** Verify retained evidence identity. This cannot prove that a reviewer inspected an image. */
 export async function validatePdfReviewBundle(manifestPath: string, documentSha256: string, pageCount?: number) {
 	const bytes = await readPdfEvidence(manifestPath);
 	const bundle: unknown = JSON.parse(bytes.toString());
@@ -152,7 +150,6 @@ function validatePdfReviewBundleSelection(review: PdfReview, bundle: VerifiedPdf
 	if (review.pagesReviewed.some(page => !bundle.pages.includes(page))) throw new Error("Review includes a page outside the bundle selected pages");
 }
 
-// Reject unsupported versions before reading evidence; reuse verified bundles across imports.
 export async function acceptPdfReview(value: unknown, documentSha256: string, pageCount: number, options: {
 	bundle?: VerifiedPdfReviewBundle | string;
 	checks?: string;

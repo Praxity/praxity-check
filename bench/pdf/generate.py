@@ -172,7 +172,6 @@ def reference(flawed):
             text(48, 675, 'Routing instructions', 13)
             text(48, 650, 'Send green-marked parts to the packing desk.')
             text(48, 630, 'Hold red-marked parts at the inspection desk.')
-            # Similar grayscale brightness makes color alone an unreliable routing key.
             for y, color, part, route in [(595, '0.8 0 0 rg', 'Part A', 'HOLD'), (568, '0 0.407 0 rg', 'Part B', 'SEND')]:
                 c.append(f'q {color} 48 {y - 3} 13 13 re f Q')
                 text(75, y, part if flawed else f'{part}   {route}')

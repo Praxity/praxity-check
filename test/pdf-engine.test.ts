@@ -27,7 +27,6 @@ for (const rotation of [90,180,270]) test("NoRotate annotation word and span box
    for(const word of words) {
     const [left,top,width,height]=word.rect as [number,number,number,number];
     for(const dpi of flags&8?[72,144,288]:[144]) assert.ok(ink(await e.renderPage(1,{dpi,rect:{left,top,width,height}}))>0,name+" "+dpi+" dpi "+JSON.stringify(word));
-    // NoRotate retains a horizontal text baseline in the displayed page.
     if(flags&16) assert.ok(width>height,name+" "+JSON.stringify(word));
    }
    const spans=await e.pageSpans(1);
@@ -232,7 +231,6 @@ test("supported annotation subtypes without saved appearances retain matching in
  for(const subtype of ["ink","square","circle","line","text","strikeout","polygon","polyline","highlight","underline","squiggly","caret","redact"]) await use("missing-ap-"+subtype,async e=>{
   assert.ok(ink(await e.renderPage(1,{height:1600}))>0,subtype);
   const fonts=await e.facts("fonts"),words=await e.facts("words");
-  // These generated graphics show no text. Contents alone is not painted text.
   assert.deepEqual(words,[],subtype);assert.deepEqual(fonts,[],subtype);
   assert.equal((await e.pageSpans(1)).spans.length>0,words.length>0);
  });
@@ -278,7 +276,6 @@ test("oblique text in every quadrant preserves three words and sparse review at 
 });
 test("annotation visibility flags match rendered font, text and empty-page inventories",async()=>{
  for(const subtype of ["stamp","ink","freetext","widget"]) for(const flag of ["noview","hidden","invisible","visible"]) await use("annotation-"+subtype+"-"+flag,async e=>{
-  // Invisible hides unknown subtypes only. All four fixtures use known subtypes.
   const visible=flag==="visible"||flag==="invisible";
   assert.equal(ink(await e.renderPage(1,{height:1600}))>0,visible,subtype+" "+flag);
   const fonts=await e.facts("fonts"),words=await e.facts("words");

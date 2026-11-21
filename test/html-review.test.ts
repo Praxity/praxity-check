@@ -14,7 +14,6 @@ import { SURFACE_IDS, type prepareInteractionReview } from "../src/interaction-r
 const cli = resolve("src/cli.ts");
 const digest = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
 const run = (args: string[], env = process.env) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", env });
-// Stored ZIP entries exercise the real extractor without a system zip dependency.
 function zip(entries: Array<[string, string]>) {
 	const local: Buffer[] = [], central: Buffer[] = [];
 	let offset = 0;
@@ -169,7 +168,6 @@ test("HTML bundle captures real actions, imports retained evidence without brows
 	await writeFile(reviewPath, JSON.stringify(review));
 	await writeFile(join(bundle, "evidence.json"), "{}");
 	await assert.rejects(importHtmlReview(reviewPath, snapshot.contentSha256, discovery), /SHA-256/);
-	// Even with updated artifact hashes, malformed retained evidence remains invalid.
 	candidate.surface = ["tabs"];
 	const bytes = JSON.stringify(evidence); await writeFile(join(bundle, "evidence.json"), bytes);
 	await writeFile(join(bundle, "manifest.json"), JSON.stringify({ ...manifest, evidenceSha256: digest(bytes) }));

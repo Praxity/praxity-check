@@ -13,7 +13,6 @@ async function fixture(t: test.TestContext, platform = process.platform as strin
  t.after(() => fs.rm(root, { recursive: true, force: true }));
  const foreignPosix = process.platform === "win32" && platform !== "win32";
  const home = foreignPosix ? "/check-components" : root;
- // Simulated POSIX paths have no drive letters. Only this adapter maps them to host files.
  const files = foreignPosix ? new Proxy(fs, { get(target, key: keyof typeof fs) {
   const fn = target[key];
   if (typeof fn !== "function") return fn;
@@ -376,8 +375,6 @@ test("empty veraPDF variables allow managed and system validators", async t => {
  });
 });
 
-// veraPDF 1.30.2 verapdf.bat: JAVACMD or PATH, never JAVA_HOME.
-// POSIX verapdf: JAVACMD, JAVA_HOME, then PATH. Check's Windows direct launcher uses VERAPDF_JAVA.
 test("Java selection matches each launcher across absent empty valid old and invalid overrides", async t => {
  for (const platform of ["win32", "darwin", "linux"]) for (const launcher of ["wrapper", "direct", "matched", "flag"]) await t.test(`${platform} ${launcher}`, async t => {
   const host = await fixture(t, platform), { join, dirname } = host.path;
@@ -426,7 +423,6 @@ test("validator flags always bypass direct Java and empty flags still fail", asy
  assert.equal(command.tool, wrapper); assert.deepEqual(command.args, ["--version"]);
 });
 
-// Ask the installed registry itself, in a new process so it rereads each environment.
 test("browser lookup matches the installed Playwright registry on every runtime target", async t => {
  const require = createRequire(import.meta.url), core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
  for (const [platform, arch, cpu, release] of [
@@ -475,7 +471,6 @@ test("browser lookup matches the installed Playwright registry on every runtime 
  });
 });
 
-// Optional upstream oracle. CHECK_TEST_VERAPDF_LAUNCHERS contains the unmodified 1.30.2 launchers.
 test("Windows Java lookup agrees with the installed veraPDF batch launcher", { skip: process.platform !== "win32" || !process.env.CHECK_TEST_VERAPDF_LAUNCHERS }, async t => {
  const host = await fixture(t); host.run = componentHost().run;
  const source = join(host.home, "Java.cs"), system = join(host.env.PATH!, "java.exe");
@@ -612,7 +607,6 @@ test("POSIX Java discovery falls back to PATH when the launcher gets no home", a
 test("setup browser archive filenames match the installed Playwright download table on every target", async t => {
  const require = createRequire(import.meta.url);
  const core = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
- // Playwright's registry reads its own download table. A fresh process applies each host target.
  const registryCode = `const {registry} = require(${JSON.stringify(join(dirname(core), "lib/coreBundle.js"))}).registry;
  console.log(JSON.stringify({urls: registry.executables().filter(x => ['chromium-headless-shell','ffmpeg','winldd'].includes(x.name)).flatMap(x => x.downloadURLs?.length ? [x.downloadURLs.at(-1)] : []), executable: registry.findExecutable('chromium-headless-shell').executablePath()}));`;
  for (const [name, platform, arch, cpu, osRelease, override] of [

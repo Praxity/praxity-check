@@ -22,7 +22,6 @@ function pdf(width = 200, height = 300) {
 	const xref = Buffer.byteLength(result);
 	return result + `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((n) => `${String(n).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
 }
-// Decode RGB PNG scanlines to assert a known source mark lands inside the crop.
 function rgb(png: Buffer) {
  const width = png.readUInt32BE(16), height = png.readUInt32BE(20), chunks: Buffer[] = [];
  assert.equal(png[24], 8); assert.equal(png[25], 2);
@@ -66,7 +65,6 @@ test("real PDF design evidence preserves intentional whitespace and unsupported 
 	assert.equal(crop.selectedSpan, 1);
 	const png = await readFile(join(dir, crop.image));
  assert.equal(png.readUInt32BE(16), crop.pixels.width);
- // Source marker centre is (35,123) in bottom-left PDF points, (70,354) in top-left 144-DPI pixels.
  assert.deepEqual(rgb(png)(70 - crop.pixels.x, 354 - crop.pixels.y), [255, 0, 0]);
 	await assert.rejects(preparePdfDesignEvidence(input, dir, pages, { minTextSizePt: -1 }));
 	await assert.rejects(preparePdfDesignEvidence(input, dir, []));
@@ -86,8 +84,6 @@ test("fractional PDF page dimensions retain exact crop coordinates", async (t) =
 	assert.equal(crop.rect.left + crop.rect.width, width);
 	assert.equal(crop.pixels.x + crop.pixels.width, Math.ceil(width * 2));
 	const pixels = rgb(await readFile(join(dir, crop.image)));
-	// The red mark covers y=120..126 in PDF points. The fractional page height puts
-	// pixel row 349 above it and row 351 inside it; using the truncated height shifts both.
 	assert.deepEqual(pixels(70 - crop.pixels.x, 349 - crop.pixels.y), [255, 255, 255]);
 	assert.deepEqual(pixels(70 - crop.pixels.x, 351 - crop.pixels.y), [255, 0, 0]);
 	for (const boxes of [

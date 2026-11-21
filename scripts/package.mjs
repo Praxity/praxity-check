@@ -10,7 +10,6 @@ import { requireNode } from "../src/node-runtime.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-// The inspector is a seam for testing foreign-target layouts without executing foreign binaries.
 export async function packageArtifact(values, inspectNode = executable => JSON.parse(execFileSync(executable, ["-p", "JSON.stringify({version:process.version,platform:process.platform,arch:process.arch})"], { encoding: "utf8" })), locateDependency = installedDependency) {
 	const portable = values.portable === true;
 	if (!values.output || !portable && !values.node) throw new Error("Required: --node <Node distribution> or --portable, and --output <new directory>; install components separately with check setup");
@@ -20,7 +19,6 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 	const node = portable ? undefined : resolve(values.node);
 	const platform = values.platform ?? process.platform;
 	const arch = values.arch ?? process.arch;
-	// Linux keeps the existing POSIX packaging path used by the repository's CI.
 	if (!(platform === "win32" && arch === "x64" || ["darwin", "linux"].includes(platform) && ["arm64", "x64"].includes(arch))) throw new Error("Supported targets: win32 x64, or darwin/linux arm64/x64");
 	const nodePath = platform === "win32" ? "node.exe" : "bin/node";
 	const runtimePath = platform === "win32" ? "runtime/node.exe" : "runtime/node";
@@ -62,20 +60,16 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 		}
 		copied.set(name, metadata.version);
 		await cp(location, join(output, "node_modules", name), { recursive: true, dereference: true, mode: constants.COPYFILE_FICLONE, filter: path =>
-			// Check uses the browser API, not Playwright's dashboard, inspector or trace viewer.
 			!(portable && name === "playwright-core" && /^lib[\\/]vite[\\/](?:dashboard[\\/]assets|recorder[\\/]assets|traceViewer)(?:[\\/]|$)/.test(relative(location, path))) &&
 			!relative(location, path).split(/[\\/]/).some(part => ["node_modules", ".local-browsers"].includes(part)) && !/\.(map|log)$/i.test(path) });
 		notices.push(`- ${name}@${metadata.version}: ${metadata.license ?? "see package licence files"}`);
 		if (name === "axe-core" || name === "@axe-core/playwright") {
-			// Some axe-core-npm releases have no version tag; npm records their source commit.
 			const repository = name === "axe-core" ? "axe-core" : "axe-core-npm";
 			const source = `https://github.com/dequelabs/${repository}/tree/${metadata.gitHead ?? `v${metadata.version}`}${name === "axe-core" ? "" : "/packages/playwright"}`;
 			notices.push(`  ${name}@${metadata.version} is distributed under MPL-2.0. Corresponding source, including build instructions: ${source}. Licence: https://www.mozilla.org/MPL/2.0/. Package licence files are retained in node_modules/${name}/.`);
 		}
 		for (const child of Object.keys(metadata.dependencies ?? {})) await dependency(child, location);
 		for (const child of Object.keys(metadata.optionalDependencies ?? {})) {
-			// Playwright's macOS watcher is for its test runner, which Check does not use.
-			// Omit it in portable builds even when installed on the build machine.
 			if (portable && name === "playwright" && child === "fsevents") continue;
 			try { await dependency(child, location); } catch (error) { if (!error.message.startsWith("Missing installed runtime dependency")) throw error; }
 		}
@@ -97,7 +91,6 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 					if (/\.(?:exe|com|dll|node|so(?:\.\d+)*|dylib|a|lib)$/i.test(name) || /^(?:node|nodejs)$/i.test(basename(path)) || bytes.subarray(0, 2).toString() === "MZ" || ["7f454c46", "feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"].includes(magic) || ["!<arch>\n", "!<thin>\n"].includes(bytes.subarray(0, 8).toString())) throw new Error(`Portable artifact contains a native binary: ${relative(output, path)}`);
 					const script = /\.(?:[cm]?js|ts|sh|bash|cmd|bat|ps1|vbs)$/i.test(name) || bytes.subarray(0, 2).toString() === "#!";
 					if (script && bytes.includes(13)) {
-						// Rewriting is only safe for UTF-8 text. NUL bytes catch UTF-16 without a BOM, which decodes as valid UTF-8.
 						let text;
 						try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { text = undefined; }
 						if (text === undefined || bytes.includes(0)) throw new Error(`Portable artifact contains a script with CRLF line endings that is not UTF-8: ${relative(output, path).split(/[\\/]/).join("/")}`);
@@ -117,7 +110,7 @@ export async function packageArtifact(values, inspectNode = executable => JSON.p
 		entryPoint: portable ? "lib/cli.js" : platform === "win32" ? "bin/praxity-check.cmd" : "bin/praxity-check",
 		legalFiles: payload.filter(file => /(?:^|\/)(?:.*\.)?(?:licen[cs]e[^/]*|copying[^/]*|copyright[^/]*|notice[^/]*|third[- ]?party[^/]*|about)$/i.test(file.path) || file.path === "LICENSING.md" || file.path.startsWith("notices/pdfium/") || file.path.includes("/legal/") || file.path.startsWith("dependencies/notices/toolchain/") && !file.path.endsWith(".cmake")).map(file => file.path),
 		files: payload,
-		inventoryExcludes: portable ? ["capabilities.json", "inventory.json"] : ["capabilities.json"], // Manifests cannot hash each other cyclically.
+		inventoryExcludes: portable ? ["capabilities.json", "inventory.json"] : ["capabilities.json"],
 		dependenciesSupplied: false,
 		payloads: { chromiumHeadlessShell: false, pdfium: payload.some(file => file.path === "node_modules/@embedpdf/pdfium/dist/pdfium.wasm"), java: false, veraPDF: false },
   requirements: { pdf: ["Bundled @embedpdf/pdfium wrapper and pdfium.wasm"], pdfDesignAndReview: ["Bundled PDFium engine"], pdfUa: ["check setup pdf, or explicit veraPDF and Java 17+"], html: ["check setup html"] },

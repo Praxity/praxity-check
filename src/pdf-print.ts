@@ -2,7 +2,6 @@ type Evaluation = { rule: string; outcome: "cantTell" | "inapplicable" | "untest
 type Review = { rule: string; message: string; remedy: string; evidence: unknown; location: { page: number } };
 export type PdfPrintPolicy = { maxSparseWords?: number; includeSparse?: boolean };
 
-/** Missing inventories mean extraction failed. Empty inventories mean it succeeded. */
 export function evaluatePdfPrint(facts: {
 	pages?: { page: number }[];
 	words?: { page: number; text: string }[];
@@ -17,8 +16,6 @@ export function evaluatePdfPrint(facts: {
 		words.push(word.text);
 		wordsByPage.set(word.page, words);
 	}
-	// PDFium reports no color space for stencils. Unknown color spaces cannot exempt
-	// a page from sparse review; this preserves coverage without inventing a mask type.
 	const imagePages = new Set(facts.images?.filter((image) => (image.type === "image" || image.type === undefined && image.colorSpaceKnown !== false)).map((image) => image.page));
 	for (const rule of ["text.extractable", ...(policy.includeSparse === false ? [] : ["page.sparse-content"])]) {
 		if (rule === "page.sparse-content" && policy.maxSparseWords === undefined) {

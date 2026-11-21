@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { componentManifest } from "../src/components.ts";
 
-// Offline setup users copy these URLs and hashes; the notices state what the package omits.
 test("offline component docs list every pinned archive, and notices say the package omits downloaded components", async () => {
  const offline = await readFile("docs/offline-components.md", "utf8");
  for (const platform of ["win32", "darwin", "linux"]) for (const arch of platform === "win32" ? ["x64"] : ["arm64", "x64"]) {

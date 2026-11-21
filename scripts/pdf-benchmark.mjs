@@ -1,4 +1,3 @@
-// Fixture generation adapter. Product operations use the same owning engine.
 import {readFile,writeFile} from "node:fs/promises";
 import {openPdf} from "../src/pdf-engine.ts";
 const [operation,input,prefix]=process.argv.slice(2);

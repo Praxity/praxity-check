@@ -54,7 +54,6 @@ test("current domain coverage is enforced", async t => {
 	assert.equal(normalized.findings[0]?.check, "design");
 });
 
-// A blank page is enough to expose accidental font/print validation or a veraPDF launch.
 function pdf(withText = false) {
 	const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << >> >>"];
 	if (withText) {

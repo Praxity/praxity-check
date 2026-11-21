@@ -28,8 +28,6 @@ test("start failures keep Guidepup's underlying cause in the message", () => {
 });
 
 test("VoiceOver stays on the Guidepup version its workflow was validated with", async () => {
-	// Guidepup 0.34.0 fails to start VoiceOver when its portable `.scrd.vou` is a directory.
-	// Move VoiceOver only after a Mac run passes on the newer version.
 	const { createRequire } = await import("node:module");
 	const require = createRequire(import.meta.url);
 	assert.equal(require("@guidepup/guidepup-voiceover/package.json").version, "0.24.1");

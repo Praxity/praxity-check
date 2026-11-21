@@ -9,7 +9,6 @@ import { MAX_TOTAL_BYTES, MAX_ENTRIES, asUnsafe, extractZip, type Limits } from 
 export { UnsafeArchiveError, type Limits } from "./archives.ts";
 
 export interface Input {
-	/** Directory to serve. For a zip, a temp dir; for a folder, the folder itself. */
 	root: string;
 	wasZip: boolean;
 	cleanup: () => Promise<void>;
@@ -37,7 +36,6 @@ export async function openInput(inputPath: string, limits: Limits = {}): Promise
 	};
 }
 
-/** A private copy binds evidence to file contents, including local assets. */
 export async function snapshotInput(inputPath: string): Promise<Input & { contentSha256: string }> {
 	const source = await openInput(inputPath);
 	const root = await mkdtemp(join(tmpdir(), "praxity-check-snapshot-"));
@@ -87,7 +85,6 @@ export async function snapshotInput(inputPath: string): Promise<Input & { conten
 	} finally { await source.cleanup(); }
 }
 
-/** Resolve existing parents so an output alias cannot overwrite the input. */
 export async function assertOutputOutside(output: string, protectedPaths: string[]) {
 	const canonical = async (path: string): Promise<string> => {
 		try { return await realpath(path); }

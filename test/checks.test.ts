@@ -31,16 +31,6 @@ import {
 } from "../src/checks.ts";
 import { serve, type StaticServer } from "../src/serve.ts";
 
-/**
- * Positive controls. Every check here returns an empty array both when the page
- * is clean and when the check is silently broken -- `focusIndicators` shipped
- * with a selector that matched nothing and reported twenty clean controls it had
- * never looked at. A check with no known-failing fixture is not verified, it is
- * only quiet.
- *
- * Each fixture carries exactly one defect so a firing rule cannot be credited to
- * a neighbour.
- */
 
 const BROKEN = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Positive controls</title>
@@ -427,8 +417,6 @@ describe("automated checks fire on known defects", () => {
 		);
 		const hits = result.findings.filter((f) => f.rule === "focus-visible");
 		assert.equal(hits.length, 1, `expected exactly the suppressed control, got ${hits.length}`);
-		// The locator must name the control in terms someone can find in the source,
-		// not an attribute this tool injected at runtime.
 		assert.ok(
 			hits[0]?.selector?.includes("no-indicator"),
 			`locator should identify the suppressed control, got: ${hits[0]?.selector}`,
@@ -455,7 +443,6 @@ describe("automated checks fire on known defects", () => {
 			assert.deepEqual(result.findings, []);
 			assert.deepEqual(result.notes, []);
 			assert.equal(await page.title(), "After reached");
-			// A native control can still have a real author-scripted trap.
 			await page.setContent(`${html}<script>document.getElementById("schedule").addEventListener("keydown", (event) => {
 				if (event.key === "Tab") event.preventDefault();
 			});</script>`);
@@ -737,7 +724,6 @@ describe("automated checks fire on known defects", () => {
 			const result = await stateContrast(page, "hidden-radio-no-ring.html");
 			assert.deepEqual(result.findings.map((finding) => [finding.rule, finding.selector]), [["state-non-text-contrast", "input#chart"]]);
 		}
-		// A ring that is always there does not convey focus.
 		await page.addStyleTag({ content: `label, label:has(input:focus-visible) { outline: 2px solid #fafbfc; outline-offset: 2px; } input:focus-visible { outline: none; }` });
 		const staticRing = await stateContrast(page, "hidden-radio-no-ring.html");
 		assert.equal(staticRing.findings.filter((finding) => finding.rule === "state-non-text-contrast").length, 1);
@@ -751,11 +737,9 @@ describe("automated checks fire on known defects", () => {
 		const page = await open("sibling.html");
 		const result = await stateContrast(page, "sibling.html");
 		assert.deepEqual(result.findings.map((finding) => finding.selector), ["input#dead"]);
-		// An explicitly associated label may be outside the sampled ancestors/siblings.
 		await page.setContent(`<style>input { opacity: 0; } label { display: inline-block; } body:has(input:focus-visible) label { outline: 2px solid black; }</style><div><input id="option" type="radio"></div><section><label for="option">Chart</label></section>`);
 		assert.deepEqual((await stateContrast(page, "associated-label.html")).findings, []);
 		assert.deepEqual((await focusIndicators(page, "associated-label.html")).findings, []);
-		// A zero-sized sibling can still draw a visible pseudo-element indicator.
 		await page.setContent(`<style>input { opacity: 0; } span { display: inline-block; width: 0; height: 0; } span::before { content: ""; position: absolute; width: 30px; height: 30px; } input:focus-visible + span::before { outline: 2px solid black; }</style><input id="option" type="radio" aria-label="Chart"><span></span>`);
 		assert.deepEqual((await stateContrast(page, "pseudo-ring.html")).findings, []);
 		await page.close();
@@ -983,7 +967,6 @@ describe("automated checks fire on known defects", () => {
 		);
 	});
 
-	// Production runs these three analyses only through interactionChecks.
 	for (const [label, rule, prefix, cleanReason] of [
 		["finds a click-only div but not a native button or static chart", "mouse-only-control", "mouse", "native button or static chart was reported as mouse-only"],
 		["finds a bare document key but not Ctrl+key", "character-key-shortcut", "shortcut", "modified shortcut was reported as character-only"],
@@ -1092,15 +1075,11 @@ describe("automated checks fire on known defects", () => {
 		await page.close();
 
 		const useless = result.findings.filter((f) => f.rule === "link-text-uninformative");
-		// "click here" twice -- case and trailing full stop must not hide the second.
-		// "Read more" also sits in the denylist, so a repeat of it never reaches the
-		// ambiguity path -- the fixture uses "Apply" for that case instead.
 		assert.equal(useless.length, 2, `expected both "click here" links, got ${useless.length}`);
 
 		const ambiguous = result.findings.filter((f) => f.rule === "link-text-ambiguous");
 		assert.equal(ambiguous.length, 1, "two 'Apply' links to different targets should be one finding");
 
-		// A descriptive link, and one whose aria-label supplies the purpose, must pass.
 		const flagged = JSON.stringify(result.findings);
 		assert.ok(!flagged.includes("Book a campus tour"), "descriptive link text was flagged");
 		assert.ok(!flagged.includes("prospectus"), "aria-label supplying purpose was flagged");
@@ -1112,9 +1091,6 @@ describe("automated checks fire on known defects", () => {
 		await page.close();
 
 		const flagged = result.findings.map((f) => f.selector ?? "").join(" ");
-		// The visually-hidden input whose only indicator is on the adjacent label
-		// must NOT be reported -- sampling the element and its ancestors alone
-		// accused it, which would have hit every page using this pattern.
 		assert.ok(!flagged.includes("#opt"), `sibling-drawn ring was reported as missing: ${flagged}`);
 		assert.ok(flagged.includes("#dead"), `a control with no indicator anywhere was missed: ${flagged}`);
 	});

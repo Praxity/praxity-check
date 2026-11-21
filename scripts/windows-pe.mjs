@@ -2,13 +2,11 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
-// These are OS components, not redistributable compiler runtimes such as vcruntime140.
 const systemDlls = new Set(`advapi32 bcrypt bcryptprimitives cabinet comctl32 comdlg32 crypt32 cryptbase d2d1 d3d9 d3d11 dbghelp dnsapi dwrite dwmapi dxgi gdi32 gdiplus glu32 imm32 iphlpapi kernel32 kernelbase mpr msimg32 msvcrt netapi32 ntdll ole32 oleaut32 opengl32 powrprof propsys psapi rpcrt4 sechost secur32 setupapi shell32 shlwapi synchronization ucrtbase user32 userenv usp10 uxtheme version winhttp wininet winmm winspool wintrust ws2_32 wtsapi32`.split(" ").map(name => `${name}.dll`));
 systemDlls.add("winspool.drv");
 for (const name of ["winscard", "dsound", "mswsock", "ncrypt", "wsock32"]) systemDlls.add(`${name}.dll`);
 export const isWindowsSystemDll = name => systemDlls.has(name.toLowerCase()) || /^(?:api|ext)-ms-win-[a-z0-9-]+\.dll$/i.test(name);
 
-/** Read both ordinary and delay-load imports, without consulting the machine's PATH. */
 export function windowsImports(bytes, name = "binary") {
 	const fail = () => { throw new Error(`Invalid Windows x64 PE binary: ${name}`); };
 	const bounds = (offset, length) => { if (!Number.isSafeInteger(offset) || offset < 0 || offset + length > bytes.length) fail(); };

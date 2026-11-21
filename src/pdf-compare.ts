@@ -25,13 +25,11 @@ function hash(value: unknown): string {
 	return result;
 }
 function canonical(value: unknown): string {
-	// Policy is flat in pdf-1; unknown future fields prevent silent equivalence.
 	const policy = Object.fromEntries(Object.entries(object(value)).filter(([, value]) => value !== undefined));
 	if (Object.values(policy).some((v) => !["string", "number", "boolean"].includes(typeof v) || typeof v === "number" && !Number.isFinite(v))) throw new Error("Invalid PDF report policy");
 	return JSON.stringify(Object.entries(normalizePdfPolicy(policy as PdfOptions)).sort(([a], [b]) => a.localeCompare(b)));
 }
 
-/** Validate every field consumed by comparison; unrelated report evidence stays opaque. */
 export function validateComparisonReport(value: unknown) {
 	const report = object(value);
 	if (report.schemaVersion !== "pdf-1" && report.schemaVersion !== "pdf-2") throw new Error("Expected schemaVersion pdf-1 or pdf-2");

@@ -4,7 +4,6 @@ type Profile = "ua1" | "ua2";
 type Evidence = { tool: string; args: string[]; stdout: string; stderr: string; exitCode: number | null; error?: string };
 type Finding = { rule: string; message: string; remedy: string; evidence: unknown; location: { page?: number }; severity: "serious" | "moderate"; confidence: "high" | "medium" };
 
-// Source-level guidance for verified ISO 14289-1:2014 rules. Other versions keep validator wording.
 const feedback: Record<string, { message: string; remedy: string }> = {
 	"ISO 14289-1:2014:7.21.4.1:1": { message: "A font used in this content is not embedded.", remedy: "Embed the font in the PDF export, or replace it in the source with an embeddable font." },
 	"ISO 14289-1:2014:7.1:10": { message: "The PDF is not set to display its document title.", remedy: "Set the export's initial view to show the document title. Check that the title metadata describes the document." },
@@ -36,7 +35,6 @@ function text(value: unknown): string {
 	return value;
 }
 
-/** Validate a completed single-document job, preserving retained checks and evidence coverage. */
 export function parseVeraPdf(raw: string, profile: Profile) {
 	const report = object(object(JSON.parse(raw)).report), summary = object(report.batchSummary);
 	if (count(summary.totalJobs) !== 1) throw new Error("Expected one veraPDF job");
@@ -73,7 +71,6 @@ export function parseVeraPdf(raw: string, profile: Profile) {
 		seenRules.add(ruleId);
 		if (expectedChecks === 0 || checks.length > expectedChecks) throw new Error("Contradictory veraPDF rule counts");
 		reportedChecks += expectedChecks;
-		// veraPDF caps stored assertions globally, even with --maxfailuresdisplayed -1.
 		ruleCoverage.push({ rule: ruleId, failedChecks: expectedChecks, retainedChecks: checks.length, omittedChecks: expectedChecks - checks.length });
 		for (const value of checks) {
 			const check = object(value);

@@ -162,7 +162,6 @@ print('Imported review')
         else: raise AssertionError('bad plan accepted')
 print('HTML runner checks passed: final response, schema command, immutable isolation, host validation, bounded repair, usage and failures.')
 
-# The real importer must drive this repair. No browser or live model is started.
 with tempfile.TemporaryDirectory(prefix='html-runner-production-import-') as temporary:
     root = Path(temporary).resolve()
     source, bundle = root / 'source', root / 'bundle'
@@ -189,8 +188,6 @@ with tempfile.TemporaryDirectory(prefix='html-runner-production-import-') as tem
     version = subprocess.run([node, '--version'], capture_output=True, text=True, check=True, timeout=10).stdout.strip()
     assert int(version.removeprefix('v').split('.')[0]) >= 24, f'Node 24 or later required; got {version}'
     repository = Path(__file__).resolve().parents[2]
-    # Use the production schema with format-only hashes so the intentionally wrong
-    # hash passes structural constraints and reaches production identity validation.
     schema = subprocess.run([node, '--input-type=module', '-e',
                              "import { htmlReviewSchema } from './src/html-review.ts'; console.log(JSON.stringify(htmlReviewSchema));"],
                             cwd=repository, capture_output=True, text=True, check=True, timeout=20).stdout
@@ -221,7 +218,6 @@ print(json.dumps({{'type': 'turn.completed', 'usage': {{'input_tokens': 13 if re
     plan_path = root / 'plan.json'
     plan_path.write_text(json.dumps(plan))
     original_bundle = {path.name: path.read_bytes() for path in bundle.iterdir()}
-    # A missing browser installation also proves inference import needs no browser.
     with patch.dict(os.environ, {'PLAYWRIGHT_BROWSERS_PATH': str(root / 'no-browser')}):
         result = runner.run(plan_path, root / 'output')[0]
     assert result['status'] == 'invalid-output' and result['repairStatus'] == 'complete', result

@@ -180,12 +180,6 @@ async function writeReport(path: string, report: unknown, protectedPaths: string
 	} finally { await rm(temporary, { recursive: true, force: true }); }
 }
 
-/**
- * Exit codes:
- * 0 — ran clean, no high-confidence findings
- * 1 — ran, high-confidence findings present
- * 2 — could not run (bad input, unsafe archive, browser launch failure, or every page failed triage)
- */
 export async function htmlCli(args: string[]): Promise<number> {
 	if ([args[0], args[1]].some((arg) => arg === "--help" || arg === "-h") || args[0] === "help") {
 		console.log(USAGE);

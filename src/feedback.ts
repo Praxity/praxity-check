@@ -40,7 +40,6 @@ export interface FeedbackCoverage {
 	source: string;
 }
 
-/** References are JSON Pointers relative to the containing format-specific report. */
 export interface Feedback {
 	schemaVersion: "feedback-1";
 	findings: FeedbackItem[];

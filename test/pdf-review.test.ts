@@ -195,7 +195,6 @@ test("real PDF renders privately, preserves imported reviews and cleans failed p
 	const path = join(dir, "test.pdf"), output = join(dir, "bundle"), imported = join(dir, "review.json");
 	await writeFile(path, pdf());
 	const cli = resolve("src/cli.ts");
-	// No tier or reviewer: prepare local PDF evidence without starting Codex.
 	const prepared = spawnSync(process.execPath, [cli, "prepare-review", path, "--checks", "design", "--output", output], { encoding: "utf8" });
 	assert.equal(prepared.status, 0, prepared.stderr);
 	for (const name of ["reviewer.log", "review.json", "review-run.json"]) await assert.rejects(stat(join(output, name)), { code: "ENOENT" });

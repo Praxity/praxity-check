@@ -108,7 +108,6 @@ pathlib.Path('review.json').write_text(json.dumps({{'reviewer': {{'model': model
     tampered = runner.run(plan_path, root / 'tampered')
     assert len(tampered) == 3 and all(r['status'] == 'setup-failed' and 'hash mismatch' in r['error'] for r in tampered)
     (bundle / 'design-page-1.json').write_text('{"fontSizePt": 5}')
-    # A rejected bundle is still recorded for every planned model attempt.
     (bundle / 'page-1.png').unlink()
     (bundle / 'page-1.png').symlink_to(secret)
     rejected = runner.run(plan_path, root / 'rejected')

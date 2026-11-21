@@ -13,7 +13,6 @@ export async function materialize(destination) {
   if (output === repo || output.startsWith(repo + sep)) throw new Error('Output must be outside the repository');
   const manifest = await readFile(resolve(here, 'corpus.json'));
   const corpus = JSON.parse(manifest);
-  // mkdir without recursive refuses an existing directory, preserving frozen trials.
   await mkdir(output);
   const records = [];
   for (const item of corpus.cases) {
