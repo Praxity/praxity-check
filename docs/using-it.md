@@ -21,8 +21,7 @@ node /absolute/path/to/praxity-check/src/cli.ts check ./dist --min-confidence me
 Add `--json report.json` for the complete result set. Run with `--help` for all
 options.
 
-The npm package is named `@praxity/check` and remains private and unpublished.
-Its command is `praxity-check`.
+See [Build a local distributable](../README.md#build-a-local-distributable) for package details.
 
 In a standalone installation, use `praxity-check` in place of
 `node /absolute/path/to/praxity-check/src/cli.ts`. Through the Praxity command,

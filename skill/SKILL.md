@@ -5,8 +5,6 @@ description: Check an exported course (HTML folder or ZIP) or a PDF for accessib
 
 # Check a course and keep the evidence
 
-The npm package is `@praxity/check`; its command is `praxity-check`. The package remains private and unpublished.
-
 Commands below use Rubato's prefix, `praxity check`, so a check runs as `praxity check check "<input>"`. A standalone install replaces that prefix with `praxity-check` or its absolute launcher path. `praxity check doctor` is Check's doctor, not Rubato's `praxity doctor`. Quote paths with spaces and run `--help` for options.
 
 Check reads exports, not course source. For a Praxity Studio course, export HTML first with the prax-format skill's export step and check the ZIP it writes. In T3, the Check accessibility action reads `course-html.zip` from Export HTML.
