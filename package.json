@@ -1,5 +1,5 @@
 {
-	"name": "praxity-check",
+	"name": "@praxity/check",
 	"version": "0.6.0",
 	"private": true,
 	"license": "MIT",

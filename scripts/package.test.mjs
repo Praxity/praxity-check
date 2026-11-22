@@ -40,6 +40,21 @@ async function scratch(t) {
 	return directory;
 }
 
+test("npm package identity uses the Praxity scope and keeps the CLI name", async t => {
+	const root = await scratch(t);
+	const pkg = JSON.parse(await readFile(join(repository, "package.json"), "utf8"));
+	assert.equal(pkg.name, "@praxity/check");
+	assert.equal(pkg.private, true);
+	assert.deepEqual(pkg.bin, { "praxity-check": "lib/cli.js" });
+	const npm = join(dirname(process.execPath), windows ? "npm.cmd" : "npm");
+	const result = run(npm, ["pack", "--json", "--pack-destination", root], repository, { PATH: process.env.PATH, npm_config_cache: join(root, "npm-cache"), NODE_COMPILE_CACHE: join(root, "node-compile-cache") });
+	assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
+	const [packed] = JSON.parse(result.stdout);
+	assert.equal(packed.name, "@praxity/check");
+	assert.equal(packed.filename, "praxity-check-0.6.0.tgz");
+	await access(join(root, packed.filename));
+});
+
 test("CLI entry points run through directory symlinks", async t => {
 	const root = await scratch(t);
 	const alias = join(root, "linked checkout");
@@ -60,7 +75,10 @@ test("CLI entry points run through directory symlinks", async t => {
 
 async function verifyInventory(artifact) {
 	const manifest = JSON.parse(await readFile(join(artifact, "capabilities.json"), "utf8"));
-	assert.equal(manifest.tool, "praxity-check");
+	assert.equal(manifest.tool, "@praxity/check");
+	const pkg = JSON.parse(await readFile(join(artifact, "package.json"), "utf8"));
+	assert.equal(pkg.name, "@praxity/check");
+	assert.equal(pkg.private, true);
 	assert.equal(manifest.version, "0.6.0");
 	assert.match(manifest.sourceRevision, /^[0-9a-f]{40}$/);
 	assert.equal(typeof manifest.dirty, "boolean");
@@ -352,14 +370,17 @@ test("portable build relocates, retains its inventory and runs with only externa
 	await rename(staged, artifact);
 	for (const path of ["runtime", "bin"]) await assert.rejects(lstat(join(artifact, path)), /ENOENT/);
 	const metadata = JSON.parse(await readFile(join(artifact, "package.json"), "utf8"));
+	assert.equal(metadata.name, "@praxity/check");
 	assert.deepEqual(metadata.engines, { node: ">=24.22.1 <27" });
 	const capabilities = JSON.parse(await readFile(join(artifact, "capabilities.json"), "utf8"));
+	assert.equal(capabilities.tool, "@praxity/check");
 	assert.equal(capabilities.entryPoint, "lib/cli.js");
 	assert.equal(capabilities.nodeRequirement, ">=24.22.1 <27");
 	assert.equal(capabilities.platform, "any");
 	assert.equal(capabilities.arch, "any");
 	assert.equal(capabilities.node, null);
 	const inventory = JSON.parse(await readFile(join(artifact, "inventory.json"), "utf8"));
+	assert.equal(inventory.tool, "@praxity/check");
 	const paths = [];
 	async function walk(directory) {
 		for (const name of await readdir(directory)) {
