@@ -428,7 +428,7 @@ test("portable build relocates, retains its inventory and runs with only externa
 		const old = spawnSync(node, ["--require", oldVersion, cli, ...args], { cwd: root, env, encoding: "utf8" });
 		assert.equal(old.status, 2);
 		assert.equal(old.stdout, "");
-		assert.equal(old.stderr.trim(), "praxity-check: Check requires Node >=24.22.1 <27; received v22.17.0");
+		assert.equal(old.stderr.trim(), "praxity-check: Check requires Node 24 (24.22.1 or later) or Node 26; received v22.17.0");
 	}
 });
 

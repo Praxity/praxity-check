@@ -1,6 +1,8 @@
 # Run Praxity Check
 
-Install once with Node 24 or 26 LTS (`>=24.22.1 <27`; the CLI rejects odd majors) and pnpm 11.5.3, as required by `engines.node` in [package.json](../package.json):
+Check supports Node 24 or 26 LTS (`>=24.22.1 <27`; the CLI rejects odd majors), as defined by `engines.node` in [package.json](../package.json).
+
+For the source checkout procedure below, use Node 24.22.1 and pnpm 11.5.3. Run `corepack enable` on Node 24.22.1 to enable pnpm; Node 26 does not bundle Corepack.
 
 ```bash
 git clone https://github.com/Praxity/praxity-check.git

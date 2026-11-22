@@ -10,5 +10,10 @@ export function requireNode(version: string, range: string): void {
 			if (index === 3) return;
 		}
 	}
-	throw new Error(`Check requires Node ${range}; received ${version}`);
+	const majors: string[] = [];
+	for (let major = Number(minimum[1]); major < Number(minimum[4]); major++) {
+		if (major % 2 === 0) majors.push(major === Number(minimum[1]) ? `${major} (${minimum[1]}.${minimum[2]}.${minimum[3] ?? 0} or later)` : String(major));
+	}
+	const supported = majors.length ? majors.join(" or Node ") : `${range} (even major versions only)`;
+	throw new Error(`Check requires Node ${supported}; received ${version}`);
 }

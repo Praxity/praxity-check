@@ -128,12 +128,15 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - name: Install Linux browser system libraries
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !matrix.package-node
         run: corepack pnpm exec playwright install-deps chromium
       - run: corepack pnpm typecheck
+        if: ${{ !matrix.package-node }}
       - name: CLI entry points through directory symlinks
+        if: ${{ !matrix.package-node }}
         run: node --test --test-name-pattern="CLI entry points run through directory symlinks" scripts/package.test.mjs
       - name: PDF and component tests
+        if: ${{ !matrix.package-node }}
         run: node --test test/pdf*.test.ts test/components.test.ts test/setup.test.ts
       - name: Use Node 26 for the npm package proof
         if: matrix.package-node

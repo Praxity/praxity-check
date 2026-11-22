@@ -7,7 +7,7 @@ test("Node minimum includes the boundary and newer major versions", () => {
 		assert.doesNotThrow(() => requireNode(version, ">=22.18"));
 	}
 	for (const version of ["v20.19.0", "v22.17.99", "invalid", "v22.18.0-pre"]) {
-		assert.throws(() => requireNode(version, ">=22.18"), { message: `Check requires Node >=22.18; received ${version}` });
+		assert.throws(() => requireNode(version, ">=22.18"), { message: `Check requires Node >=22.18 (even major versions only); received ${version}` });
 	}
 });
 
@@ -22,6 +22,6 @@ test("distribution Node range accepts Node 24 and 26 LTS releases and rejects od
 	const range = ">=24.22.1 <27";
 	for (const version of ["v24.22.1", "24.22.2", "v24.23.0", "v26.1.0"]) assert.doesNotThrow(() => requireNode(version, range));
 	for (const version of ["v22.18.0", "v24.22.0", "v25.0.0", "v27.0.0", "v24.22.1-pre", "invalid"]) {
-		assert.throws(() => requireNode(version, range), { message: `Check requires Node ${range}; received ${version}` });
+		assert.throws(() => requireNode(version, range), { message: `Check requires Node 24 (24.22.1 or later) or Node 26; received ${version}` });
 	}
 });
