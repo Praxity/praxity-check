@@ -21,6 +21,8 @@ node /absolute/path/to/praxity-check/src/cli.ts check ./dist --min-confidence me
 Add `--json report.json` for the complete result set. Run with `--help` for all
 options.
 
+See [Build a local distributable](../README.md#build-a-local-distributable) for package details.
+
 In a standalone installation, use `praxity-check` in place of
 `node /absolute/path/to/praxity-check/src/cli.ts`. Through the Praxity command,
 use `praxity check`, for example `praxity check check ./dist`.

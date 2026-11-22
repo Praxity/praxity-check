@@ -232,6 +232,8 @@ or earlier Praxity terms are also available under the MIT licence from 2026-11-2
 
 ## Build a local distributable
 
+The npm package is named `@praxity/check`; its command remains `praxity-check`.
+
 Use an installed development checkout and a Node distribution containing `bin/node`
 and `LICENSE`:
 
