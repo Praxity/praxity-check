@@ -1,6 +1,6 @@
 # Run Praxity Check
 
-Install once with Node `>=24.22.1 <25` and pnpm 11.5.3, as required by `engines.node` in [package.json](../package.json):
+Install once with Node 24 or 26 LTS (`>=24.22.1 <27`; the CLI rejects odd majors) and pnpm 11.5.3, as required by `engines.node` in [package.json](../package.json):
 
 ```bash
 git clone https://github.com/Praxity/praxity-check.git

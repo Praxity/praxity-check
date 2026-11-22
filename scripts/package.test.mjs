@@ -64,7 +64,7 @@ async function verifyInventory(artifact) {
 	assert.equal(manifest.version, "0.6.0");
 	assert.match(manifest.sourceRevision, /^[0-9a-f]{40}$/);
 	assert.equal(typeof manifest.dirty, "boolean");
-	assert.equal(manifest.nodeRequirement, ">=24.22.1 <25");
+	assert.equal(manifest.nodeRequirement, ">=24.22.1 <27");
 	assert.match(manifest.note, /not capability claims/);
 	assert.deepEqual(manifest.inventoryExcludes, ["capabilities.json"]);
 	const paths = [];
@@ -352,10 +352,10 @@ test("portable build relocates, retains its inventory and runs with only externa
 	await rename(staged, artifact);
 	for (const path of ["runtime", "bin"]) await assert.rejects(lstat(join(artifact, path)), /ENOENT/);
 	const metadata = JSON.parse(await readFile(join(artifact, "package.json"), "utf8"));
-	assert.deepEqual(metadata.engines, { node: ">=24.22.1 <25" });
+	assert.deepEqual(metadata.engines, { node: ">=24.22.1 <27" });
 	const capabilities = JSON.parse(await readFile(join(artifact, "capabilities.json"), "utf8"));
 	assert.equal(capabilities.entryPoint, "lib/cli.js");
-	assert.equal(capabilities.nodeRequirement, ">=24.22.1 <25");
+	assert.equal(capabilities.nodeRequirement, ">=24.22.1 <27");
 	assert.equal(capabilities.platform, "any");
 	assert.equal(capabilities.arch, "any");
 	assert.equal(capabilities.node, null);
@@ -428,7 +428,7 @@ test("portable build relocates, retains its inventory and runs with only externa
 		const old = spawnSync(node, ["--require", oldVersion, cli, ...args], { cwd: root, env, encoding: "utf8" });
 		assert.equal(old.status, 2);
 		assert.equal(old.stdout, "");
-		assert.equal(old.stderr.trim(), "praxity-check: Check requires Node >=24.22.1 <25; received v22.17.0");
+		assert.equal(old.stderr.trim(), "praxity-check: Check requires Node >=24.22.1 <27; received v22.17.0");
 	}
 });
 

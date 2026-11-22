@@ -16,7 +16,7 @@ For a repair trial, supply only the flawed generator and its findings. Preserve 
 
 ## Manual CheckEval scoring
 
-Run `node bench/pdf/score.ts /tmp/trial/run.json` on Node `>=24.22.1 <25`, the supported range defined by `engines.node` in [package.json](../../package.json). The command writes descriptive JSON to stdout and exits 2 on invalid input. Model execution and manual adjudication stay with the caller. Report failed model calls and rejected reviews separately, including their count and attempted-trial denominator; do not quietly drop them from a model comparison.
+Run `node bench/pdf/score.ts /tmp/trial/run.json` on Node `>=24.22.1 <27`, the supported range defined by `engines.node` in [package.json](../../package.json). The command writes descriptive JSON to stdout and exits 2 on invalid input. Model execution and manual adjudication stay with the caller. Report failed model calls and rejected reviews separately, including their count and attempted-trial denominator; do not quietly drop them from a model comparison.
 
 A run uses this shape. File paths resolve relative to `run.json`; artifact paths resolve relative to the bundle manifest. Keep evidence and run files outside this repository.
 

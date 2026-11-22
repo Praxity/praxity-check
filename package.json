@@ -20,7 +20,7 @@
 		"prepack": "node scripts/package.mjs --npm"
 	},
 	"engines": {
-		"node": ">=24.22.1 <25"
+		"node": ">=24.22.1 <27"
 	},
 	"packageManager": "pnpm@11.5.3",
 	"dependencies": {

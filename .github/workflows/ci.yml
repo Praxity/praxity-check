@@ -115,6 +115,9 @@ jobs:
             runner: macos-latest
           - name: linux-package
             runner: ubuntu-latest
+          - name: linux-node26-package
+            runner: ubuntu-latest
+            package-node: 26.13.1
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
@@ -132,6 +135,12 @@ jobs:
         run: node --test --test-name-pattern="CLI entry points run through directory symlinks" scripts/package.test.mjs
       - name: PDF and component tests
         run: node --test test/pdf*.test.ts test/components.test.ts test/setup.test.ts
+      - name: Use Node 26 for the npm package proof
+        if: matrix.package-node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.package-node }}
+          package-manager-cache: false
       - name: Pack and install into a clean npm project
         shell: bash
         run: |
